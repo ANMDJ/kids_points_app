@@ -2,6 +2,10 @@
 
 > 本文档定义 guardian / child 双角色的完整权限模型、审批请求状态机，
 > 以及**积分记录的不可变性与规则版本化**（§4–§5，回应"记录是否完整、改规则后历史是否变化"）。
+>
+> ⚠️ **文中 `prisma` 片段是设计草图**：字段名 / 默认值 / 约束的**权威定义**是
+> `backend/prisma/schema.prisma`。已知差异：草图省略了主键的 `@default(cuid())`
+> （已补 4 处：`PointRule` / `PointRuleVersion` / `DeviceSession` / `InviteCode`）与部分审计/索引字段。
 
 ## 1. 角色与成员模型
 
@@ -25,7 +29,12 @@ User（自然人，一个家长一个 User）
 | 爸爸（guardian）查看孩子积分 | ✅ 需要 |
 | 孩子用自己的设备登录打卡 | ✅ 需要（role=child） |
 | 妈妈（第二个 guardian）也能审批 | ✅ 需要 |
-| 只读分享（爷爷奶奶看战绩） | ✅ 需要（可扩展 role=viewer） |
+| 只读分享（爷爷奶奶看战绩） | ✅ 需要（**将来**可扩展 `role=viewer`） |
+
+> ⚠️ **`viewer` 的现状（2026-10-12 裁定 D6）**：`MemberRole` 枚举里**已经有** `viewer`
+> （`backend/prisma/schema.prisma:34`），但 §2 的权限矩阵**只有 `guardian` / `child` 两列**，
+> 因此 `viewer` 一律 **fail-closed `DENY`**（`backend/src/contracts/permission-matrix.ts:94`）。
+> 将来真要支持"只读分享"，**必须显式扩展矩阵列** —— 不允许在调用处各自打补丁。
 
 `ChildMember` 唯一约束：`@@unique([childId, userId])` —— 同一人对同一孩子只有一个成员位。
 
@@ -42,6 +51,11 @@ ChildMember {
 
 **架构约束：权限只能在一处定义。** HTTP Guard 与 Agent `action-dispatcher` **必须消费同一张表**
 （见 §3 屏障二），否则两条入口必然漂移。
+
+> **两列还是三列？（2026-10-12 裁定 D6）** 本矩阵**故意只有 `guardian` / `child` 两列**。
+> `MemberRole` 里的 `viewer` 是将来"只读分享"的扩展位，**当前一律 `DENY`**：
+> `if (role === 'viewer') return 'DENY'`（`permission-matrix.ts:94`）。
+> 要支持它**必须显式加列**；否则"只读"会退化成"每个调用处自己打补丁"。
 
 ```ts
 // contracts/permission-matrix.ts  —— 后端与 Agent 共享的唯一事实源
@@ -266,7 +280,7 @@ PointRecord（账本，append-only）
 | `wishId` / `habitId` | 回指对象 | 心愿删除后扣分原因永久丢失 |
 | `source` | `child_self`/`guardian`/`agent`/`approval`/`system`/`correction` | 无法区分操作来源（A4） |
 | `operatorUserId` + `operatorRole` | **真实操作人** | 现状硬编码"家长记录"，流水在撒谎（A4） |
-| `approvalRequestId` | 由哪条审批产生 | 决策链断裂 |
+| ~~`approvalRequestId`~~ **不落库**（裁定 D4） | 由哪条审批产生 | 决策链断裂 → 改由 `ApprovalRequest.executedRecordId`（**`@unique`**，`schema.prisma:558`）**单向**表达；双向冗余必然漂移 |
 | `balanceAfter` | **记完后的余额** | **无法对账** —— 财务账本的基本要求（B6） |
 | `idempotencyKey` | 防重复执行 | 重放会重复扣分 |
 | `reversesRecordId` / `reversedAt` | 冲正关系 | 现状靠**删除**记录来撤销（B7） |
@@ -279,7 +293,7 @@ PointRecord（账本，append-only）
 
 ```prisma
 model PointRule {
-  id             String  @id
+  id             String  @id @default(cuid())
   childId        String
   title          String
   condition      String        // 结构字段（原 detail 第一段，见 E15）
@@ -295,7 +309,7 @@ model PointRule {
 }
 
 model PointRuleVersion {        // 只增不删，永久保留
-  id              String  @id
+  id              String  @id @default(cuid())
   ruleId          String
   version         Int
   title           String
@@ -399,12 +413,18 @@ rec#1 的 (ruleId, ruleVersion) 指向空
 
 | # | 不变量 | 测试方式 |
 |---|---|---|
-| I1 | 改规则后，所有已有记录的所有字段**逐字段不变** | 改前 `SELECT * FROM point_record WHERE rule_id=R` → 改规则 → 再查，**diff 必须为空** |
+| I1 | 改规则后，所有已有记录的所有字段**逐字段不变** | 改前 `SELECT * FROM "PointRecord" WHERE "ruleId"=R` → 改规则 → 再查，**diff 必须为空**（标识符同 D5 勘误：camelCase 且带引号） |
 | I2 | `balanceAfter` 链自洽 | 按 `childId, createdAt` 排序滚动求和 == `balanceAfter` |
 | I3 | 每条记录的 `(ruleId, ruleVersion)` 必须能命中 `PointRuleVersion` | 左连接查 `NULL` 必须为 0 行 |
 | I4 | 记录快照 == 其 `PointRuleVersion` 的对应值 | 写入时联合校验 |
-| I5 | `PointRecord`/`PointRuleVersion` **无 UPDATE/DELETE 端点**，DB 层 `REVOKE` | 尝试直连 UPDATE 必须报错 |
+| I5 | `PointRecord`/`PointRuleVersion` **无 UPDATE/DELETE 端点**，DB 层 `REVOKE`（**必须作用在应用角色上** —— 对表**所有者无效**） | 以**应用角色**直连 UPDATE 必须报错（`SQLSTATE 42501`） |
 | I6 | 撤销打卡后，原记录仍在且新增一条冲正记录 | 记录数 **+1** 而非 −1；`reversesRecordId` 已设置 |
+
+> ⚠️ **I5 的成立条件（W0 实测修正 —— 见 `06` §10 缺陷 7）**：`REVOKE` **对表所有者无效**。
+> 若应用用所有者身份连库，I5 就是一句"看起来成立"的空承诺 —— 又一处**假绿**。
+> 因此必须：**迁移走所有者、应用走仅 CRUD 的 `kids_points_app`**（裁定 D7），
+> 并由 `prisma/sql/900_ledger_revoke.sql` **自检**权限是否真的生效（否则让迁移直接失败）；
+> 验证脚本 `npm run db:verify` 按 **SQLSTATE 42501** 判定，**不依赖错误文案**。
 
 ---
 
@@ -451,7 +471,7 @@ if (role === 'child' && action === 'adjust_points') {
 
 ```prisma
 model DeviceSession {
-  id         String   @id
+  id         String   @id @default(cuid())
   deviceId   String
   childId    String
   userId     String
@@ -489,10 +509,10 @@ await updateCode({ usedCount: code.usedCount + 1 })
 // ✓ 正确：单条条件 UPDATE，原子占用
 const rows = await prisma.$queryRaw`
   UPDATE "InviteCode"
-     SET used_count = used_count + 1, used_by_user_id = ${userId}, used_at = now()
+     SET "usedCount" = "usedCount" + 1, "usedByUserId" = ${userId}, "usedAt" = now()
    WHERE code = ${code}
-     AND used_count < max_uses
-     AND expires_at > now()
+     AND "usedCount" < "maxUses"
+     AND "expiresAt" > now()
      AND revoked = false
   RETURNING id
 `
@@ -500,12 +520,18 @@ if (rows.length === 0) throw new ConflictException('INVITE_CODE_UNAVAILABLE')
 // ↑ 只有真正抢到名额的请求才会继续创建成员
 ```
 
-**要点**：`UPDATE ... WHERE used_count < max_uses RETURNING` 是原子的 —— 数据库行锁保证
-至多 `max_uses` 个请求能拿到 `RETURNING` 行。这比"先查后改"或"分布式锁"都更简单可靠。
+**要点**：`UPDATE ... WHERE "usedCount" < "maxUses" RETURNING` 是原子的 —— 数据库行锁保证
+至多 `maxUses` 个请求能拿到 `RETURNING` 行。这比"先查后改"或"分布式锁"都更简单可靠。
+
+> **列名勘误（裁定 D5，2026-10-12）**：本 schema **未使用 `@map` / `@@map`**
+> （唯一的 `@map` 命中在 `schema.prisma:576` 的**注释**里），因此库内列名＝Prisma 字段名的
+> **camelCase 原样**；PostgreSQL 会把未加引号的标识符折成小写，故本节示例**必须**写成
+> `"usedCount"` / `"maxUses"` —— 原文的 `used_count` / `max_uses` 会直接报「列不存在」。
+> **SQL 语义不变，只是标识符改写。**
 
 ```prisma
 model InviteCode {
-  id            String   @id
+  id            String   @id @default(cuid())
   childId       String
   code          String   @unique
   role          MemberRole       // child | guardian | viewer
@@ -539,7 +565,7 @@ model InviteCode {
 | 9.11 | **I1**：改规则后查历史记录 | **逐字段 diff 为空** |
 | 9.12 | **I2**：`balanceAfter` 滚动求和 == 余额 | 相等 |
 | 9.13 | **I6**：撤销打卡 | 记录数 **+1**（冲正），原记录保留 |
-| 9.14 | **I5**：直连 DB `UPDATE point_record` | 权限错误 |
+| 9.14 | **I5**：以**应用角色**直连 DB `UPDATE "PointRecord"` | 权限错误（`SQLSTATE 42501`；`npm run db:verify` 已按此判定） |
 | 9.15 | 孩子 `adjust_points(delta=-5)` | 403 CHILD_CANNOT_DEDUCT |
 | 9.16 | 孩子第 4 次申请加分（同日） | 403 CHILD_REQUEST_QUOTA_EXCEEDED |
 | 9.17 | 孩子申请加分 51 分（Q15 = ±50） | 403 AMOUNT_EXCEEDS_LIMIT |

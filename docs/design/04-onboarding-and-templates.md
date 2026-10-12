@@ -55,7 +55,7 @@
 
 ```prisma
 model RuleTemplate {            // 模板库（平台级，不属任何 child）
-  id          String  @id
+  id          String  @id @default(cuid())
   slug        String  @unique
   title       String            // 例：'番茄钟写作业'
   condition   String            // 结构字段：'专注 25 分钟'（不再塞进 detail）
@@ -65,7 +65,7 @@ model RuleTemplate {            // 模板库（平台级，不属任何 child）
   icon        String
   color       String
   ageBand     AgeBand           // 幼儿园 | 小学低 | 小学高 | 初中
-  focusAreas  String[]          // ['作业专注','生活习惯']
+  focusAreas  String[] @default([])   // ['作业专注','生活习惯']
   isSystem    Boolean @default(true)
   sortWeight  Int     @default(0)
   status      RecordStatus @default(active)
@@ -78,6 +78,11 @@ model Child {
   onboardedAt  DateTime?    // null = 未完成引导 → 前端强制进入引导
 }
 ```
+
+> ⚠️ **权威定义（2026-10-12 补记）**：模板与成员的真实字段**以 `backend/prisma/schema.prisma` 为准**
+> （本节是设计草图）。schema 里的 `RuleTemplate` 另含 `createdAt` / `updatedAt` /
+> `@@index([status, ageBand, sortWeight])`；草图中主键的 `@default(cuid())` 与
+> `focusAreas` 的 `@default([])` 已一并补齐。
 
 **`onboardedAt` 是引导的权威状态**：服务端持有，前端不缓存。
 理由同 `02` §7 ——客户端状态可被篡改，若客户端说"已完成引导"而后端没有 child 记录，
