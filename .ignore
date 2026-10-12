@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cline 上下文减重清单（.ignore 文件「始终被遵循」，用于喂给 AI 的文件列表/搜索）
+#
+# 为什么需要它：
+#   cline-core 4.1.23 在 Windows 上以 node.exe --max-old-space-size=8192 启动，
+#   工具的输出（文件列表、搜索结果）会原样进 Node 堆；构建产物里的「超长单行
+#   JSON」最要命（一行就有几百上千字符）。堆被撑到 8GB 即 OOM 崩溃重启，
+#   表现就是「会话突然中断」。
+#
+# 只排除【生成物 / 工具缓存】，源码、手写脚本、文档一律保留可见。
+# 语法与 .gitignore 相同，且**模式不区分层级**：所以涉及 .tmp_test 时必须
+# 逐级锚定写全路径，免得把 kids_points_mp/.tmp_test/ 下手写的验证脚本一起隐藏。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Flutter / Dart 构建与工具缓存（.dart_tool/flutter_build/**/outputs.json 是超长单行重灾区）
+/.dart_tool/
+/build/
+/.widget_preview/
+
+# iOS / Android 生成物
+/ios/Flutter/ephemeral/
+/ios/Pods/
+/android/.gradle/
+
+# 小程序 / H5 端：Chrome 用户数据目录（几万个碎文件，扫描噪音最大）
+/kids_points_mp/.tmp_test/chrome-profile/
+
+# 前端依赖与打包产物（node_modules/ 与 dist/ 也已在内置默认忽略表中，这里写清楚便于人读）
+/backend/node_modules/
+/backend/dist/
+/kids_points_mp/node_modules/
+/kids_points_mp/dist/
+
+# IDE 元数据
+/.idea/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 实测附注（2026-10-12，cline-core 4.1.23 + 内置 rg.exe 实测）：
+#   · 本文件对「@ 提及的文件选择器 / 文件建议」是生效的（schema 原文：
+#     "Whether file picker should respect .gitignore files (default: true).
+#      Note: .ignore files are always respected."）
+#   · 但对 search_codebase 这个工具【无效】：它是用自己的遍历器 + 内置黑名单
+#     ["node_modules","vendor",".git","dist","build",".next","coverage",
+#      "__pycache__",".venv","venv",".cache",".turbo",".output","out","target",
+#      "bin","obj"] + 文本扩展名白名单在找文件，不读 .gitignore / .ignore。
+#     A/B 实测：加了 /.dart_tool/ 后，同一查询依然命中
+#     .dart_tool/flutter_build/*/outputs.json（依旧 "Searched 585 files"）。
+#   · 所以：搜代码时请【显式限定路径】，别依赖本文件兜底。
+# ─────────────────────────────────────────────────────────────────────────────
