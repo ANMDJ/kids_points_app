@@ -556,11 +556,11 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 - 上述 18 条缺陷全部有对应的**新回归用例**（每轮修复后能复现修复前失败）
 - 双端行为一致（同一用例在 Taro / Flutter 两侧结论相同）
 - **反回退粒度（C2 起）**：结构字段化的四条不只是「新符号在不在」，还含**反回退断言** —— `*.checked =` 写入数必须为 0、seed 不得再出现 `limitText:` / `doneText:`、`rule.detail.split` 归零、两端必须排除 `reversedIds`、首页必须消费 `habitViews`。只断言「新符号存在」是不够的：旧写法完全可以与它并存 —— 那正是 A2 / A3 / E15 / E17 当初「看着像修了」却还活着的原因。
-- **C2 闸门实测（2026-10-12）**
+- **C2 闸门实测（2026-10-12）**：Taro `tsc --noEmit` 0 错、现编 `run.js` 19/19 ALL PASS、`flutter analyze` 0 issue、`flutter test` 29/29、`backend npm run ci` ALL PASS（18 条对账）。
 - **C2 证伪自测（2026-10-12，6/6）**：注入反例必须**变红并点名对应条目**，还原后必须回绿 ——
   ① Taro seed 塞回 `limitText:` → **A2 红**；② Flutter seed 塞回 `doneText:` → **E17 红**；
   ③ Taro store 塞回 `rule.detail.split(' · ')` → **E15 红**；④ Flutter store 塞回 `habit.checked = true` → **A3 红**；
   ⑤ 台账副本把 E15 改回「❌ 未修」→ **E15 红**；⑥ 删掉守门人里的 E17 验证器 → **E17 红**（「台账有、验证器没有」fail-closed）。
-  还原全部走**内存快照 ＋ sha256 比对**（不用 `git checkout`：工作区有未提交改动，`git checkout` 会连真改动一起丢掉）。：Taro `tsc --noEmit` 0 错、现编 `run.js` 19/19 ALL PASS、`flutter analyze` 0 issue、`flutter test` 29/29、`backend npm run ci` ALL PASS（18 条对账）。
+  还原全部走**内存快照 ＋ sha256 比对**（不用 `git checkout`：工作区有未提交改动，`git checkout` 会连真改动一起丢掉）。
 
 
