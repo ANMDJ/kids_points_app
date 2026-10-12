@@ -236,7 +236,7 @@ const DEFECTS = [
     A.has(T_STORE, /ALLOW_DEMO_RESET = demoResetAllowed\(\)/, '守卫常量必须由判据派生（否则两处语义会漂移）'),
     A.has(T_STORE, /if \(!ALLOW_DEMO_RESET\) return false/, 'resetToSeed 未被生产闸门拦住'),
     A.has(F_STORE, /bool demoResetAllowed\(\{bool isRelease = _isReleaseBuild\}\)/, '缺少可测的生产判据'),
-    A.has(F_STORE, /const bool allowDemoReset = !_isReleaseBuild;/, '守卫常量必须由判据派生'),
+    A.has(F_STORE, /const bool allowDemoReset = !_isReleaseBuild;/, '守卫常量必须是可常量折叠的 !_isReleaseBuild（与判据同源）'),
     A.has(F_STORE, /if \(!allowDemoReset\) return false;/, 'resetToSeed 未被生产闸门拦住'),
     // ② 首启空态：构造函数只走空态，不再注入 seed（E18 第二半）
     A.has(T_STORE, /constructor\(\) \{\s*this\.resetToEmpty\(\)/, '构造函数未改为空态初始化'),
