@@ -14,6 +14,9 @@
 > `npm run defects:check`），**声明与代码不符即红** —— 含「未修」其实已修（正是本表曾经失实的病）
 > 与「已修」被回退。证据**只取代码、注释不算**：否则注释里那句「原先 `xxx` 如何错」会让两侧同时被骗。
 > 该守卫已用 **7 份被篡改的台账副本**证明能变红（见 `docs/design/README.md`「CI 步骤」）。
+> **行号口径**：本表「证据锚点」列的 27 条 `文件:行号` 已于 2026-10-12 逐条复核（**全部命中，且指向代码而非注释**）；
+> 但下方 A–E 各节正文里的 `文件:行号` 是**当时快照、随后已漂移** —— 例：§E18 正文写 `store.ts:67-70` 的
+> `resetToSeed()`，实际已在 **84 行**。**引用代码请 `grep` 符号名，不要依赖行号。**
 > **教训**：核实"某字段 / 某能力是否存在"**必须读模型或文件，不许只靠字段名搜索**
 > —— 该错误已记录在 `06` §3.2（曾据此误判 D3"未落地"）。
 >
@@ -29,7 +32,7 @@
 | A5 | `addQuickNote` 错误递增 `rewardCount` | 🟠 中 | ✅ **已修** | `store.ts:289` / `app_store.dart:258`：仅 `redeem` 递增；断言 `rewardCount === 4` |
 | B6 | 扣分静默截断，**账本不平** | 🔴 高 | ✅ **已修** | `store.ts:244` / `app_store.dart:213`：返回"积分不足…最多可扣 N 分"，不再 `clamp` |
 | B7 | `undoCheckIn` 物理删除流水 | 🔴 高 | ✅ **已修** | `store.ts:213`：`reversesRecordId: target.id`（写冲正记录，原记录保留） |
-| B8 | 兑换标题被 `shortTitle` 永久截断 | 🟠 中 | ✅ **已修** | `store.ts:279` / `app_store.dart:248`：完整标题快照 |
+| B8 | 兑换标题被 `shortTitle` 永久截断 | 🟠 中 | ✅ **已修** | `store.ts:294` / `app_store.dart:265`：完整标题快照 |
 | C9 | 全部删除为物理删除，无软删除/回收站 | 🟠 中 | ❌ **未修** | 前端无 `deletedAt` / `softDelete`（后端 `Habit`/`Wish`/`PointRule` 已备字段） |
 | C10 | 规则无法编辑（无 `updateRule`） | 🔴 高 | ❌ **未修** | 前端无 `updateRule`（后端 `PointRule.currentVersion` 已备） |
 | C11 | 无 `AuditLog`，变更不可追溯 | 🟠 中 | ❌ **未修** | 前端无任何 audit 引用（后端 `AuditLog` 表已建） |
@@ -38,7 +41,7 @@
 | E15 | `detail` 自由字符串，靠 `split(' · ')` 反解析 | 🟠 中 | ❌ **未修** | `store.ts:372`、`app_store.dart:348` 仍在 `rule.detail.split(' · ')` |
 | E16 | `backgroundIndex` 用数组下标，删项后配色漂移 | 🟡 低 | ❌ **未修** | `store.ts:321`、`app_store.dart:296`：`wishes.length % 4` |
 | E17 | `doneText` / `limitText` 是被外部写入的展示文案 | 🟠 中 | ❌ **未修** | `types.ts:36 doneText: string`、`habit.dart:32 final String doneText;` 仍可写 |
-| E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ⚠️ **半修** | 守卫**已加**（`store.ts:25 ALLOW_DEMO_RESET`、`app_store.dart:17 bool.fromEnvironment`）**但 `store.ts:50-52 constructor(){ this.reset() }` 仍无条件执行** → 首启假数据仍在 |
+| E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ⚠️ **半修** | 守卫**已加**（`store.ts:25 ALLOW_DEMO_RESET`、`app_store.dart:19-21 allowDemoReset`）**但 `store.ts:50-52 constructor(){ this.reset() }` 仍无条件执行** → 首启假数据仍在 |
 | E19 | 小标题串接方式不统一 | 🟡 低 | ✅ **已修** | `types.ts:155` / `point_record.dart:52`：`recordSubtitle()` 派生 |
 
 **合计：✅ 已修 8 · ⚠️ 半修 1（E18）· ⚠️ 已改 9/10 1（D13）· ❌ 未修 8（A2 / A3 / C9 / C10 / C11 / E15 / E16 / E17）**
