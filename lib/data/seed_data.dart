@@ -74,28 +74,28 @@ SeedBundle buildSeedData() {
       title: '限定商品 30 元优惠券（满 300 减 100）',
       cost: 40,
       emoji: '🍖',
-      backgroundIndex: 0,
+      coverStyle: WishCoverStyle.a,
     ),
     Wish(
       id: 'wish-2',
       title: '汪汪零食大礼包 · 周末加餐',
       cost: 40,
       emoji: '🐶',
-      backgroundIndex: 1,
+      coverStyle: WishCoverStyle.b,
     ),
     Wish(
       id: 'wish-3',
       title: '一起去游乐园玩一整天（亲子票）',
       cost: 445,
       emoji: '🎡',
-      backgroundIndex: 2,
+      coverStyle: WishCoverStyle.c,
     ),
     Wish(
       id: 'wish-4',
       title: '新款积木套装（1000+ 颗粒）',
       cost: 445,
       emoji: '🧩',
-      backgroundIndex: 3,
+      coverStyle: WishCoverStyle.d,
     ),
   ];
 

@@ -41,7 +41,11 @@ const {
   habitView,
   ruleDetail,
   dailyLimitMin,
-  dailyLimitMax
+  dailyLimitMax,
+  // ── 阶段 C3：心愿配色改为稳定枚举（修 E16）──
+  pickCoverStyle,
+  wishCoverStyles,
+  wishCoverHash
 } = require('./dist/data/types.js')
 const { buildSeedData } = require('./dist/data/seed.js')
 const { AppStore, demoResetAllowed } = require('./dist/data/store.js')
@@ -305,11 +309,47 @@ check('addWish / removeWish', () => {
   assert.strictEqual(store.wishes[0].cost, 12)
   assert.strictEqual(store.wishes[0].emoji, '🎁')
   assert.strictEqual(store.wishes[0].redeemed, false)
-  assert.strictEqual(store.wishes[0].backgroundIndex, 0)
+  assert.ok(wishCoverStyles.includes(store.wishes[0].coverStyle), '新增配色必须落在枚举内')
   const added = store.wishes[0]
   store.removeWish(added)
   assert.strictEqual(store.wishes.length, 4)
   assert.strictEqual(store.wishes.indexOf(added), -1)
+})
+
+check('E16：心愿配色是稳定枚举 —— 删项不漂移、有空档先补空档', () => {
+  const store = seededStore()
+  // 演示数据显式声明配色（A–D），不再由数组下标算出
+  assert.deepStrictEqual(
+    store.wishes.map((w) => w.coverStyle),
+    ['A', 'B', 'C', 'D']
+  )
+
+  // 删掉中间的 B：其余心愿的配色一个都不许变（修前的下标方案会在这里跳变）
+  const removed = store.wishes[1]
+  assert.strictEqual(removed.coverStyle, 'B')
+  store.removeWish(removed)
+  assert.deepStrictEqual(
+    store.wishes.map((w) => w.coverStyle),
+    ['A', 'C', 'D'],
+    '删项不得让其余心愿换色'
+  )
+
+  // 新增：应补回空出来的 B，而不是按 wishes.length % 4 又算成别的
+  store.addWish('新心愿', 10, '🎁')
+  assert.strictEqual(store.wishes[0].coverStyle, 'B', '有空档先补空档')
+
+  // 四个占满时由 id 稳定派生：同一个 id 永远同一个色（跨端同源，期望值同时写在 app_test.dart）
+  assert.strictEqual(pickCoverStyle(wishCoverStyles, 'wish-9'), 'C')
+  assert.strictEqual(pickCoverStyle(wishCoverStyles, 'wish-9'), 'C', '同 id 永远同色')
+  assert.strictEqual(wishCoverHash('wish-9'), 355514, '哈希算式被钉死：改了就会让既有心愿换色')
+
+  // 取值受控：任何 id 都只能落回 A–D
+  for (const id of ['wish-1', 'wish-2', 'wish-x', 'wish-9']) {
+    assert.ok(
+      wishCoverStyles.includes(pickCoverStyle(wishCoverStyles, id)),
+      id + ' 的配色必须落在枚举内'
+    )
+  }
 })
 
 check('addRule / removeRule：空条件兜底 + 频次必须是 1–5 整数（修 A2 / E15）', () => {

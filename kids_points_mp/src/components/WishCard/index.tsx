@@ -1,17 +1,21 @@
 import { View, Text } from '@tarojs/components'
 
 import { SmallPill } from '../Pills'
-import type { Wish } from '../../data/types'
+import type { Wish, WishCoverStyle } from '../../data/types'
 import { rpx } from '../../utils/unit'
 import './index.scss'
 
-/** 心愿单卡片的 4 套插画底色（对应 Flutter wishGradients）。 */
-export const WISH_GRADIENTS: [string, string][] = [
-  ['#fff8e6', '#fbe7b8'],
-  ['#fff6e9', '#f7dcc0'],
-  ['#f3faea', '#dceebe'],
-  ['#fff6f1', '#f8d9ce']
-]
+/**
+ * 心愿单卡片的 4 套插画底色 —— **按稳定枚举取色**（修 E16：不再用数组下标）。
+ * 刻意用 `Record<WishCoverStyle, …>` 而非数组：将来若给枚举加取值，
+ * 这里会**在编译期**报缺色，而不是静默取到 `undefined`。
+ */
+export const WISH_GRADIENTS: Record<WishCoverStyle, [string, string]> = {
+  A: ['#fff8e6', '#fbe7b8'],
+  B: ['#fff6e9', '#f7dcc0'],
+  C: ['#f3faea', '#dceebe'],
+  D: ['#fff6f1', '#f8d9ce']
+}
 
 export interface WishCardProps {
   wish: Wish
@@ -30,7 +34,7 @@ export default function WishCard({
 }: WishCardProps) {
   const affordable = !wish.redeemed && points >= wish.cost
   const gap = wish.cost - points > 0 ? wish.cost - points : 0
-  const colors = WISH_GRADIENTS[wish.backgroundIndex % WISH_GRADIENTS.length]
+  const colors = WISH_GRADIENTS[wish.coverStyle]
 
   return (
     <View className='kp-wish' onLongPress={onLongPress}>

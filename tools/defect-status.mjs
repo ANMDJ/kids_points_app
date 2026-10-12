@@ -43,6 +43,9 @@ const F_RULE = `${FL}/models/point_rule.dart`
 const F_SEED = `${FL}/data/seed_data.dart`
 const F_HOME = `${FL}/screens/home_screen.dart`
 const F_RULE_SHEET = `${FL}/screens/sheets/add_rule_sheet.dart`
+const T_CARD = 'kids_points_mp/src/components/WishCard/index.tsx'
+const F_WISH = `${FL}/models/wish.dart`
+const F_CARD = `${FL}/widgets/wish_card.dart`
 const D12_FIXTURE = 'backend/scripts/__fixtures__/d12-misnested-runner.js'
 
 const DOC = process.env.DEFECT_DOC_PATH
@@ -262,9 +265,30 @@ const DEFECTS = [
     A.has(T_RUNNER, /展示串一律由结构字段派生/, 'run.js 缺少 E15 回归用例'),
     A.has(F_TESTS, /结构字段是唯一真相/, 'app_test.dart 缺少 E15 回归用例'),
   ] },
-  { id: 'E16', status: 'unfixed', what: 'backgroundIndex 用数组下标', assertions: () => [
-    A.has(T_STORE, /wishes\.length % 4/, '已不再用数组下标配色 → 缺陷可能已修，台账应更新'),
-    A.has(F_STORE, /wishes\.length % 4/, '已不再用数组下标配色'),
+  { id: 'E16', status: 'fixed', what: '心愿配色用数组下标（背景色会随删除漂移）', assertions: () => [
+    // ① 结构：配色成为**受控枚举**（与后端 enum WishCoverStyle 对齐），不再是任意整数
+    A.has(T_TYPES, /export type WishCoverStyle = 'A' \| 'B' \| 'C' \| 'D'/, '缺少稳定枚举类型'),
+    A.has(F_WISH, /enum WishCoverStyle \{ a, b, c, d \}/, '缺少稳定枚举类型'),
+    A.countIs(T_TYPES, /wishCoverStyles: WishCoverStyle\[\] = \['A', 'B', 'C', 'D'\]/g, 1, '枚举取值表缺失或重复'),
+    A.has(T_STORE, /coverStyle: pickCoverStyle\(/, '新增心愿未走 pickCoverStyle()'),
+    A.has(F_STORE, /coverStyle: pickCoverStyle\(/, '新增心愿未走 pickCoverStyle()'),
+    // ② 反回退：任何写入点都不许再出现「下标配色」
+    A.lack(T_TYPES, /backgroundIndex: number/, 'Wish 模型又出现 backgroundIndex（回退）'),
+    A.lack(F_WISH, /backgroundIndex:/, 'Wish 模型又出现 backgroundIndex 字段（回退）'),
+    A.countIs(T_STORE, /wishes\.length % 4/g, 0, '又在用列表长度算配色（回退）'),
+    A.countIs(F_STORE, /wishes\.length % 4/g, 0, '又在用列表长度算配色（回退）'),
+    A.countIs(T_SEED, /backgroundIndex/g, 0, 'seed 又在下标配色（回退）'),
+    A.countIs(F_SEED, /backgroundIndex/g, 0, 'seed 又在下标配色（回退）'),
+    // ③ 取色按枚举，且**编译期穷尽**（Taro 用 Record，Flutter 用 switch 表达式）
+    A.has(T_CARD, /Record<WishCoverStyle, \[string, string\]>/, '插画配色表未按键穷尽（Taro）'),
+    A.has(F_CARD, /List<Color> wishGradientOf\(WishCoverStyle style\) => switch \(style\)/, '插画配色表未按键穷尽（Flutter）'),
+    A.lack(T_CARD, /\[wish\.backgroundIndex/, '取色又走数组下标（回退）'),
+    A.lack(F_CARD, /wishGradients\[/, '取色又走数组下标（回退）'),
+    // ④ 回归用例：删项不漂移 / 有空档先补空档 / 跨端同源哈希被钉死
+    A.has(T_RUNNER, /E16：心愿配色是稳定枚举/, 'run.js 缺少 E16 回归用例'),
+    A.has(T_RUNNER, /wishCoverHash\('wish-9'\), 355514/, 'run.js 缺少「哈希算式被钉死」断言'),
+    A.has(F_TESTS, /心愿配色稳定枚举（修 E16）/, 'app_test.dart 缺少 E16 回归用例'),
+    A.has(F_TESTS, /wishCoverHash\('wish-9'\), 355514/, 'app_test.dart 缺少「跨端同源哈希」断言'),
   ] },
   { id: 'E17', status: 'fixed', what: 'doneText / limitText 曾被外部写入（已降级为派生值）', assertions: () => [
     A.has(T_TYPES, /export function doneTextOf\(/, '缺少 doneTextOf() 派生函数'),

@@ -39,12 +39,12 @@
 | D12 | 测试器花括号嵌套错位 → **CI 假通过** | 🔴 高 | ✅ **已修** | `honesty:probe` 4/4；夹具 `__fixtures__/d12-misnested-runner.js` 证明**能失败** |
 | D13 | 测试断言把缺陷固化为"正确行为" | 🔴 高 | ✅ **已修（10/10）** | 1–9 条已改写；**第 10 条已随 C1 改写**：`run.js:409` / `test/app_test.dart:290` 断言「首启为空态」，演示数据降级为**显式夹具**（`run.js:58`、`test/app_test.dart:19`）→ 见 §E18 现状 |
 | E15 | `detail` 自由字符串，靠 `split(' · ')` 反解析 | 🟠 中 | ✅ **已修** | `PointRule` 只留 `condition` + `dailyLimit`（`types.ts:121`）；展示串派生 `types.ts:293 ruleDetail()` / `point_rule.dart:45`；规则→习惯直取结构字段 `store.ts:461` / `app_store.dart:424`；两端 `rule.detail.split` 归零 → 语义变更见 §0.2 ① |
-| E16 | `backgroundIndex` 用数组下标，删项后配色漂移 | 🟡 低 | ❌ **未修** | `store.ts:321`、`app_store.dart:296`：`wishes.length % 4` |
+| E16 | `backgroundIndex` 用数组下标，删项后配色漂移 | 🟡 低 | ✅ **已修** | 配色升为稳定枚举 `WishCoverStyle`（与后端 `enum WishCoverStyle` 一一对应）：枚举 `types.ts:59` / `wish.dart:7`；取色编译期穷尽 `WishCard/index.tsx:13` / `wish_card.dart:11`；补空档＋满档 `id` 哈希 `store.ts:394` / `app_store.dart:356`；两端 `wishes.length % 4` 归零 |
 | E17 | `doneText` / `limitText` 是被外部写入的展示文案 | 🟠 中 | ✅ **已修** | 派生 `types.ts:212 doneTextOf()` / `habit.dart:18`；唯一产出点 `types.ts:277 habitView()` / `habit.dart:134`；页面只消费 `store.habitViews`（`home/index.tsx:25`、`home_screen.dart:25`）；seed 不再写 `doneText` |
 | E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ✅ **已修** | 闸门＝**可测判据 + 编译期常量**：`store.ts:27 demoResetAllowed()` / `store.ts:38 ALLOW_DEMO_RESET`、`app_store.dart:22` / `app_store.dart:29`；首启空态：`store.ts:71 constructor(){ this.resetToEmpty() }`、`app_store.dart:41`；seed 只剩 `resetToSeed()` 一个显式入口（`store.ts:119`、`app_store.dart:96`） |
 | E19 | 小标题串接方式不统一 | 🟡 低 | ✅ **已修** | `types.ts:155` / `point_record.dart:52`：`recordSubtitle()` 派生 |
 
-**合计：✅ 已修 14 · ❌ 未修 4（C9 / C10 / C11 / E16）**
+**合计：✅ 已修 15 · ❌ 未修 3（C9 / C10 / C11）**
 
 > 已无「半修」与「已改 9/10」两档：**C1 把 E18 与 D13 一起收口**（台账那两行改口的**那一刻就被守门人拦下过** ——
 > 见 §0.1 第 2 条；这正是阶段 A5 建这个守卫的目的）。
@@ -53,6 +53,11 @@
 > （`backend` 的 `npm run ci` → `npm run defects:check` 报 `FAILED 4 项`：`台账=❌ 未修，代码只符合「✅ 已修」`）。
 > 它不只抓「**修了不改口**」，也抓「声明修了其实没修」——两种都必须红，否则守卫自己就是下一处假绿。
 > 两条诚实说明（真实语义变更 ＋ 公式勘误）见 §0.2。
+>
+> 🚧 **阶段 C3 进行中（E16 代码与测试已落地，本表这一行尚未改口）** —— 接手步骤、闸门实测与陷阱清单见
+> [`07-c3-handoff.md`](./07-c3-handoff.md)。此刻运行 `node tools/defect-status.mjs` **预期报 `FAILED 1 项`**
+> （`E16 台账=❌ 未修，代码只符合「✅ 已修」`）：这是**闸门在正常工作**（抓「改了代码没改台账」），不是修复被回退。
+> **2026-10-12 阶段 C3**：E16 改口的同一刻又被同一条闸门拦下 —— backend 的 `defects:check` 报 `FAILED 1 项`（台账「未修」vs 代码「已修」）。
 
 ### 0.1 本次对账暴露的 6 处问题（本条目的由来）
 
@@ -72,7 +77,7 @@ D12 ✅ → A1 ✅ → A5 ✅ → A4 ✅ → B6 ✅ → B7 ✅ → B8 ✅ → E1
    ↓ 剩余（阶段 C，每步先落"能失败"的用例）
 C1 ✅ E18 第二半（构造函数不再无条件 reset ＋ 第 10 条断言改写）—— 已落地
 C2 ✅ E15 ＋ E17 ＋ A2 ＋ A3    （双端同步：结构字段化，展示串降级为派生）—— 已落地
-C3  E16                        （WishCoverStyle 稳定枚举替换数组下标）
+C3 ✅ E16                        （已落地：WishCoverStyle 稳定枚举替换数组下标）
 C4  C9 / C10 / C11             （软删除 ＋ 规则编辑 ＋ AuditLog）
 C5  D9                         （新增 iconName → IconData 映射）
 ```
@@ -454,7 +459,13 @@ limitText : parts.length > 1 ? parts[1] : '每天 1 次'           // 第二个�
 
 配色由**插入时的列表长度**决定。删除中间某个心愿后，后续新增心愿的配色会与既有心愿**撞色**或跳变。
 
-**修复**：配色改为**稳定枚举** `WishCoverStyle`（如 `A|B|C|D`），或由 `wishId` 哈希稳定映射。
+**现状（2026-10-12 阶段 C3 已落地）**：
+
+- `Wish` 不再有 `backgroundIndex`，配色升为**结构枚举** `WishCoverStyle`，与后端 `enum WishCoverStyle { A B C D }`（`backend/prisma/schema.prisma`，`Wish.coverStyle @default(A)`）**一一对应**：Taro 类型 `types.ts:59` ＋ 取值表 `types.ts:62`；Flutter 枚举 `wish.dart:7` ＋ 取值表 `wish.dart:10`。
+- 取值来源二选一，唯一入口 `pickCoverStyle()`（`store.ts:394`、`app_store.dart:356`）：**有空档先补空档**；四色占满时 **id → 哈希**稳定映射（同一个 id 永远同一个色）。哈希跨端同源 `(hash * 31 + charCode) % 1000003`（JS `charCodeAt` ≡ Dart `codeUnitAt`），实现于 `types.ts:68` / `wish.dart:19`。
+- 两端取色**编译期穷尽**：Taro `WISH_GRADIENTS: Record<WishCoverStyle, [string, string]>`（`WishCard/index.tsx:13`，取色 `:37`）／Flutter `wishGradientOf()` 的 `switch (style)` 表达式（`wish_card.dart:11`，取色 `:37`）—— 将来给枚举加取值，漏掉分支会编译不过。
+- **回归用例**：`run.js:319`（删项不漂移 ＋ 有空档先补空档）、`app_test.dart:439`（跨端同源 ＋ 卡片按枚举取色）；两端均钉死 `wishCoverHash('wish-9') === 355514`。
+- **反回退**：两端 `wishes.length % 4` 归零、`backgroundIndex` 写入点归零（守门人 E16 的 `lack` / `countIs(..., 0)` 钉住）。
 
 ---
 
@@ -545,7 +556,7 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 |---|---|
 | D12 ✅ 已修，安全网就绪 | ✅ 一致。且 `honesty:probe` 已用夹具 `d12-misnested-runner.js` 证明它**能失败** |
 | D13 断言改写 ← 必须与缺陷修复同批，否则测试会「正确地失败」 | ✅ **10/10 已收口**（C1）：第 10 条（首启 124 分 / 324 好习惯）与 **E18** 同批改写为「首启空态 ＋ seed 显式夹具」 |
-| A1 → A5 → A4 → B6 → B7 → B8 → **E18** → E19 → E16（双端同步，纯前端可控） | ✅ A1 / A5 / A4 / B6 / B7 / B8 / E19 已落地；✅ **E18 已收口**（C1：守卫 ＋ 首启空态，构造函数不再无条件 `reset()`）；❌ **E16 未动**（下一阶段 C3） |
+| A1 → A5 → A4 → B6 → B7 → B8 → **E18** → E19 → E16（双端同步，纯前端可控） | ✅ A1 / A5 / A4 / B6 / B7 / B8 / E19 已落地；✅ **E18 已收口**（C1：守卫 ＋ 首启空态，构造函数不再无条件 `reset()`）；✅ **E16 已收口**（C3：稳定枚举 ＋ 补空档/哈希；两端 `wishes.length % 4` 归零） |
 | E15/E17 → A2/A3 → C9/C10/C11（依赖 W0 schema 变更，与后端一并落地） | ✅ **E15 / E17 / A2 / A3 已收口**（C2，双端同步：`condition` / `dailyLimit` 升为结构字段，`checked` / `limitText` / `doneText` / `detail` 全部降级为派生）；❌ **C9 / C10 / C11 仍未动**（下一阶段 C4）。但 **W0 schema 已就绪**（`deletedAt` / `status` / `PointRule.currentVersion` / `AuditLog` 表）→ **已不构成阻塞**，只剩前端改造 |
 
 **验收门（W0 exit）**：

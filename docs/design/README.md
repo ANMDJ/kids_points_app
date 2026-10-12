@@ -10,6 +10,7 @@
 | [`04-onboarding-and-templates.md`](./04-onboarding-and-templates.md) | 首次引导流程、规则模板库、同意与合规 | ✅ 完成 |
 | [`05-dev-plan.md`](./05-dev-plan.md) | 开发计划（**AI 辅助重估 ≈6.1 周**）、压缩选项（已否决）、风险登记、**阻塞项 L1–L6**、**决策登记 P1–P3** | ✅ 完成 |
 | [`06-w0-report.md`](./06-w0-report.md) | **W0 实施报告**：**6 处文档缺陷 + 9 处落地缺陷（编号 7–15）**、D1–D10 **决策已全部裁定（12 条，见 §3.1）**、产物清单、**真实命令与退出码**、**§10 数据库打通与三项验收门关闭**、**两个"假绿"陷阱与反向对照** | ✅ W0 已执行 |
+| [`07-c3-handoff.md`](./07-c3-handoff.md) | **阶段 C3 交接单**（E16 心愿配色 → 稳定枚举 `WishCoverStyle`）：已落地清单＋行号、**七道闸门实测与退出码**、剩余步骤（台账改口 / 证伪 6 例 / 提交）、**本轮真踩过的 8 条陷阱** | 🚧 C3 进行中 |
 
 ## 当前落地进度
 
@@ -51,6 +52,9 @@
   **info 也会让 `flutter analyze` 退出码为 1** —— 于是它与 `analysis_options.yaml` 里"不阻断构建"的注释互相矛盾，
   流水线的 `flutter analyze && flutter test` 更是根本串不起来。已实测：清零后 exit 0、测试仍 29/29）
 - **C2 追加**：`backend npm run ci` **ALL PASS**（含 `defects:check` **18/18**）；另跑 **6 例代码级证伪**全部变红、还原回绿。
+- **C3（🚧 进行中 → 交接单见 [`07-c3-handoff.md`](./07-c3-handoff.md)）**：**E16** 心愿配色由 `wishes.length % 4` 升为稳定枚举 `WishCoverStyle`（补空档 + id 哈希，双端同源，下标归零）。
+  已实测：`run.js` **20/20**、`flutter test` **32/32**、`flutter analyze` **0 issue**、Taro `tsc --noEmit` **EXIT=0**；
+  **尚未收尾**：`03` 台账 E16 改口（守门人此刻报 `FAILED 1 项` 属**预期**，`backend npm run ci` 亦停在同一步）＋ **证伪自测 6 例** ＋ 一处提交。
 
 **阶段 C1（2026-10-12）新增的回归用例 —— 全部先验证过"能失败"再让它们变绿**：
 - `E18 首启必须为空态：不预置任何演示数据`（Taro）／`首启空态（修 E18）`（Flutter）

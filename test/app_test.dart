@@ -436,6 +436,57 @@ void main() {
     });
   });
 
+  group('心愿配色稳定枚举（修 E16）', () {
+    test('删项不让其余心愿换色，新增先补空档', () {
+      final AppStore store = seededStore();
+      expect(
+        store.wishes.map((Wish w) => w.coverStyle).toList(),
+        <WishCoverStyle>[
+          WishCoverStyle.a,
+          WishCoverStyle.b,
+          WishCoverStyle.c,
+          WishCoverStyle.d,
+        ],
+        reason: '演示数据显式声明配色，不靠数组下标',
+      );
+
+      // 删掉中间的 b：其余心愿的配色一个都不许变
+      store.removeWish(store.wishes[1]);
+      expect(
+        store.wishes.map((Wish w) => w.coverStyle).toList(),
+        <WishCoverStyle>[
+          WishCoverStyle.a,
+          WishCoverStyle.c,
+          WishCoverStyle.d,
+        ],
+        reason: '删项不得让其余心愿换色',
+      );
+
+      // 新增：应补回空出来的 b，而不是按 wishes.length % 4 又算成别的
+      store.addWish(title: '新心愿', cost: 10, emoji: '🎁');
+      expect(store.wishes.first.coverStyle, WishCoverStyle.b,
+          reason: '有空档先补空档');
+    });
+
+    test('四个占满时由 id 稳定派生，期望值与 Taro 侧一致（跨端同源）', () {
+      expect(pickCoverStyle(wishCoverStyles, 'wish-9'), WishCoverStyle.c);
+      expect(pickCoverStyle(wishCoverStyles, 'wish-9'), WishCoverStyle.c,
+          reason: '同 id 永远同色');
+      expect(wishCoverHash('wish-9'), 355514,
+          reason: '哈希算式被钉死：改了就会让既有心愿换色');
+    });
+
+    test('卡片按稳定枚举取色，不再有数组下标', () {
+      expect(wishGradientOf(WishCoverStyle.a).first, const Color(0xFFFFF8E6));
+      expect(wishGradientOf(WishCoverStyle.d).last, const Color(0xFFF8D9CE));
+      expect(
+        wishGradientOf(WishCoverStyle.a),
+        isNot(equals(wishGradientOf(WishCoverStyle.b))),
+        reason: '不同枚举取值必须取到不同底色',
+      );
+    });
+  });
+
   group('界面冒烟测试', () {
     Future<void> pumpApp(WidgetTester tester, AppStore store) async {
       tester.view.physicalSize = const Size(1200, 2400);

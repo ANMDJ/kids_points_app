@@ -344,14 +344,19 @@ class AppStore extends ChangeNotifier {
 
   void addWish(
       {required String title, required int cost, required String emoji}) {
+    final String id = _newId('wish');
     wishes.insert(
       0,
       Wish(
-        id: _newId('wish'),
+        id: id,
         title: title.trim(),
         cost: cost,
         emoji: emoji,
-        backgroundIndex: wishes.length % 4,
+        // 修 E16：配色只由「空档 + id」决定，与列表长度无关 —— 删项后既有心愿不再换色
+        coverStyle: pickCoverStyle(
+          wishes.map((Wish item) => item.coverStyle).toList(),
+          id,
+        ),
       ),
     );
     _persist();

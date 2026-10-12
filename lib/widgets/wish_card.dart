@@ -4,13 +4,16 @@ import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import 'pills.dart';
 
-/// 心愿单卡片的 4 套插画底色。
-const List<List<Color>> wishGradients = <List<Color>>[
-  <Color>[Color(0xFFFFF8E6), Color(0xFFFBE7B8)],
-  <Color>[Color(0xFFFFF6E9), Color(0xFFF7DCC0)],
-  <Color>[Color(0xFFF3FAEA), Color(0xFFDCEEBE)],
-  <Color>[Color(0xFFFFF6F1), Color(0xFFF8D9CE)],
-];
+/// 心愿单卡片的 4 套插画底色 —— **按稳定枚举取色**（修 E16：不再用数组下标）。
+///
+/// 刻意用 `switch` 表达式（Dart 3）而非数组/Map：枚举一旦加取值，
+/// 这里会**在编译期**报缺分支，而不是静默取到 `null` 或回退成默认色。
+List<Color> wishGradientOf(WishCoverStyle style) => switch (style) {
+      WishCoverStyle.a => const <Color>[Color(0xFFFFF8E6), Color(0xFFFBE7B8)],
+      WishCoverStyle.b => const <Color>[Color(0xFFFFF6E9), Color(0xFFF7DCC0)],
+      WishCoverStyle.c => const <Color>[Color(0xFFF3FAEA), Color(0xFFDCEEBE)],
+      WishCoverStyle.d => const <Color>[Color(0xFFFFF6F1), Color(0xFFF8D9CE)],
+    };
 
 /// 心愿卡片：插画 + 名称 + 所需积分 + 兑换/还差 N。
 class WishCard extends StatelessWidget {
@@ -31,8 +34,7 @@ class WishCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool affordable = !wish.redeemed && points >= wish.cost;
     final int gap = wish.cost - points > 0 ? wish.cost - points : 0;
-    final List<Color> colors =
-        wishGradients[wish.backgroundIndex % wishGradients.length];
+    final List<Color> colors = wishGradientOf(wish.coverStyle);
 
     return GestureDetector(
       onLongPress: onLongPress,

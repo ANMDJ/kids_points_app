@@ -63,7 +63,7 @@ export function buildSeedData(): SeedBundle {
       title: '限定商品 30 元优惠券（满 300 减 100）',
       cost: 40,
       emoji: '🍖',
-      backgroundIndex: 0,
+      coverStyle: 'A',
       redeemed: false
     },
     {
@@ -71,7 +71,7 @@ export function buildSeedData(): SeedBundle {
       title: '汪汪零食大礼包 · 周末加餐',
       cost: 40,
       emoji: '🐶',
-      backgroundIndex: 1,
+      coverStyle: 'B',
       redeemed: false
     },
     {
@@ -79,7 +79,7 @@ export function buildSeedData(): SeedBundle {
       title: '一起去游乐园玩一整天（亲子票）',
       cost: 445,
       emoji: '🎡',
-      backgroundIndex: 2,
+      coverStyle: 'C',
       redeemed: false
     },
     {
@@ -87,7 +87,7 @@ export function buildSeedData(): SeedBundle {
       title: '新款积木套装（1000+ 颗粒）',
       cost: 445,
       emoji: '🧩',
-      backgroundIndex: 3,
+      coverStyle: 'D',
       redeemed: false
     }
   ]

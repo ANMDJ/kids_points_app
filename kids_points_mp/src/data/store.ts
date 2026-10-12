@@ -21,6 +21,7 @@ import {
   habitView,
   isDailyLimitValid,
   isSameDay,
+  pickCoverStyle,
   recordSubtitle
 } from './types'
 
@@ -383,12 +384,17 @@ export class AppStore {
   }
 
   addWish(title: string, cost: number, emoji: string): void {
+    const id = this.newId('wish')
     this.wishes.unshift({
-      id: this.newId('wish'),
+      id,
       title: title.trim(),
       cost,
       emoji,
-      backgroundIndex: this.wishes.length % 4,
+      // 修 E16：配色只由「空档 + id」决定，与列表长度无关 —— 删项后既有心愿不再换色
+      coverStyle: pickCoverStyle(
+        this.wishes.map((item) => item.coverStyle),
+        id
+      ),
       redeemed: false
     })
     this.persist()
