@@ -12,9 +12,19 @@ import 'package:kids_points_app/widgets/floating_add_button.dart';
 import 'package:kids_points_app/widgets/wish_card.dart';
 
 void main() {
+  /// 演示数据是**测试夹具**（修 E18 / D13 第 10 条）：
+  /// 应用首启是**空态**，需要演示数据时必须**显式载入** —— 测试里也一样。
+  /// 不写这个 helper，用例就会悄悄依赖「构造函数替我们种数据」，
+  /// 而那正是 E18 描述的错误行为本身。
+  AppStore seededStore() {
+    final AppStore store = AppStore();
+    expect(store.resetToSeed(), isTrue, reason: '调试构建下应可显式载入演示数据夹具');
+    return store;
+  }
+
   group('演示数据', () {
     test('首次启动的数值与设计稿一致', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       expect(store.points, 124);
       expect(store.profile.goodHabitCount, 324);
       expect(store.profile.rewardCount, 4);
@@ -27,7 +37,7 @@ void main() {
 
   group('习惯打卡', () {
     test('打卡成功后积分与好习惯次数增加，并写入表扬流水', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Habit habit = store.habits.first..checked = false;
 
       final String? message = store.checkIn(habit);
@@ -42,7 +52,7 @@ void main() {
     });
 
     test('重复打卡会被拦下，积分不变', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Habit habit = store.habits.first..checked = false;
       store.checkIn(habit);
 
@@ -53,7 +63,7 @@ void main() {
     });
 
     test('撤销打卡会扣回积分并写入冲正记录（修 B7）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Habit habit = store.habits.first..checked = false;
       store.checkIn(habit);
 
@@ -68,7 +78,7 @@ void main() {
 
   group('记一笔与兑换', () {
     test('加分会记录为调整流水，但不累加奖励次数（修 A5）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
 
       final String? message =
           store.addQuickNote(delta: 5, reason: '主动帮忙做家务');
@@ -83,7 +93,7 @@ void main() {
     });
 
     test('超额扣分被拒绝，不再静默截断余额（修 B6）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final int before = store.records.length;
 
       final String? message = store.addQuickNote(delta: -999, reason: '随便扣分');
@@ -94,7 +104,7 @@ void main() {
     });
 
     test('恰好扣光余额是允许的，且流水与余额一致', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
 
       final String? message = store.addQuickNote(delta: -124, reason: '全扣');
 
@@ -105,7 +115,7 @@ void main() {
     });
 
     test('积分足够时可以兑换心愿，并生成兑换流水', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Wish wish = store.wishes.first; // 40 积分
 
       final bool ok = store.redeem(wish);
@@ -127,7 +137,7 @@ void main() {
     });
 
     test('积分不足时无法兑换', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Wish expensive = store.wishes[2]; // 445 积分
 
       expect(store.canRedeem(expensive), isFalse);
@@ -139,7 +149,7 @@ void main() {
 
   group('筛选与规则', () {
     test('记录可以按分类过滤', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       expect(store.recordsOf(null).length, 4);
       expect(store.recordsOf(RecordCategory.praise).length, 3);
       expect(store.recordsOf(RecordCategory.exchange).length, 1);
@@ -147,7 +157,7 @@ void main() {
     });
 
     test('新增规则后可以一键加入今天的习惯', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       store.addRule(
         title: '每天练琴 30 分钟',
         detail: '认真练习不断开 · 每天 1 次',
@@ -170,7 +180,7 @@ void main() {
 
   group('账本可追溯性（A1 / A4 / B7 / B8 / I2 / I6）', () {
     test('孩子自助打卡记录为 childSelf，不谎称“家长记录”（修 A4）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Habit habit = store.habits[2]; // 自主阅读 +2
 
       final String? message = store.checkIn(
@@ -194,7 +204,7 @@ void main() {
     });
 
     test('撤销打卡写入冲正记录，原记录保留（修 B7 / I6）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       final Habit habit = store.habits[2];
       store.checkIn(habit);
       final PointRecord origin = store.records.first;
@@ -221,7 +231,7 @@ void main() {
     });
 
     test('扣分规则不能加入今天的习惯（修 A1，不再 abs 成加分）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       store.addRule(
         title: '打人',
         detail: '不可以打人 · 每天 1 次',
@@ -239,7 +249,7 @@ void main() {
     });
 
     test('balanceAfter 余额链自洽（I2，按写入顺序）', () {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       store.checkIn(store.habits[2]);
       store.addQuickNote(delta: 3, reason: '家长奖励');
       store.undoCheckIn(store.habits[2]);
@@ -256,9 +266,14 @@ void main() {
       expect(store.records.first.balanceAfter, store.points);
     });
 
-    test('生产构建下不允许恢复演示数据（修 E18）', () {
-      // 测试环境 kDebugMode 为 true，因此入口可用；此处只校验返回值契约。
-      final AppStore store = AppStore();
+    test('release 构建下不允许恢复演示数据（修 E18）', () {
+      // 判据层：release 必须被拒 —— 不依赖「测试恰好跑在 debug」这个巧合
+      expect(demoResetAllowed(isRelease: true), isFalse, reason: 'release / profile 构建必须禁止');
+      expect(demoResetAllowed(isRelease: false), isTrue, reason: '调试构建可用');
+      // 编译期常量与判据必须表达同一语义（两处漂移即红）
+      expect(allowDemoReset, demoResetAllowed(), reason: 'const 闸门与纯函数判据不得漂移');
+
+      final AppStore store = seededStore();
       store.checkIn(store.habits[2]);
       expect(store.points, 126);
 
@@ -267,6 +282,38 @@ void main() {
         expect(store.points, 124, reason: '恢复后回到演示数据');
       } else {
         expect(store.points, 126, reason: '被拒绝时数据不受影响');
+      }
+    });
+  });
+
+  group('首启空态（修 E18）', () {
+    test('首启为空态：不预置任何演示数据', () {
+      final AppStore store = AppStore();
+
+      expect(store.points, 0, reason: '首启不得预置 124 分假数据');
+      expect(store.profile.name, isEmpty, reason: '首启不得有假昵称');
+      expect(store.profile.goodHabitCount, 0, reason: '首启不得声称完成过 324 个好习惯');
+      expect(store.profile.rewardCount, 0);
+      expect(store.habits, isEmpty);
+      expect(store.wishes, isEmpty);
+      expect(store.records, isEmpty);
+      expect(store.rules, isEmpty);
+    });
+
+    test('空态下各入口可用，且演示数据只能显式载入', () {
+      final AppStore store = AppStore();
+
+      // 首启用户第一眼就是空态：查询与写入都不能崩
+      expect(store.recordsOf(null), isEmpty);
+      expect(store.addQuickNote(delta: 2, reason: '开局奖励'), isNull);
+      expect(store.points, 2);
+      expect(store.records.single.balanceAfter, 2, reason: '空态起步的余额链必须自洽');
+
+      // 演示数据仍在，但它是「一次显式操作」，不是首启默认值
+      expect(store.resetToSeed(), allowDemoReset);
+      if (allowDemoReset) {
+        expect(store.points, 124, reason: '显式载入后回到演示数据');
+        expect(store.habits.length, 3);
       }
     });
   });
@@ -281,8 +328,19 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets('首启空态不崩：0 分 0 习惯也能渲染首页', (WidgetTester tester) async {
+      final AppStore store = AppStore();
+      await pumpApp(tester, store);
+
+      expect(store.points, 0);
+      expect(find.text('当前可用积分'), findsWidgets);
+      expect(find.text('今天的习惯'), findsOneWidget);
+      expect(find.textContaining('已完成 0/0'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('首页展示积分、习惯与记一笔', (WidgetTester tester) async {
-      await pumpApp(tester, AppStore());
+      await pumpApp(tester, seededStore());
 
       expect(find.text('当前可用积分'), findsWidgets);
       expect(find.text('今天的习惯'), findsOneWidget);
@@ -292,7 +350,7 @@ void main() {
     });
 
     testWidgets('心愿单展示心愿卡片与新增心愿', (WidgetTester tester) async {
-      await pumpApp(tester, AppStore());
+      await pumpApp(tester, seededStore());
 
       // 心愿单在 IndexedStack 里，切到这一页才“onstage”，查找才能命中。
       await tester.tap(find.text('心愿单'));
@@ -324,7 +382,7 @@ void main() {
     });
 
     testWidgets('新增心愿默认收在右下角，滚到底部后展开成整行按钮', (WidgetTester tester) async {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       for (int i = 0; i < 6; i++) {
         store.addWish(title: '测试心愿 $i', cost: 10 + i, emoji: '🎁');
       }
@@ -366,7 +424,7 @@ void main() {
     });
 
     testWidgets('点击习惯卡片即可打卡加分', (WidgetTester tester) async {
-      final AppStore store = AppStore();
+      final AppStore store = seededStore();
       await pumpApp(tester, store);
       expect(store.points, 124);
 

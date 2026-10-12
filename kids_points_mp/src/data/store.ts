@@ -16,13 +16,26 @@ import type {
 import { recordSubtitle } from './types'
 
 /**
+ * 演示数据的**准入判据**（修 E18）。
+ *
+ * 刻意写成纯函数：`process.env.NODE_ENV` 只在打包时被 DefinePlugin 替换，
+ * 若判据只存在于常量里，测试就只能靠“碰巧跑在开发环境”才验证得到它。
+ * 现在可以确定性地断言 `demoResetAllowed('production') === false`；
+ * 另一层证明是**以 NODE_ENV=production 重新加载模块**
+ * （见 `kids_points_mp/.tmp_test/run.js` 的 E18 用例）。
+ */
+export function demoResetAllowed(env: string = process.env.NODE_ENV ?? ''): boolean {
+  return env !== 'production'
+}
+
+/**
  * 是否允许“恢复演示数据”（修 E18）。
  *
  * 该方法原先是**生产可达**的公开 API，“我的”页按钮直接调用 ——
  * 用户可一键清空真实数据并恢复假演示数据（124 分 / 324 好习惯 / 4 次奖励）。
- * 生产构建必须为 false；Taro 打包时 DefinePlugin 会替换掉 NODE_ENV。
+ * 保持**编译期常量**：生产构建下为 false，能力整段可被 DCE。
  */
-export const ALLOW_DEMO_RESET = process.env.NODE_ENV !== 'production'
+export const ALLOW_DEMO_RESET = demoResetAllowed()
 
 /**
  * 应用状态中心：积分余额、习惯、心愿、流水、规则。
@@ -47,8 +60,16 @@ export class AppStore {
   private seq = 0
   private listeners = new Set<() => void>()
 
+  /**
+   * 首启是**空态**（修 E18 第二半）。
+   *
+   * 原先构造即 `this.reset()` → 应用一打开就是假数据（124 分 / 324 好习惯 /
+   * “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的，
+   * 而且屏幕上没有任何一个数字能被当真。
+   * seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
+   */
   constructor() {
-    this.reset()
+    this.resetToEmpty()
   }
 
   // ------------------------------------------------------------- 订阅 / 通知
@@ -64,7 +85,18 @@ export class AppStore {
     this.listeners.forEach((listener) => listener())
   }
 
-  private reset(): void {
+  /** 空态：每个真实用户的第一步都从这里开始（修 E18）。 */
+  private resetToEmpty(): void {
+    this.points = 0
+    this.profile = { name: '', childId: '', goodHabitCount: 0, rewardCount: 0 }
+    this.habits = []
+    this.wishes = []
+    this.records = []
+    this.rules = []
+  }
+
+  /** 载入演示数据 —— 只由 [resetToSeed] 调用（开发环境 / 测试夹具）。 */
+  private applySeed(): void {
     const seed = buildSeedData()
     this.points = seed.points
     this.profile = seed.profile
@@ -79,11 +111,14 @@ export class AppStore {
    * 返回是否真的执行了恢复。
    *
    * **修 E18**：原先是**生产可达**的公开方法 —— 用户可一键清空真实数据并恢复假演示数据。
-   * 现由 [ALLOW_DEMO_RESET] 守卫，仅开发环境可用。
+   * 现由 [ALLOW_DEMO_RESET]（编译期常量）守卫，仅开发环境可用；生产构建下整个
+   * 入口也不渲染（见 pages/profile）。
+   *
+   * 注意它现在是演示数据的**唯一**入口：首启不再自动载入 seed（那是 E18 的另一半）。
    */
   resetToSeed(): boolean {
     if (!ALLOW_DEMO_RESET) return false
-    this.reset()
+    this.applySeed()
     this.persist()
     return true
   }

@@ -35,7 +35,7 @@ const {
   recordSubtitle
 } = require('./dist/data/types.js')
 const { buildSeedData } = require('./dist/data/seed.js')
-const { AppStore } = require('./dist/data/store.js')
+const { AppStore, demoResetAllowed } = require('./dist/data/store.js')
 const { withAlpha } = require('./dist/utils/color.js')
 
 let failed = 0
@@ -47,6 +47,18 @@ function check(name, fn) {
     failed += 1
     console.log('FAIL  ' + name + ' -> ' + error.message)
   }
+}
+
+/**
+ * 演示数据是**测试夹具**（修 E18 / D13 第 10 条）：
+ * 应用首启必须是**空态**，seed 只能被**显式载入** —— 测试里也一样。
+ * 不写这个 helper，用例就会悄悄依赖「构造函数替我们种数据」，
+ * 而那正是 E18 描述的错误行为本身。
+ */
+function seededStore() {
+  const store = new AppStore()
+  assert.strictEqual(store.resetToSeed(), true, '调试构建下应可显式载入演示数据夹具')
+  return store
 }
 
 check('dayLabel: 今天 / 昨天 / 前天 / M 月 d 日', () => {
@@ -110,7 +122,7 @@ check('seed: 124 积分 / 324 好习惯 / 4 次奖励', () => {
 })
 
 check('recordsOf / canRedeem / gapOf', () => {
-  const store = new AppStore()
+  const store = seededStore()
   assert.strictEqual(store.recordsOf(null).length, 4)
   assert.strictEqual(store.recordsOf('exchange').length, 1)
   assert.strictEqual(store.recordsOf('adjust').length, 0)
@@ -124,7 +136,7 @@ check('recordsOf / canRedeem / gapOf', () => {
 })
 
 check('checkIn / undoCheckIn', () => {
-  const store = new AppStore()
+  const store = seededStore()
   const reading = store.habits[2]
   assert.strictEqual(store.checkIn(reading), null)
   assert.strictEqual(store.points, 126)
@@ -159,7 +171,7 @@ check('checkIn / undoCheckIn', () => {
   assert.strictEqual(store.records.length, 6)
 
   // 修 B7：撤销种子数据里已打卡的习惯 —— 按 habitId（唯一）匹配，且不再删除记录
-  const seeded = new AppStore()
+  const seeded = seededStore()
   assert.strictEqual(seeded.undoCheckIn(seeded.habits[0]), null)
   assert.strictEqual(seeded.points, 123)
   assert.strictEqual(seeded.records.length, 5, '原 4 条 + 1 条冲正')
@@ -171,7 +183,7 @@ check('checkIn / undoCheckIn', () => {
 })
 
 check('addQuickNote：加分 / 扣分 / 清零 / 文案', () => {
-  const store = new AppStore()
+  const store = seededStore()
   assert.strictEqual(store.addQuickNote(5, '', ''), null)
   assert.strictEqual(store.points, 129)
   // 修 A5：rewardCount 语义是“奖励兑换次数”，手动加分**不得**递增
@@ -215,7 +227,7 @@ check('addQuickNote：加分 / 扣分 / 清零 / 文案', () => {
 })
 
 check('redeem：兑换成功 / 完整标题快照 / 积分不足', () => {
-  const store = new AppStore()
+  const store = seededStore()
   const cheap = store.wishes[0]
   assert.strictEqual(store.redeem(cheap), true)
   assert.strictEqual(store.points, 84)
@@ -245,7 +257,7 @@ check('redeem：兑换成功 / 完整标题快照 / 积分不足', () => {
 })
 
 check('addWish / removeWish', () => {
-  const store = new AppStore()
+  const store = seededStore()
   store.addWish('  新愿望  ', 12, '🎁')
   assert.strictEqual(store.wishes.length, 5)
   assert.strictEqual(store.wishes[0].title, '新愿望')
@@ -260,7 +272,7 @@ check('addWish / removeWish', () => {
 })
 
 check('addRule / removeRule：空详情兜底', () => {
-  const store = new AppStore()
+  const store = seededStore()
   store.addRule(' 收拾玩具 ', '   ', 3, 'star', '#f6c64a')
   assert.strictEqual(store.rules.length, 5)
   assert.strictEqual(store.rules[0].title, '收拾玩具')
@@ -272,7 +284,7 @@ check('addRule / removeRule：空详情兜底', () => {
 })
 
 check('addHabitFromRule：拆分详情 + 去重', () => {
-  const store = new AppStore()
+  const store = seededStore()
   // rules[2] = 围棋课后作业 / 完成并检查 · 每周 1 次（首页还没有同名习惯）
   store.addHabitFromRule(store.rules[2])
   assert.strictEqual(store.habits.length, 4)
@@ -308,7 +320,7 @@ check('addHabitFromRule：拆分详情 + 去重', () => {
 })
 
 check('renameChild / resetToSeed', () => {
-  const store = new AppStore()
+  const store = seededStore()
   store.renameChild('  小明  ')
   assert.strictEqual(store.profile.name, '小明')
   store.renameChild('   ')
@@ -325,7 +337,7 @@ check('renameChild / resetToSeed', () => {
 })
 
 check('subscribe：变更会通知订阅者', () => {
-  const store = new AppStore()
+  const store = seededStore()
   let calls = 0
   const off = store.subscribe(() => {
     calls += 1
@@ -340,7 +352,7 @@ check('subscribe：变更会通知订阅者', () => {
 })
 
 check('A4 真实操作人 / I2 余额链自洽 / I6 冲正关系', () => {
-  const store = new AppStore()
+  const store = seededStore()
   const habit = store.habits[2] // 自主阅读 +2
 
   // ── A4：孩子自助打卡 → source=child_self，subtitle 不得谎称“家长”
@@ -391,6 +403,60 @@ check('A4 真实操作人 / I2 余额链自洽 / I6 冲正关系', () => {
     store.points,
     '最新一条的 balanceAfter 必须等于当前余额'
   )
+})
+
+// ── E18 第二半：首启空态（修前必然失败）────────────────────────────────
+check('E18 首启必须为空态：不预置任何演示数据', () => {
+  const fresh = new AppStore()
+  assert.strictEqual(fresh.points, 0, '首启不得预置 124 分假数据')
+  assert.strictEqual(fresh.profile.name, '', '首启不得有假昵称')
+  assert.strictEqual(fresh.profile.childId, '', '首启不得有假孩子 ID')
+  assert.strictEqual(fresh.profile.goodHabitCount, 0, '首启不得声称完成过 324 个好习惯')
+  assert.strictEqual(fresh.profile.rewardCount, 0, '首启不得声称兑换过 4 次')
+  assert.deepStrictEqual(fresh.habits, [], '首启不得预置习惯')
+  assert.deepStrictEqual(fresh.wishes, [], '首启不得预置心愿')
+  assert.deepStrictEqual(fresh.records, [], '首启不得预置流水')
+  assert.deepStrictEqual(fresh.rules, [], '首启不得预置规则')
+
+  // 首启用户第一眼就是空态：查询与写入都不能崩
+  assert.strictEqual(fresh.recordsOf(null).length, 0)
+  assert.strictEqual(fresh.addQuickNote(2, '开局奖励'), null)
+  assert.strictEqual(fresh.points, 2)
+  assert.strictEqual(fresh.records.length, 1)
+  assert.strictEqual(fresh.records[0].balanceAfter, 2, '空态起步的余额链必须自洽')
+
+  // 演示数据仍在，但它是「一次显式操作」，不是首启默认值
+  assert.strictEqual(fresh.resetToSeed(), true)
+  assert.strictEqual(fresh.points, 124)
+})
+
+check('E18 生产构建不可达：判据语义 + 真实生产模块双证', () => {
+  // ① 判据层：不依赖「恰好跑在哪个环境」，production 必须被拒
+  assert.strictEqual(demoResetAllowed('production'), false, 'NODE_ENV=production 必须禁止')
+  assert.strictEqual(demoResetAllowed('development'), true, '开发环境可用')
+  assert.strictEqual(demoResetAllowed(''), true, '未设 NODE_ENV（本地/测试）可用')
+
+  // ② 真实模块层：以 NODE_ENV=production 重新加载 → 守卫与行为都必须为「拒绝」
+  const storePath = require.resolve('./dist/data/store.js')
+  const cached = require.cache[storePath]
+  const prevEnv = process.env.NODE_ENV
+  let prod
+  try {
+    process.env.NODE_ENV = 'production'
+    delete require.cache[storePath]
+    prod = require('./dist/data/store.js')
+  } finally {
+    process.env.NODE_ENV = prevEnv
+    require.cache[storePath] = cached
+  }
+
+  assert.strictEqual(prod.ALLOW_DEMO_RESET, false, '生产构建的守卫必须是 false（否则可被 DCE）')
+  const guarded = new prod.AppStore()
+  guarded.renameChild('小明')
+  guarded.addQuickNote(5, '真实数据')
+  assert.strictEqual(guarded.resetToSeed(), false, '生产构建必须拒绝恢复演示数据')
+  assert.strictEqual(guarded.profile.name, '小明', '被拒绝时不得清空真实数据')
+  assert.strictEqual(guarded.points, 5, '被拒绝时余额不得被改成 124')
 })
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)

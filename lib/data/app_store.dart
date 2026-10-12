@@ -8,25 +8,38 @@ import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import 'seed_data.dart';
 
+/// release / profile 构建的判定 —— **编译期常量**（等价于 `!kDebugMode`）。
+///
+/// 用 `bool.fromEnvironment` 直接表达，以免在纯数据层引入对 flutter/foundation 的依赖。
+const bool _isReleaseBuild = bool.fromEnvironment('dart.vm.product') ||
+    bool.fromEnvironment('dart.vm.profile');
+
+/// 演示数据的**准入判据**（修 E18）。
+///
+/// 刻意写成纯函数：若判据只存在于 [allowDemoReset] 这个编译期常量里，
+/// 测试就只能靠“碰巧跑在调试构建”才验证得到它；
+/// 现在可以确定性地断言 `demoResetAllowed(isRelease: true) == false`。
+bool demoResetAllowed({bool isRelease = _isReleaseBuild}) => !isRelease;
+
 /// 是否允许“恢复演示数据”（修 E18）。
 ///
 /// 该方法原先是**生产可达**的公开 API，“我的”页按钮直接调用 ——
 /// 用户可一键清空真实数据并恢复假演示数据（124 分 / 324 好习惯 / 4 次奖励）。
-/// release / profile 构建下为 false，入口自动关闭。
-///
-/// 用 `bool.fromEnvironment` 直接表达（等价于 `kDebugMode`），
-/// 以免在纯数据层引入对 flutter/foundation 的依赖。
-const bool allowDemoReset =
-    !bool.fromEnvironment('dart.vm.product') &&
-        !bool.fromEnvironment('dart.vm.profile');
+/// release / profile 构建下为 false，入口在编译期被整段树摇掉。
+const bool allowDemoReset = !_isReleaseBuild;
 
 /// 应用状态中心：积分余额、习惯、心愿、流水、规则。
 ///
 /// 目前是纯内存实现（会话内有效）。要落地持久化时，
 /// 只需在 [_persist] 中接入 shared_preferences / sqflite 即可，UI 层无需改动。
 class AppStore extends ChangeNotifier {
+  /// 首启是**空态**（修 E18 第二半）。
+  ///
+  /// 原先构造即 `_reset()` → 应用一打开就是假数据（124 分 / 324 好习惯 /
+  /// “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的。
+  /// seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
   AppStore() {
-    _reset();
+    _resetToEmpty();
   }
 
   int _points = 0;
@@ -40,7 +53,23 @@ class AppStore extends ChangeNotifier {
 
   int _seq = 0;
 
-  void _reset() {
+  /// 空态：每个真实用户的第一步都从这里开始（修 E18）。
+  void _resetToEmpty() {
+    _points = 0;
+    profile = ChildProfile(
+      name: '',
+      childId: '',
+      goodHabitCount: 0,
+      rewardCount: 0,
+    );
+    habits.clear();
+    wishes.clear();
+    records.clear();
+    rules.clear();
+  }
+
+  /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
+  void _applySeed() {
     final SeedBundle seed = buildSeedData();
     _points = seed.points;
     profile = seed.profile;
@@ -61,10 +90,12 @@ class AppStore extends ChangeNotifier {
   /// 恢复演示数据（“我的”页长按头像可触发）。返回是否真的执行了恢复。
   ///
   /// **修 E18**：原先是**生产可达**的公开方法 —— 用户可一键清空真实数据并恢复假演示数据。
-  /// 现由 [allowDemoReset] 守卫，仅调试构建可用。
+  /// 现由 [allowDemoReset]（编译期常量）守卫，仅调试构建可用。
+  ///
+  /// 注意它现在是演示数据的**唯一**入口：首启不再自动载入 seed（那是 E18 的另一半）。
   bool resetToSeed() {
     if (!allowDemoReset) return false;
-    _reset();
+    _applySeed();
     _persist();
     return true;
   }
