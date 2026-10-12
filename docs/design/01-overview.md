@@ -4,23 +4,34 @@
 
 | 层 | 技术 | 版本 | 状态 |
 |---|---|---|---|
-| 小程序端 | Taro 4.3.0 + React 18 + TypeScript 5.4 + Sass | 已就绪 | ✅ 双端 UI 完成 |
+| 小程序端 | Taro 4.3.0 + React 18 + TypeScript 5.4 | 已就绪 | ✅ 双端 UI 完成 |
 | 移动端 | Flutter 3.47.5 / Dart 3.13.4 | 已就绪 | ✅ 双端 UI 完成 |
 | API | NestJS | 框架 **12.1.2** / CLI **12.0.8** / schematics **12.0.6** | 🔶 W0 骨架已建 |
 | 语言（后端） | TypeScript | **6.0.3** | ✅ 已就位 |
 | ORM | Prisma | **7.10.0** | 🔶 W0 schema 已校验通过 |
-| 数据库 | PostgreSQL | — | ❌ 待建（**本机未安装**，见 `06` §6 L1） |
+| 数据库 | PostgreSQL | **18.6**（服务 `postgresql-x64-18`，端口 5432） | ✅ **已就绪**（库 `kids_points` + 应用角色 `kids_points_app`；见 `06` §6 L1 与 §10） |
 | Agent | Python **3.12** + FastAPI + LangGraph | — | ❌ 待建 |
+| 测试（小程序） | Node `assert` 冒烟套件（`kids_points_mp/.tmp_test/run.js`） | — | ✅ 已修可信 |
+| 测试（Flutter） | `flutter_test`（`test/app_test.dart`） | — | ✅ 21/21 绿 |
 
 > **⚠ 版本勘误（由 W0 实测得出，详见 `06` §2）**：
 > 1. **NestJS 的框架包与工具链版本号不同步** —— `@nestjs/cli` 最新为 **12.0.8**、`@nestjs/schematics` 为 **12.0.6**，
->    **不存在 12.1.2**。原表把 CLI 也当成 12.1.2，会导致 `npm install` 直接失败。
+>    **`@nestjs/cli@12.1.2` 不存在**。原表把 **CLI** 也当成 12.1.2，会导致 `npm install` 直接失败。
+>    ⚠️ 别读反：**框架包 `@nestjs/core@12.1.2` 是存在的，且已实际安装** ——
+>    `backend/package-lock.json` 的 resolved 指向 `registry.npmjs.org/@nestjs/core/-/core-12.1.2.tgz`，
+>    `node_modules/@nestjs/core/package.json` 实测 `12.1.2`（2026-10-12 复核）。
 > 2. **后端需要 TypeScript ≥ 6** —— `@nestjs/schematics@12` 的 peer 要求是 `>=6.0.0`。
->    原表「TypeScript 5.4」对**小程序端（Taro）成立**，对后端不成立。
+>    原表「TypeScript 5.4」对**小程序端（Taro）成立**（`kids_points_mp/package.json` = `^5.4.5`），对后端不成立。
 > 3. **Prisma 7 是破坏性变更** —— `datasource.url` **不再允许**写在 schema 里，
 >    连接串必须移到 `prisma.config.ts`，客户端必须用 driver adapter（`@prisma/adapter-pg`）。
-| 测试（小程序） | Node `assert` 冒烟套件（`kids_points_mp/.tmp_test/run.js`） | — | ✅ 已修可信 |
-| 测试（Flutter） | `flutter_test`（`test/app_test.dart`） | — | ✅ 21/21 绿 |
+
+> **状态勘误（2026-10-12）**：
+> - 「数据库」一行原写「❌ 待建（**本机未安装**）」—— **已过期**。L1 已于 2026-10-12 解除：
+>   PostgreSQL **18.6** 装好、库 `kids_points` 与角色 `kids_points_app` 均已建，三项验收门全部关闭（`06` §10）。
+> - 上一版把「版本勘误」引用块**插在表格中间**，导致 Markdown 表格被截断
+>   （「测试（小程序）」「测试（Flutter）」两行脱表）。已移到表格之后。
+> - 移动端 `Flutter 3.47.5 / Dart 3.13.4` 经 `flutter --version` 现场核对 ✅
+>   （channel stable，framework revision `6a19cca564`，Tools · Dart 3.13.4）。
 
 ---
 
@@ -70,7 +81,18 @@
 
 ## 3. 与现有代码的接缝（为什么迁移成本可控）
 
-现有双端 `AppStore` 的方法名**一一对应**，且都是同步内存操作。接 API 时**不改 UI**，只改方法体：
+现有双端 `AppStore` 的方法名**一一对应**，且都是同步内存操作。接 API 时**UI 的布局与交互不必重做**，
+方法体改成调 API 即可 —— 但**不是「零 UI 改动」**（原表述「不改 UI」过宽，2026-10-12 收敛）：
+
+| 必然触碰 UI 层的地方 | 原因 | 来源 |
+|---|---|---|
+| `icon` 名 → `IconData` 映射 | 库里存的是**字符串图标名**，Flutter 侧需要映射表（Taro 侧同样要查表才能渲染） | 裁定 **D9** |
+| `limitText` / `doneText` / `checked` 的取值来源 | 三者将从**可写字段**变成**派生值**（由 `dailyLimit` 与当日流水算出）→ 视图绑定表达式必须跟着改 | A2 / A3 / E17 |
+| 「加载中 / 失败 / 重试 / 离线」过渡态 | 现在是同步内存操作（写完立即生效），接 API 后是**异步**，必然出现中间态，UI 必须表达"还没落地" | 新需求 |
+
+后两条尤其要注意：**不能拿「反正 UI 不改」当理由，把数据层设计往后推。**
+
+方法对应关系如下：
 
 | `AppStore` 方法 | 现在的实现 | 接入后 |
 |---|---|---|
@@ -176,12 +198,22 @@ B7（删流水）        → 不修，不可变账本的承诺直接自相矛盾
 A1（负分变加分）    → 不修，模板库的扣分模板会产出错误行为   ✅ 已修
 B8（标题截断）      → 不修，"完整快照"承诺不成立            ✅ 已修
 A5（奖励次数虚高）   → 不修，统计口径污染                  ✅ 已修
-E18（生产可重置数据） → 不修，上线即有数据丢失风险          ✅ 已修
+E18（生产可重置数据）→ 不修，上线即有数据丢失风险            ⚠️ 半修：守卫已加，但 `constructor(){ this.reset() }` 仍无条件执行 → 首启仍是假数据
 E19（文案拼接）     → 不修，无法结构化渲染/多语言           ✅ 已修
 ```
 
-**已完成 9 条（D12、D13、A1、A4、A5、B6、B7、B8、E18、E19 中前端可控部分）**，
-剩余 9 条（A2、A3、C9、C10、C11、E15、E16、E17）依赖 W0 schema 变更。
+**状态改为按 `03` §0 的实测对账表述（2026-10-12）** —— 原文自相矛盾：
+写「已完成 **9** 条」却列了 **10** 条、写「剩余 **9** 条」却只列了 **8** 条，
+并把 **E18、D13 记成了已完成**（实际分别是「半修」与「已改 9/10」）。
+
+| 分类 | 条数 | 明细 |
+|---|---|---|
+| ✅ 已修 | **8** | D12、A1、A4、A5、B6、B7、B8、E19 |
+| ⚠️ 部分完成 | **2** | **E18**（守卫已加，`constructor(){ this.reset() }` 未改 → 首启仍假数据）；**D13**（10 条断言已改 9 条，第 10 条与 E18 绑定） |
+| ❌ 未修 | **8** | A2、A3、C9、C10、C11、E15、E16、E17 |
+
+合计 **18** ✅。未修的 8 条**已不再依赖 schema** —— W0 schema 早已就绪（`deletedAt` / `status` /
+`PointRule.currentVersion` / `AuditLog` 表），剩下的只是前端改造（见 `03` §0.1 与阶段 C1–C4）。
 
 ---
 
