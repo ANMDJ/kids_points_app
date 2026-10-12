@@ -2,6 +2,9 @@
 analyzer:
   errors:
     # 保留可读性相关的建议，但不阻断构建
+    # ⚠ 实测（2026-10-12）：`flutter analyze` 对 info 也**返回 1** —— 所以上面这句只在
+    #   "info 清零"时才成立；否则流水线里的 `flutter analyze && flutter test` 会直接断在第一步。
+    #   当前基线：0 issue（C1 已清零），任何新增 info 都请随手清掉或显式降级。
     unused_element: info
     unused_field: info
   exclude:

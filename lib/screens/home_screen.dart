@@ -50,7 +50,7 @@ class HomeScreen extends StatelessWidget {
                 ),
               ),
             ),
-            Center(child: PointsJar(width: 168)),
+            const Center(child: PointsJar(width: 168)),
             const SizedBox(height: 20),
             SectionTitle(
               title: '今天的习惯',

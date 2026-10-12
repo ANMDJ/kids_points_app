@@ -64,7 +64,7 @@ SeedBundle buildSeedData() {
       condition: '阅读 20 分钟',
       limitText: '每天 1 次',
       icon: Icons.auto_stories_rounded,
-      color: Color(0xFF7BB0E8),
+      color: const Color(0xFF7BB0E8),
     ),
   ];
 
@@ -147,7 +147,7 @@ SeedBundle buildSeedData() {
       time: yesterday2000,
       category: RecordCategory.praise,
       icon: Icons.assignment_rounded,
-      color: Color(0xFF8FBF6A),
+      color: const Color(0xFF8FBF6A),
       source: RecordSource.guardian,
       operatorRole: MemberRole.guardian,
       ruleId: 'rule-3',

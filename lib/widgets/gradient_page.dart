@@ -34,7 +34,7 @@ class GradientPage extends StatelessWidget {
       child: Stack(
         children: <Widget>[
           if (showLeaves)
-            Positioned(
+            const Positioned(
               right: -12,
               bottom: -8,
               child: LeafDecoration(
