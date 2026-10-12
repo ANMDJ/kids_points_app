@@ -55,6 +55,7 @@
 | 13 个域模块签名 + Prisma 7 adapter 接入 | `tsc --noEmit` | ✅ `EXIT=0` |
 | 构建 | `nest build` | ✅ `EXIT=0` |
 | **CI 诚实性探针**（含 D12 回归守卫） | `npm run honesty:probe` | ✅ 4/4，**且经夹具证明能失败** |
+| **缺陷台账对账守卫（2026-10-12 新增）** | `npm run defects:check` | ✅ 18 条声明与代码逐条一致；**7 类篡改台账全部变红** |
 | 模板库（18 条，按 P2 缩减） | `npm run templates:check` | ✅ 7 类坏数据全拦 |
 | 跨语言契约 | `npm run contracts:emit` | ✅ 25 动作 → JSON |
 | 工具代码类型检查（**新增**） | `npm run typecheck:tools` | ✅ 覆盖 `scripts/**`、`prisma/**`、`prisma.config.ts` |
@@ -139,7 +140,7 @@
 
 ```
 npm run ci
-= prisma:validate → typecheck → typecheck:tools → honesty:probe → templates:check → build → contracts:emit
+= prisma:validate → typecheck → typecheck:tools → honesty:probe → defects:check → templates:check → build → contracts:emit
 ```
 
 其中 `honesty:probe` 包含两项**结构性守卫**：
@@ -147,6 +148,12 @@ npm run ci
   **不在任何回调内部**（该探针已用夹具 `__fixtures__/d12-misnested-runner.js`
   证明**能失败** —— 否则它自己就会变成下一处假绿）
 - **ActionType 契约漂移守卫**：`permission-matrix.ts` 与 Prisma `enum ActionType` 必须逐一对应
+
+另有 **缺陷台账对账守卫**（`npm run defects:check` → `tools/defect-status.mjs`，**2026-10-12 新增**）：
+`03` §0 的 18 条状态声明逐条拿到代码里验证 —— 「已修」却找不到修复痕迹、或「未修」其实早已修好，都判红
+（**后者正是那 8 条失实的病**）。**证据只取代码、注释不算**：否则注释里那句「原先 `xxx` 如何错」
+会让两侧同时被骗（本工具首跑就因此误报 2 条：A1 / A5）。已用 **7 份被篡改的台账副本**证明能变红
+（谎称已修 / 谎称未修 / 删行 / 伪造新增行 / 改表头列名），并以「调换列顺序仍正确」证明它**按表头定位列**、不写死列号。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：
 
@@ -202,6 +209,7 @@ npm run ci
 | `docs/`、`contracts/`、双端源码、迁移 SQL、`package-lock.json`、`pubspec.lock` | `node_modules/`、`dist/`、`build/`、`.dart_tool/`、`.swc/`、`*.log`、`*.iml`、`.idea/` |
 | `.env.example`（模板） | **`.env`（含真实口令，绝不入库）** |
 | 手写验证脚本（`run.js` / `h5_*.js`） | 它们的产物：截图 `*.png`、`chrome-profile/`、探针日志 |
+| 仓库级守卫脚本（`tools/defect-status.mjs`） | 一次性补丁脚本与自测副本放 **`.git/_tools/`**（在 `.git` 内 → 天然不入库，不污染工作区） |
 
 ### 行尾策略（`.gitattributes`）
 

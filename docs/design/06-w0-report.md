@@ -255,11 +255,13 @@
 | 17 | `node dist/main.js`（**真实连库启动**） | `[PrismaService] 数据库已连接` + `[Bootstrap] kids_points_api 已启动：http://localhost:3000`；`ERROR` 出现 **0** 次 | 正常运行满 18 秒后被超时终止（137） |
 | 18 | 反向：清空 `DATABASE_URL` 后启动 17 | `ERROR [ExceptionHandler] Error: DATABASE_URL 未设置…` | **1** ← **无静默降级** |
 | 19 | `npx prisma migrate reset --force` | `Database reset successful` + 重新应用迁移 | **0** |
+| 20 | **`npm run defects:check`**（阶段 A5 新增：`tools/defect-status.mjs`） | `ALL PASS （共对账 18 条，台账声明与代码实测一致）` | **0** |
+| 21 | 反向对照：7 份被篡改的台账副本（谎称已修 / 谎称未修 / 删行 / 伪造新增行 / 改表头列名 / 调换列顺序） | 前 5 类全部 `FAILED 1 项`，**调换列顺序仍 `ALL PASS`**（按表头定位列，不写死列号） | **1** ×5 ← 证明 20 不是假绿 |
 
 `npm run ci` 的定义（**顺序即依赖**，`build` 必须先于 `contracts:emit`）：
 
 ```
-prisma:validate → typecheck → typecheck:tools → honesty:probe → templates:check → build → contracts:emit
+prisma:validate → typecheck → typecheck:tools → honesty:probe → defects:check → templates:check → build → contracts:emit
 ```
 
 > **一个必须记录的过程缺陷**：我第一次把 `nest build` 与 `contracts:emit`
@@ -278,7 +280,7 @@ prisma:validate → typecheck → typecheck:tools → honesty:probe → template
 | **L2** | 微信小程序 AppID | `kids_points_mp/project.config.json` → `"appid": "touristappid"`（游客态） | ❌ 不卡 W0 | **需要你**：主体认证（1–7 工作日，**纯等待**） |
 | **L3** | 推送凭据 | 双端**零推送依赖**（`pubspec.yaml`/`package.json` 无任何推送包） | ❌ 不卡 | W6 才需要 |
 | **L4** | 域名 + HTTPS + 备案 | 无域名、无 `.env` 中的 `PUBLIC_BASE_URL` | ❌ 不卡 W0 | **需要你**：备案 7–20 工作日（**纯等待**） |
-| **L5** | CI / 仓库 | **本目录不是 git 仓库**（`git rev-parse` 失败）；无 `.github/workflows` | ⚠️ 半卡 | 我已把检查做成 `npm run ci`；**接 CI 只差 `git init` + 平台选择** |
+| **L5** | CI / 仓库 | ✅ **仓库已建（2026-10-12）**：`main` 分支 + 首次提交 `35c0d62`（234 文件入库），工作区干净；仍无 `.github/workflows` | ❌ 不卡（本地 `npm run ci` 已可跑） | **仅剩平台选择**（GitHub Actions / Gitee Go / 自建） |
 | **L6** | 内容角色（模板撰稿人） | **已按你的 P2 裁定解除** —— 以当前设计内容为模板，不追求 90 条 | ❌ 已解除 | —— |
 
 ### L1 的处置（**已按方案 B 关闭**，2026-10-12）
