@@ -24,39 +24,36 @@ export function buildSeedData(): SeedBundle {
   const yesterday2000 = new Date(y, m, d - 1, 20, 0).getTime()
   const yesterday1910 = new Date(y, m, d - 1, 19, 10).getTime()
 
+  // 修 A2 / A3 / E17：这里只写**结构字段**，checked / limitText / doneText 全部删除。
+  // 「今天完成几次」由 records 派生（types.ts 的 habitView）：
+  // 番茄钟 1/2（还能再打一次）、收书包 1/1（已达上限）、自主阅读 0/1（还没打）。
   const habits: Habit[] = [
     {
       id: 'habit-pomodoro',
       title: '番茄钟写作业',
       points: 1,
       condition: '专注 25 分钟',
-      limitText: '每天最多 2 次',
-      doneText: '今日已完成 1 次',
+      dailyLimit: 2,
       icon: 'book',
-      color: '#7fbf55',
-      checked: true
+      color: '#7fbf55'
     },
     {
       id: 'habit-backpack',
       title: '自己收书包',
       points: 2,
       condition: '睡前整理好',
-      limitText: '每天 1 次',
-      doneText: '已完成',
+      dailyLimit: 1,
       icon: 'backpack',
-      color: '#f5a24b',
-      checked: true
+      color: '#f5a24b'
     },
     {
       id: 'habit-reading',
       title: '自主阅读',
       points: 2,
       condition: '阅读 20 分钟',
-      limitText: '每天 1 次',
-      doneText: '已完成',
+      dailyLimit: 1,
       icon: 'stories',
-      color: '#7bb0e8',
-      checked: false
+      color: '#7bb0e8'
     }
   ]
 
@@ -183,11 +180,18 @@ export function buildSeedData(): SeedBundle {
     }
   ]
 
+  // 修 E15：规则同样只存 condition ＋ dailyLimit（detail 由 ruleDetail 派生）。
+  // ⚠️ 语义变更（**必须留档**）：rule-3 原为「完成并检查 · 每周 1 次」——
+  // 权威 schema（backend/prisma/schema.prisma 的 PointRule/RuleTemplate）只有 dailyLimit，
+  // **没有周期字段**，后端模板库同样把周意涵放在标题/条件里（如「周末大扫除」也是 dailyLimit=1）。
+  // 因此这里改为 dailyLimit: 1，派生出来的展示串是「完成并检查 · 每天 1 次」——
+  // 「每周」不再被表达，不是漏改，是当前模型表达不了（见 docs/design/03 §E15「限制」）。
   const rules: PointRule[] = [
     {
       id: 'rule-1',
       title: '番茄钟写作业',
-      detail: '专注 25 分钟 · 每天最多 2 次',
+      condition: '专注 25 分钟',
+      dailyLimit: 2,
       points: 1,
       icon: 'book',
       color: '#f6c64a'
@@ -195,7 +199,8 @@ export function buildSeedData(): SeedBundle {
     {
       id: 'rule-2',
       title: '自己收书包',
-      detail: '睡前整理好 · 每天 1 次',
+      condition: '睡前整理好',
+      dailyLimit: 1,
       points: 2,
       icon: 'backpack',
       color: '#e9834b'
@@ -203,7 +208,8 @@ export function buildSeedData(): SeedBundle {
     {
       id: 'rule-3',
       title: '围棋课后作业',
-      detail: '完成并检查 · 每周 1 次',
+      condition: '完成并检查',
+      dailyLimit: 1,
       points: 5,
       icon: 'clipboard',
       color: '#7fbf55'
@@ -211,7 +217,8 @@ export function buildSeedData(): SeedBundle {
     {
       id: 'rule-4',
       title: '自主阅读',
-      detail: '阅读 20 分钟 · 每天 1 次',
+      condition: '阅读 20 分钟',
+      dailyLimit: 1,
       points: 2,
       icon: 'stories',
       color: '#7fbf55'

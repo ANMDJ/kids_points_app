@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../data/app_scope.dart';
 import '../../data/app_store.dart';
+import '../../models/habit.dart';
+
 import '../../models/point_rule.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/form_fields.dart';
@@ -40,14 +42,16 @@ class AddRuleSheet extends StatefulWidget {
 
 class _AddRuleSheetState extends State<AddRuleSheet> {
   final TextEditingController titleController = TextEditingController();
-  final TextEditingController detailController = TextEditingController();
+  // 修 E15：表单收集的是**结构字段**（条件 + 每日次数），不再是「细则」自由串
+  final TextEditingController conditionController = TextEditingController();
   bool isGain = true;
   int amount = 2;
+  int dailyLimit = 1;
   int iconIndex = 0;
   @override
   void dispose() {
     titleController.dispose();
-    detailController.dispose();
+    conditionController.dispose();
     super.dispose();
   }
 
@@ -69,13 +73,19 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
               return;
             }
             final IconOption option = ruleIconOptions[iconIndex];
-            widget.store.addRule(
+            final String? message = widget.store.addRule(
               title: title,
-              detail: detailController.text,
+              condition: conditionController.text,
+              dailyLimit: dailyLimit,
               points: isGain ? amount : -amount,
               icon: option.icon,
               color: option.color,
             );
+            if (message != null) {
+              // 修 A2：频次越界被拒绝时必须说明原因（禁止静默失败）
+              widget.messenger.showSnackBar(SnackBar(content: Text(message)));
+              return;
+            }
             Navigator.of(sheetContext).pop();
             widget.messenger.showSnackBar(
               SnackBar(
@@ -94,10 +104,21 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
                 hint: '例如：每天练琴 30 分钟',
               ),
               const SizedBox(height: 14),
-              const FieldLabel('细则（会显示在名称下方）'),
+              const FieldLabel('达成条件（会显示在名称下方）'),
               SoftTextField(
-                controller: detailController,
-                hint: '例如：认真练习不断开 · 每天 1 次',
+                controller: conditionController,
+                hint: '例如：认真练习不断开',
+              ),
+              const SizedBox(height: 14),
+              // 修 A2 / E15：频次是可运算的结构字段，不再让家长手打「每天 1 次」这种展示串
+              const FieldLabel('每天最多几次'),
+              PointsStepper(
+                value: dailyLimit,
+                min: dailyLimitMin,
+                max: dailyLimitMax,
+                suffix: '次/天',
+                onChanged: (int value) =>
+                    setSheetState(() => dailyLimit = value),
               ),
               const SizedBox(height: 16),
               const FieldLabel('积分方向'),
@@ -140,7 +161,7 @@ Future<void> showRuleActionsSheet(BuildContext context, PointRule rule) async {
     builder: (BuildContext sheetContext) {
       return SheetFrame(
         title: rule.title,
-        subtitle: rule.detail,
+        subtitle: ruleDetail(rule),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[

@@ -2,11 +2,12 @@ import { View, Text } from '@tarojs/components'
 
 import AppCard from '../AppCard'
 import Icon from '../Icon'
-import type { Habit } from '../../data/types'
+import type { HabitView } from '../../data/types'
 import './index.scss'
 
 export interface HabitTileProps {
-  habit: Habit
+  /** 派生视图：`checked` / `limitText` / `doneText` 都由结构字段 ＋ 当天流水现算（修 A2 / A3 / E17） */
+  habit: HabitView
   onClick: () => void
   onLongPress?: () => void
 }

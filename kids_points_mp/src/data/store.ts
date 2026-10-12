@@ -6,6 +6,7 @@ import type {
   ActorContext,
   ChildProfile,
   Habit,
+  HabitView,
   IconOption,
   PointRecord,
   PointRule,
@@ -13,7 +14,15 @@ import type {
   RecordSource,
   Wish
 } from './types'
-import { recordSubtitle } from './types'
+import {
+  checkedCountToday,
+  dailyLimitMax,
+  dailyLimitMin,
+  habitView,
+  isDailyLimitValid,
+  isSameDay,
+  recordSubtitle
+} from './types'
 
 /**
  * 演示数据的**准入判据**（修 E18）。
@@ -131,6 +140,22 @@ export class AppStore {
     return this.records.filter((record) => record.category === category)
   }
 
+  /**
+   * 首页用的**派生视图**列表 —— 修 A2 / A3 / E17。
+   *
+   * 页面不再读任何“状态字段”：`checked` / `limitText` / `doneText` 都在这里
+   * 由 `dailyLimit` ＋ 当天流水现算。视图是**快照对象**，不回写 store，
+   * 因此也不存在“谁改了 checked 导致状态与流水不一致”的可能。
+   */
+  habitViews(): HabitView[] {
+    return this.habits.map((habit) => habitView(habit, this.records))
+  }
+
+  /** 单个习惯的派生视图（用于“刚打完卡”的单点查询）。 */
+  habitViewOf(habit: Habit): HabitView {
+    return habitView(habit, this.records)
+  }
+
   canRedeem(wish: Wish): boolean {
     return !wish.redeemed && this.points >= wish.cost
   }
@@ -152,27 +177,34 @@ export class AppStore {
     habit: Habit,
     actor: ActorContext = { role: 'guardian' }
   ): string | null {
-    if (habit.checked) {
-      return `“${habit.title}”今天已经完成过啦，明天继续加油～`
+    // 修 A3：上限判定必须来自**当天流水**，不能是布尔量 `checked` ——
+    // 否则“每天最多 2 次”的规则打完 1 次就再也打不了第 2 次（承诺的次数永远不可达）。
+    // 习惯以 store 里的**当前**定义为准（视图是快照，不能信任调用方传进来的副本）。
+    const live = this.habits.find((item) => item.id === habit.id)
+    if (!live) {
+      return `“${habit.title}”已经不在今天的习惯里了`
+    }
+    const done = checkedCountToday(this.records, live.id)
+    if (done >= live.dailyLimit) {
+      return `“${live.title}”今天已经完成 ${done} 次啦，明天继续加油～`
     }
     const source: RecordSource = actor.role === 'child' ? 'child_self' : 'guardian'
-    habit.checked = true
-    this.points += habit.points
+    this.points += live.points
     this.profile.goodHabitCount += 1
     const time = Date.now()
     this.records.unshift({
       id: this.newId('rec'),
-      title: habit.title,
+      title: live.title,
       subtitle: recordSubtitle({ time, source }),
-      points: habit.points,
+      points: live.points,
       time,
       category: 'praise',
-      icon: habit.icon,
-      color: habit.color,
+      icon: live.icon,
+      color: live.color,
       source,
       operatorRole: actor.role,
       note: '',
-      habitId: habit.id,
+      habitId: live.id,
       ruleId: null,
       wishId: null,
       reversesRecordId: null,
@@ -199,7 +231,9 @@ export class AppStore {
     habit: Habit,
     actor: ActorContext = { role: 'guardian' }
   ): string | null {
-    if (!habit.checked) {
+    // 修 A3：可撤销性同样按**当天流水**判定（`checked` 已不是可写字段）；
+    // 真正决定“撤销哪一条”的仍是下面按 habitId 定位的 target。
+    if (checkedCountToday(this.records, habit.id) === 0) {
       return `“${habit.title}”今天还没有打卡，不用撤销`
     }
     const reversedIds = new Set(
@@ -213,7 +247,7 @@ export class AppStore {
         record.category === 'praise' &&
         record.source !== 'correction' &&
         !reversedIds.has(record.id) &&
-        this.isToday(record.time)
+        isSameDay(record.time, Date.now())
     )
     if (!target) {
       return `没有找到“${habit.title}”今天的打卡记录`
@@ -222,7 +256,8 @@ export class AppStore {
     if (target.points > this.points) {
       return `积分不足，无法撤销（需扣回 ${target.points} 分，当前只有 ${this.points} 分）`
     }
-    habit.checked = false
+    // 修 A3：这里不再写 `habit.checked = false` —— 它是派生值，
+    // 撤销通过「新增一条指向原记录的冲正记录」表达（见 types.ts 的 checkedCountToday）
     this.points -= target.points
     if (this.profile.goodHabitCount > 0) this.profile.goodHabitCount -= 1
     const time = Date.now()
@@ -366,22 +401,35 @@ export class AppStore {
 
   // --------------------------------------------------------------- 积分规则
 
+  /**
+   * 新增规则。成功返回 null，失败返回提示文案。
+   *
+   * **修 E15 / A2**：参数由 `detail` 自由串改为 `condition` ＋ `dailyLimit` 结构字段
+   * （展示串交给 [ruleDetail] 派生）；`dailyLimit` 越界时**拒绝**而不是夹到边界 ——
+   * 静默改写会让家长以为约定已按他的意思生效。
+   */
   addRule(
     title: string,
-    detail: string,
+    condition: string,
+    dailyLimit: number,
     points: number,
     icon: IconOption['icon'],
     color: string
-  ): void {
+  ): string | null {
+    if (!isDailyLimitValid(dailyLimit)) {
+      return `每天次数只能是 ${dailyLimitMin}–${dailyLimitMax} 之间的整数`
+    }
     this.rules.unshift({
       id: this.newId('rule'),
       title: title.trim(),
-      detail: detail.trim() === '' ? '家长约定' : detail.trim(),
+      condition: condition.trim() === '' ? '家长约定' : condition.trim(),
+      dailyLimit,
       points,
       icon,
       color
     })
     this.persist()
+    return null
   }
 
   removeRule(rule: PointRule): void {
@@ -404,17 +452,16 @@ export class AppStore {
     if (rule.points < 0) {
       return `“${rule.title}”是扣分规则，不能加入今天的习惯`
     }
-    const parts = rule.detail.split(' · ')
+    // 修 E15：条件与频次**直取结构字段** —— 原先这里 `rule.detail.split(' · ')`
+    // 反解析：多一段就丢一段、没分隔符就静默落到默认值「每天 1 次」。
     this.habits.push({
       id: this.newId('habit'),
       title: rule.title,
       points: rule.points,
-      condition: parts.length > 0 ? parts[0] : rule.detail,
-      limitText: parts.length > 1 ? parts[1] : '每天 1 次',
-      doneText: '已完成',
+      condition: rule.condition,
+      dailyLimit: rule.dailyLimit,
       icon: rule.icon,
-      color: rule.color,
-      checked: false
+      color: rule.color
     })
     this.persist()
     return null
@@ -436,15 +483,8 @@ export class AppStore {
     return `${prefix}-${Date.now()}-${this.seq}`
   }
 
-  private isToday(time: number): boolean {
-    const date = new Date(time)
-    const now = new Date()
-    return (
-      date.getFullYear() === now.getFullYear() &&
-      date.getMonth() === now.getMonth() &&
-      date.getDate() === now.getDate()
-    )
-  }
+  // （原先这里有个 private isToday()：现统一用 types.ts 的 isSameDay()，
+  //   与 Flutter 侧同一个判据，避免“两端各自实现、各自漂移”）
 
 }
 

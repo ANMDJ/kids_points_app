@@ -13,7 +13,8 @@ class HabitTile extends StatelessWidget {
     this.onLongPress,
   });
 
-  final Habit habit;
+  /// 派生视图：checked / limitText / doneText 都由结构字段 ＋ 当天流水现算（修 A2 / A3 / E17）
+  final HabitView habit;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 

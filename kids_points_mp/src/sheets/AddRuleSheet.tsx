@@ -11,6 +11,7 @@ import PointsStepper from '../components/PointsStepper'
 import SegmentedToggle from '../components/SegmentedToggle'
 import SheetFrame from '../components/SheetFrame'
 import { store } from '../data/store'
+import { dailyLimitMax, dailyLimitMin } from '../data/types'
 import { toast } from '../utils/toast'
 import './sheets.scss'
 
@@ -22,7 +23,9 @@ export interface AddRuleSheetProps {
 /** “新增规则”：约定做到什么、得几分（也可约定扣分）。 */
 export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
   const [title, setTitle] = useState('')
-  const [detail, setDetail] = useState('')
+  // 修 E15：表单收集的是**结构字段**（条件 + 每日次数），不再是「细则」自由串
+  const [condition, setCondition] = useState('')
+  const [dailyLimit, setDailyLimit] = useState(1)
   const [isGain, setIsGain] = useState(true)
   const [amount, setAmount] = useState(2)
   const [iconIndex, setIconIndex] = useState(0)
@@ -34,15 +37,23 @@ export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
       return
     }
     const option = ruleIconOptions[iconIndex]
-    store.addRule(
+    const message = store.addRule(
       trimmed,
-      detail,
+      condition,
+      dailyLimit,
       isGain ? amount : -amount,
       option.icon,
       option.color
     )
+    if (message) {
+      // 修 A2：频次越界被拒绝时必须说明原因（禁止静默失败）
+      toast(message)
+      return
+    }
     onClose()
-    toast(`已新增规则：${trimmed}（${isGain ? '+' : '-'}${amount} 积分）`)
+    toast(
+      `已新增规则：${trimmed}（每天 ${dailyLimit} 次 · ${isGain ? '+' : '-'}${amount} 积分）`
+    )
   }
 
   return (
@@ -62,11 +73,21 @@ export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
         hint='例如：每天练琴 30 分钟'
       />
       <View className='kp-sheet-gap-md' />
-      <FieldLabel text='细则（会显示在名称下方）' />
+      <FieldLabel text='达成条件（会显示在名称下方）' />
       <SoftTextField
-        value={detail}
-        onChange={setDetail}
-        hint='例如：认真练习不断开 · 每天 1 次'
+        value={condition}
+        onChange={setCondition}
+        hint='例如：认真练习不断开'
+      />
+      <View className='kp-sheet-gap-md' />
+      {/* 修 A2 / E15：频次是可运算的结构字段，不再让家长手打「每天 1 次」这种展示串 */}
+      <FieldLabel text='每天最多几次' />
+      <PointsStepper
+        value={dailyLimit}
+        min={dailyLimitMin}
+        max={dailyLimitMax}
+        suffix='次/天'
+        onChanged={setDailyLimit}
       />
       <View className='kp-sheet-gap-lg' />
       <FieldLabel text='积分方向' />

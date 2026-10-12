@@ -32,7 +32,16 @@ const {
   clockText,
   recordCategoryLabels,
   isGain,
-  recordSubtitle
+  recordSubtitle,
+  // ── 阶段 C2：结构字段化 + 展示串降级为派生（修 E15 / E17 / A2 / A3）──
+  checkedCountToday,
+  doneTextOf,
+  isDailyLimitValid,
+  limitTextOf,
+  habitView,
+  ruleDetail,
+  dailyLimitMin,
+  dailyLimitMax
 } = require('./dist/data/types.js')
 const { buildSeedData } = require('./dist/data/seed.js')
 const { AppStore, demoResetAllowed } = require('./dist/data/store.js')
@@ -104,9 +113,28 @@ check('seed: 124 积分 / 324 好习惯 / 4 次奖励', () => {
   assert.strictEqual(seed.wishes.length, 4)
   assert.strictEqual(seed.records.length, 4)
   assert.strictEqual(seed.rules.length, 4)
-  assert.strictEqual(seed.habits[0].doneText, '今日已完成 1 次')
-  assert.strictEqual(seed.habits[1].doneText, '已完成')
-  assert.strictEqual(seed.habits[2].checked, false)
+  // ── 修 A2 / E17：习惯只存**结构字段**，checked / limitText / doneText 一律派生 ──
+  //    seed 里再写死「今日已完成 1 次」就是 E17 本身（展示串被外部写入、必然与真实状态脱节）。
+  assert.strictEqual(seed.habits[0].dailyLimit, 2, '番茄钟承诺每天 2 次')
+  assert.strictEqual(seed.habits[1].dailyLimit, 1)
+  assert.strictEqual(seed.habits[2].dailyLimit, 1)
+  for (const habit of seed.habits) {
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(habit, 'checked'),
+      false,
+      'checked 必须是派生值，不能是被写入的字段（修 A3）'
+    )
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(habit, 'limitText'),
+      false,
+      'limitText 必须是派生值（修 E17）'
+    )
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(habit, 'doneText'),
+      false,
+      'doneText 必须是派生值（修 E17）'
+    )
+  }
   // 修 A4：subtitle 由结构化字段派生，孩子自助完成的流水**不再谎称“家长记录”**
   assert.strictEqual(seed.records[0].source, 'child_self')
   assert.strictEqual(seed.records[0].subtitle, '19:30 · 自己完成')
@@ -116,7 +144,16 @@ check('seed: 124 积分 / 324 好习惯 / 4 次奖励', () => {
   // 修 B8：完整标题快照
   assert.strictEqual(seed.records[3].title, '兑换：小饼干')
   assert.strictEqual(seed.records[3].wishId, null)
-  assert.strictEqual(seed.rules[0].detail, '专注 25 分钟 · 每天最多 2 次')
+  // ── 修 E15：规则只存 condition + dailyLimit，detail 是派生串 ──
+  for (const rule of seed.rules) {
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(rule, 'detail'),
+      false,
+      'detail 必须是派生值，不能是自由字符串字段（修 E15）'
+    )
+  }
+  assert.strictEqual(seed.rules[0].condition, '专注 25 分钟')
+  assert.strictEqual(ruleDetail(seed.rules[0]), '专注 25 分钟 · 每天最多 2 次')
   assert.strictEqual(dayLabel(seed.records[0].time), '今天')
   assert.strictEqual(dayLabel(seed.records[2].time), '昨天')
 })
@@ -148,12 +185,16 @@ check('checkIn / undoCheckIn', () => {
   assert.ok(store.records[0].subtitle.endsWith('· 家长记录'))
   assert.strictEqual(dayLabel(store.records[0].time), '今天')
   const again = store.checkIn(reading)
-  assert.strictEqual(again, '“自主阅读”今天已经完成过啦，明天继续加油～')
+  assert.strictEqual(again, '“自主阅读”今天已经完成 1 次啦，明天继续加油～')
   assert.strictEqual(store.points, 126, '重复打卡不应加分')
   assert.strictEqual(store.records.length, 5)
   // 修 B7：撤销**保留**原记录并新增一条冲正记录 → 条数 +1 而非 −1
   assert.strictEqual(store.undoCheckIn(reading), null)
-  assert.strictEqual(reading.checked, false)
+  assert.strictEqual(
+    habitView(reading, store.records).checked,
+    false,
+    '撤销后派生状态必须回到未打卡（checked 不再是可写字段）'
+  )
   assert.strictEqual(store.points, 124)
   assert.strictEqual(store.profile.goodHabitCount, 324)
   assert.strictEqual(store.records.length, 6, '撤销打卡应写入冲正记录，原记录保留')
@@ -271,29 +312,45 @@ check('addWish / removeWish', () => {
   assert.strictEqual(store.wishes.indexOf(added), -1)
 })
 
-check('addRule / removeRule：空详情兜底', () => {
+check('addRule / removeRule：空条件兜底 + 频次必须是 1–5 整数（修 A2 / E15）', () => {
   const store = seededStore()
-  store.addRule(' 收拾玩具 ', '   ', 3, 'star', '#f6c64a')
+  assert.strictEqual(store.addRule(' 收拾玩具 ', '   ', 2, 3, 'star', '#f6c64a'), null)
   assert.strictEqual(store.rules.length, 5)
   assert.strictEqual(store.rules[0].title, '收拾玩具')
-  assert.strictEqual(store.rules[0].detail, '家长约定')
+  assert.strictEqual(store.rules[0].condition, '家长约定', '空条件兜底为「家长约定」')
+  assert.strictEqual(store.rules[0].dailyLimit, 2)
   assert.strictEqual(store.rules[0].points, 3)
+  assert.strictEqual(ruleDetail(store.rules[0]), '家长约定 · 每天最多 2 次')
+
+  // 频次越界必须被**拒绝**（而不是悄悄夹到边界）——静默改写会让家长以为约定已生效
+  for (const bad of [0, 6, -1, 1.5, Number.NaN]) {
+    const message = store.addRule('越界频次', '条件', bad, 1, 'star', '#f6c64a')
+    assert.ok(
+      typeof message === 'string' && message.length > 0,
+      'dailyLimit=' + bad + ' 应被拒绝'
+    )
+  }
+  assert.strictEqual(store.rules.length, 5, '被拒绝时不写规则')
+  assert.strictEqual(isDailyLimitValid(dailyLimitMin), true)
+  assert.strictEqual(isDailyLimitValid(dailyLimitMax), true)
+  assert.strictEqual(isDailyLimitValid(dailyLimitMax + 1), false)
+
   const added = store.rules[0]
   store.removeRule(added)
   assert.strictEqual(store.rules.length, 4)
 })
 
-check('addHabitFromRule：拆分详情 + 去重', () => {
+check('addHabitFromRule：结构字段直传 + 去重（修 E15：不再 split 反解析）', () => {
   const store = seededStore()
-  // rules[2] = 围棋课后作业 / 完成并检查 · 每周 1 次（首页还没有同名习惯）
+  // rules[2] = 围棋课后作业（condition='完成并检查'，dailyLimit=1；首页还没有同名习惯）
   store.addHabitFromRule(store.rules[2])
   assert.strictEqual(store.habits.length, 4)
   const added = store.habits[3]
   assert.strictEqual(added.title, '围棋课后作业')
   assert.strictEqual(added.points, 5)
-  assert.strictEqual(added.condition, '完成并检查')
-  assert.strictEqual(added.limitText, '每周 1 次')
-  assert.strictEqual(added.checked, false)
+  assert.strictEqual(added.condition, '完成并检查', '条件应原样取自规则的结构字段')
+  assert.strictEqual(added.dailyLimit, 1, '频次应原样取自规则的结构字段')
+  assert.strictEqual(habitView(added, store.records).checked, false)
   store.addHabitFromRule(store.rules[2])
   assert.strictEqual(store.habits.length, 4, '同名习惯不应重复添加')
 
@@ -301,15 +358,15 @@ check('addHabitFromRule：拆分详情 + 去重', () => {
   store.addHabitFromRule(store.rules[1])
   assert.strictEqual(store.habits.length, 4, '同名习惯不应重复添加')
 
-  store.addRule('倒垃圾', '', 2, 'star', '#f6c64a')
+  store.addRule('倒垃圾', '', 1, 2, 'star', '#f6c64a')
   store.addHabitFromRule(store.rules[0])
   const noDetail = store.habits[store.habits.length - 1]
   assert.strictEqual(noDetail.condition, '家长约定')
-  assert.strictEqual(noDetail.limitText, '每天 1 次')
+  assert.strictEqual(noDetail.dailyLimit, 1)
 
   // 修 A1：扣分规则**不得**生成可打卡习惯
   // （原先 Math.abs 会把「打人 −3 分」静默变成「打人 +3 分」，属产品性质级错误）
-  store.addRule('负分规则', '-3 分 · 每天 1 次', -3, 'star', '#f6c64a')
+  store.addRule('负分规则', '打人', 1, -3, 'star', '#f6c64a')
   const negativeRule = store.rules[0]
   assert.ok(negativeRule.points < 0)
   const habitsBefore = store.habits.length
@@ -333,7 +390,7 @@ check('renameChild / resetToSeed', () => {
   assert.strictEqual(store.wishes.length, 4)
   assert.strictEqual(store.records.length, 4)
   assert.strictEqual(store.rules.length, 4)
-  assert.strictEqual(store.habits[2].checked, false)
+  assert.strictEqual(habitView(store.habits[2], store.records).checked, false)
 })
 
 check('subscribe：变更会通知订阅者', () => {
@@ -403,6 +460,88 @@ check('A4 真实操作人 / I2 余额链自洽 / I6 冲正关系', () => {
     store.points,
     '最新一条的 balanceAfter 必须等于当前余额'
   )
+})
+
+// ── 阶段 C2：E15 ＋ E17 ＋ A2 ＋ A3（结构字段化，展示串降级为派生）────────
+check('A2/A3：「每天最多 2 次」真的可以打卡 2 次，第 3 次才被拦', () => {
+  const store = seededStore()
+  const pomodoro = store.habits[0]
+
+  // 演示流水中番茄钟今天已有 1 条 → 派生态是 1/2（不是「已完成」）
+  const before = habitView(pomodoro, store.records)
+  assert.strictEqual(before.checkedCountToday, 1)
+  assert.strictEqual(before.limitText, '每天最多 2 次')
+  assert.strictEqual(before.doneText, '今日已完成 1 次')
+  assert.strictEqual(before.checked, false, '1 < 2：还没到上限，必须还能打卡（A3 的核心）')
+
+  // 第 2 次打卡必须成功 —— 修前 checked=true 会在这里拦下，规则承诺的 2 次永远不可达
+  assert.strictEqual(store.checkIn(pomodoro), null)
+  const after = habitView(pomodoro, store.records)
+  assert.strictEqual(after.checkedCountToday, 2)
+  assert.strictEqual(after.doneText, '今日已完成 2 次')
+  assert.strictEqual(after.checked, true)
+  assert.strictEqual(store.points, 125)
+
+  // 第 3 次才该被拦
+  assert.strictEqual(
+    store.checkIn(pomodoro),
+    '“番茄钟写作业”今天已经完成 2 次啦，明天继续加油～'
+  )
+  assert.strictEqual(store.records.length, 5, '被拦时不写流水')
+
+  // 每天 1 次的习惯：1 次即到上限
+  const backpack = habitView(store.habits[1], store.records)
+  assert.strictEqual(backpack.checked, true)
+  assert.strictEqual(backpack.doneText, '今日已完成 1 次')
+})
+
+check('A3：已打卡次数由当天流水派生，被冲正的原记录不再计入', () => {
+  const store = seededStore()
+  const reading = store.habits[2]
+  const empty = habitView(reading, store.records)
+  assert.strictEqual(empty.checkedCountToday, 0)
+  assert.strictEqual(empty.doneText, '今日已完成 0 次')
+  assert.strictEqual(empty.limitText, '每天 1 次')
+
+  assert.strictEqual(store.checkIn(reading), null)
+  assert.strictEqual(habitView(reading, store.records).checkedCountToday, 1)
+
+  // 撤销写入冲正记录（原记录保留）→ 派生的「今天完成几次」必须回到 0。
+  // 03 的 A3 公式只排除 correction，会漏掉「被冲正的原记录」，撤销后会卡在「已打卡」。
+  assert.strictEqual(store.undoCheckIn(reading), null)
+  const undone = habitView(reading, store.records)
+  assert.strictEqual(undone.checkedCountToday, 0, '被冲正的原记录不得再计入')
+  assert.strictEqual(undone.checked, false)
+  assert.strictEqual(store.checkIn(reading), null, '撤销后应当可以重新打卡')
+
+  // 昨天的打卡不算今天（seed 里 rec-3 / rec-4 属于昨天，且不回指任何习惯）
+  assert.strictEqual(checkedCountToday(store.records, 'habit-backpack'), 1)
+})
+
+check('E15/E17：展示串一律由结构字段派生', () => {
+  assert.strictEqual(limitTextOf(1), '每天 1 次')
+  assert.strictEqual(limitTextOf(2), '每天最多 2 次')
+  assert.strictEqual(limitTextOf(5), '每天最多 5 次')
+  assert.strictEqual(doneTextOf(0), '今日已完成 0 次')
+  assert.strictEqual(doneTextOf(3), '今日已完成 3 次')
+
+  const rule = {
+    id: 'r-x',
+    title: '练琴',
+    condition: '连续练习 30 分钟',
+    dailyLimit: 2,
+    points: 4,
+    icon: 'music',
+    color: '#f5a24b'
+  }
+  assert.strictEqual(ruleDetail(rule), '连续练习 30 分钟 · 每天最多 2 次')
+
+  // E15 的原始故障：'连续 3 天 · 每天 1 次 · 需要家长确认' 被 split 后丢掉第三段。
+  // 现在没有 free-text 入口 —— detail 由结构字段拼出，结构信息无处可丢。
+  const store = seededStore()
+  assert.strictEqual(store.addRule('练琴', '连续 3 天', 1, 4, 'music', '#f5a24b'), null)
+  assert.strictEqual(store.rules[0].condition, '连续 3 天', '条件原样保留，不被 split 切碎')
+  assert.strictEqual(ruleDetail(store.rules[0]), '连续 3 天 · 每天 1 次')
 })
 
 // ── E18 第二半：首启空态（修前必然失败）────────────────────────────────

@@ -20,8 +20,11 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final AppStore store = AppScope.of(context);
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    // 修 A2 / A3 / E17：首页消费**派生视图**（checked / limitText / doneText 都由
+    // 结构字段 ＋ 当天流水现算），习惯上那些状态字段已不复存在。
+    final List<HabitView> habits = store.habitViews;
     final int doneCount =
-        store.habits.where((Habit habit) => habit.checked).length;
+        habits.where((HabitView habit) => habit.checked).length;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -55,18 +58,19 @@ class HomeScreen extends StatelessWidget {
             SectionTitle(
               title: '今天的习惯',
               trailing: Text(
-                '已完成 $doneCount/${store.habits.length}',
+                '已完成 $doneCount/${habits.length}',
                 style: const TextStyle(
                   fontSize: 11.5,
                   color: AppColors.textSecondary,
                 ),
               ),
             ),
-            ...store.habits.map(
-              (Habit habit) => HabitTile(
+            ...habits.map(
+              (HabitView habit) => HabitTile(
                 habit: habit,
                 onTap: () {
-                  final String? message = store.checkIn(habit);
+                  // 视图是快照，取回习惯本身交给 store（Dart 没有 TS 的结构类型兼容）
+                  final String? message = store.checkIn(habit.habit);
                   messenger.hideCurrentSnackBar();
                   messenger.showSnackBar(
                     SnackBar(
@@ -78,7 +82,7 @@ class HomeScreen extends StatelessWidget {
                 },
                 onLongPress: () {
                   // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
-                  final String? message = store.undoCheckIn(habit);
+                  final String? message = store.undoCheckIn(habit.habit);
                   messenger.hideCurrentSnackBar();
                   messenger.showSnackBar(
                     SnackBar(

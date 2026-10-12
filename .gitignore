@@ -33,6 +33,12 @@ ios/Flutter/Flutter.podspec
 # 日志（探针/构建/安装）
 *.log
 
+# 一次性脚手架（补丁脚本 / 闸门日志 / 守门人证伪自测的副本）—— 只在本机活着，不入库。
+# 前身是 `.git/_tools/`（写进 git 内部目录、越界且丢失不可追）；现改为仓库内可检索、
+# 但用**根锚定**模式关在版本库外（注意开头的 `/`：gitignore 模式不区分层级，
+# 少写这个斜杠会连 `kids_points_mp/**/tools/_scratch/` 一起命中）。
+/tools/_scratch/
+
 # ⚠️ 不要在这里写 `.tmp_test/`：gitignore 模式不区分层级，该写法会命中
 # kids_points_mp/.tmp_test/，把里面的手写验证脚本一起静默忽略。
 # 详见 kids_points_mp/.gitignore 的说明。

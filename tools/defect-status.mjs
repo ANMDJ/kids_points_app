@@ -35,7 +35,14 @@ const F_STORE = `${FL}/data/app_store.dart`
 const F_HABIT = `${FL}/models/habit.dart`
 const F_RECORD = `${FL}/models/point_record.dart`
 const T_RUNNER = 'kids_points_mp/.tmp_test/run.js'
+const T_SEED = `${MP}/seed.ts`
+const T_HOME = 'kids_points_mp/src/pages/home/index.tsx'
+const T_RULE_SHEET = 'kids_points_mp/src/sheets/AddRuleSheet.tsx'
 const F_TESTS = 'test/app_test.dart'
+const F_RULE = `${FL}/models/point_rule.dart`
+const F_SEED = `${FL}/data/seed_data.dart`
+const F_HOME = `${FL}/screens/home_screen.dart`
+const F_RULE_SHEET = `${FL}/screens/sheets/add_rule_sheet.dart`
 const D12_FIXTURE = 'backend/scripts/__fixtures__/d12-misnested-runner.js'
 
 const DOC = process.env.DEFECT_DOC_PATH
@@ -156,14 +163,35 @@ const DEFECTS = [
     A.has(F_STORE, /rule\.points < 0/, '缺少「负分规则 → 拒绝」判定'),
     A.lack(F_STORE, /points:\s*rule\.points\.abs\(\)/, '又在 .abs() 抹平负分（回退）'),
   ] },
-  { id: 'A2', status: 'unfixed', what: 'Habit 无每日上限字段（limitText 是自由文本）', assertions: () => [
-    A.has(T_TYPES, /limitText: string/, 'limitText 已不是可写字段 → 缺陷可能已修，台账应更新'),
-    A.lack(T_TYPES, /dailyLimit/, '已出现 dailyLimit 结构字段 → 缺陷可能已修，台账应更新'),
-    A.has(F_HABIT, /final String limitText;/, 'limitText 已不是可写字段'),
+  { id: 'A2', status: 'fixed', what: 'Habit 曾无每日上限字段（频次是自由文本）', assertions: () => [
+    A.has(T_TYPES, /dailyLimit: number/, '缺少每日上限结构字段'),
+    A.has(F_HABIT, /final int dailyLimit;/, '缺少每日上限结构字段'),
+    A.has(T_TYPES, /export function limitTextOf\(/, '频次未降级为派生函数'),
+    A.has(F_HABIT, /String limitTextOf\(int dailyLimit\)/, '频次未降级为派生函数'),
+    A.lack(T_SEED, /limitText:/, 'seed 仍在手写频次展示串（回退）'),
+    A.lack(F_SEED, /limitText:/, 'seed 仍在手写频次展示串（回退）'),
+    A.has(T_STORE, /isDailyLimitValid\(dailyLimit\)/, '新增规则未校验频次边界'),
+    A.has(F_STORE, /isDailyLimitValid\(dailyLimit\)/, '新增规则未校验频次边界'),
+    A.has(T_RUNNER, /真的可以打卡 2 次/, 'run.js 缺少「承诺几次就能打几次」回归用例'),
+    A.has(F_TESTS, /真的可以打卡 2 次，第 3 次才被拦/, 'app_test.dart 缺少「承诺几次就能打几次」回归用例'),
+    A.has(F_TESTS, /频次越界被拒绝/, 'app_test.dart 缺少频次边界回归用例'),
   ] },
-  { id: 'A3', status: 'unfixed', what: 'checked: boolean 与「每天最多 N 次」矛盾', assertions: () => [
-    A.has(T_TYPES, /checked: boolean/, 'checked 已不是可写字段 → 缺陷可能已修，台账应更新'),
-    A.has(F_HABIT, /bool checked;/, 'checked 已不是可写字段'),
+  { id: 'A3', status: 'fixed', what: 'checked: boolean 与「每天最多 N 次」矛盾', assertions: () => [
+    A.has(T_TYPES, /export function checkedCountToday\(/, '缺少「当天完成次数」派生函数'),
+    A.has(F_HABIT, /int checkedCountToday\(/, '缺少「当天完成次数」派生函数'),
+    A.has(T_STORE, /checkedCountToday\(this\.records, live\.id\)/, '打卡上限判定未改走当天流水'),
+    A.has(F_STORE, /checkedCountToday\(records, live\.id\)/, '打卡上限判定未改走当天流水'),
+    A.has(F_HABIT, /bool get checked =>/, 'Dart 侧 checked 未降级为派生 getter'),
+    // 反回退：checked 已不是可写字段，谁再写它就是把这个缺陷种回去
+    A.countIs(T_STORE, /\.checked\s*=/g, 0, '仍在写 checked 字段（回退）'),
+    A.countIs(F_STORE, /\.checked\s*=/g, 0, '仍在写 checked 字段（回退）'),
+    A.countIs(F_HABIT, /\.checked\s*=/g, 0, '仍在写 checked 字段（回退）'),
+    // `03` §A3 公式的漏洞：只排除 correction 不够，**已被冲正的原记录**也必须排除，
+    // 否则撤销打卡后界面仍显示「已打卡」（撤销看起来没生效）
+    A.has(T_TYPES, /reversedIds\.has\(record\.id\)/, '未排除已被冲正的原记录（撤销后仍会算作已完成）'),
+    A.has(F_HABIT, /reversedIds\.contains\(record\.id\)/, '未排除已被冲正的原记录（撤销后仍会算作已完成）'),
+    A.has(T_RUNNER, /被冲正的原记录不再计入/, 'run.js 缺少「冲正排除」回归用例'),
+    A.has(F_TESTS, /被冲正的原记录不再计入/, 'app_test.dart 缺少「冲正排除」回归用例'),
   ] },
   { id: 'A4', status: 'fixed', what: '流水硬编码「家长记录」，无操作人', assertions: () => [
     A.derivedAll(T_STORE, /subtitle:/g, /subtitle:\s*recordSubtitle\(/g, '存在非 recordSubtitle() 派生的 subtitle'),
@@ -218,17 +246,40 @@ const DEFECTS = [
       '又出现「首启即 124 分」的固化断言（回退）'
     ),
   ] },
-  { id: 'E15', status: 'unfixed', what: 'detail 自由串靠 split 反解析', assertions: () => [
-    A.has(T_STORE, /rule\.detail\.split\(' · '\)/, '已不再 split 解析 → 缺陷可能已修，台账应更新'),
-    A.has(F_STORE, /rule\.detail\.split\(' · '\)/, '已不再 split 解析'),
+  { id: 'E15', status: 'fixed', what: '规则 detail 自由串靠 split 反解析', assertions: () => [
+    A.has(T_TYPES, /export function ruleDetail\(/, '缺少由结构字段拼出的 ruleDetail()'),
+    A.has(F_RULE, /String ruleDetail\(PointRule rule\)/, '缺少由结构字段拼出的 ruleDetail()'),
+    A.lack(T_TYPES, /^\s*detail: string/m, '仍存在可写的 detail 自由字段（回退）'),
+    A.lack(F_RULE, /final String detail;/, '仍存在可写的 detail 自由字段（回退）'),
+    A.lack(T_STORE, /\.split\(' · '\)/, '又在靠 split 反解析展示串（回退）'),
+    A.lack(F_STORE, /\.split\(' · '\)/, '又在靠 split 反解析展示串（回退）'),
+    A.has(T_STORE, /condition: rule\.condition/, '规则→习惯未直取结构字段（条件）'),
+    A.has(T_STORE, /dailyLimit: rule\.dailyLimit/, '规则→习惯未直取结构字段（频次）'),
+    A.has(F_STORE, /condition: rule\.condition/, '规则→习惯未直取结构字段（条件）'),
+    A.has(F_STORE, /dailyLimit: rule\.dailyLimit/, '规则→习惯未直取结构字段（频次）'),
+    A.has(T_RULE_SHEET, /store\.addRule\(\s*trimmed,\s*condition,\s*dailyLimit,/, '新增规则表单未收集结构字段'),
+    A.has(F_RULE_SHEET, /condition: conditionController\.text,/, '新增规则表单未收集结构字段'),
+    A.has(T_RUNNER, /展示串一律由结构字段派生/, 'run.js 缺少 E15 回归用例'),
+    A.has(F_TESTS, /结构字段是唯一真相/, 'app_test.dart 缺少 E15 回归用例'),
   ] },
   { id: 'E16', status: 'unfixed', what: 'backgroundIndex 用数组下标', assertions: () => [
     A.has(T_STORE, /wishes\.length % 4/, '已不再用数组下标配色 → 缺陷可能已修，台账应更新'),
     A.has(F_STORE, /wishes\.length % 4/, '已不再用数组下标配色'),
   ] },
-  { id: 'E17', status: 'unfixed', what: 'doneText/limitText 被外部写入', assertions: () => [
-    A.has(T_TYPES, /doneText: string/, 'doneText 已不是可写字段 → 缺陷可能已修，台账应更新'),
-    A.has(F_HABIT, /final String doneText;/, 'doneText 已不是可写字段'),
+  { id: 'E17', status: 'fixed', what: 'doneText / limitText 曾被外部写入（已降级为派生值）', assertions: () => [
+    A.has(T_TYPES, /export function doneTextOf\(/, '缺少 doneTextOf() 派生函数'),
+    A.has(F_HABIT, /String doneTextOf\(/, '缺少 doneTextOf() 派生函数'),
+    A.has(T_TYPES, /export function habitView\(/, '缺少 habitView() 派生视图'),
+    A.has(F_HABIT, /HabitView habitView\(/, '缺少 habitView() 派生视图'),
+    A.lack(F_HABIT, /final String limitText;/, 'limitText 仍是可写字段（回退）'),
+    A.lack(F_HABIT, /final String doneText;/, 'doneText 仍是可写字段（回退）'),
+    A.lack(T_SEED, /doneText:/, 'seed 仍在手写完成串（回退）'),
+    A.lack(F_SEED, /doneText:/, 'seed 仍在手写完成串（回退）'),
+    // 页面只消费派生视图：拿不到可写展示串，想改文案只能改派生函数（一处改、两端同步）
+    A.has(T_HOME, /store\.habitViews\(\)/, '首页未消费派生视图'),
+    A.has(F_HOME, /store\.habitViews/, '首页未消费派生视图'),
+    A.has(T_RUNNER, /展示串一律由结构字段派生/, 'run.js 缺少 E17 回归用例'),
+    A.has(F_TESTS, /展示串一律派生/, 'app_test.dart 缺少 E17 回归用例'),
   ] },
   { id: 'E18', status: 'fixed', what: 'resetToSeed 生产可达 + 首启即假数据', assertions: () => [
     // ① 生产闸门：编译期常量（可 DCE）+ 可测判据（两侧必须同源，漂移即红）

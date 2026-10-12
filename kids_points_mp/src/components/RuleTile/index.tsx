@@ -3,7 +3,7 @@ import { View, Text } from '@tarojs/components'
 import AppCard from '../AppCard'
 import Icon from '../Icon'
 import type { PointRule } from '../../data/types'
-import { amountText } from '../../data/types'
+import { amountText, ruleDetail } from '../../data/types'
 import { withAlpha } from '../../utils/color'
 import '../RecordTile/index.scss'
 import './index.scss'
@@ -35,7 +35,7 @@ export default function RuleTile({ rule, onClick, onLongPress }: RuleTileProps) 
         </View>
         <View className='kp-tile__body'>
           <Text className='kp-tile__title kp-ellipsis'>{rule.title}</Text>
-          <Text className='kp-tile__subtitle kp-ellipsis'>{rule.detail}</Text>
+          <Text className='kp-tile__subtitle kp-ellipsis'>{ruleDetail(rule)}</Text>
         </View>
         <Text
           className='kp-tile__amount'

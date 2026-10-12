@@ -4,6 +4,7 @@ import ActionRow from './ActionRow'
 import SheetFrame from '../components/SheetFrame'
 import { store } from '../data/store'
 import type { PointRule } from '../data/types'
+import { ruleDetail } from '../data/types'
 import { toast } from '../utils/toast'
 import './sheets.scss'
 
@@ -43,7 +44,7 @@ export default function RuleActionsSheet({
     <SheetFrame
       visible={visible}
       title={rule.title}
-      subtitle={rule.detail}
+      subtitle={ruleDetail(rule)}
       onClose={onClose}
     >
       <ActionRow

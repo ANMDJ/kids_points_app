@@ -20,7 +20,10 @@ export default function Home() {
   const store = useStore()
   const sheet = useSheet()
 
-  const doneCount = store.habits.filter((habit) => habit.checked).length
+  // 修 A2 / A3 / E17：首页消费**派生视图**（checked / limitText / doneText 都由
+  // 结构字段 ＋ 当天流水现算），习惯上那些状态字段已不复存在。
+  const habits = store.habitViews()
+  const doneCount = habits.filter((habit) => habit.checked).length
 
   const handleCheckIn = (habit: Habit) => {
     const message = store.checkIn(habit)
@@ -32,8 +35,8 @@ export default function Home() {
   }
 
   const handleUndo = (habit: Habit) => {
-    if (!habit.checked) return
-    // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
+    // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因。
+    // 这里不再预读 `habit.checked` —— 能不能撤销由 store 按当天流水判定（修 A3）。
     const message = store.undoCheckIn(habit)
     toast(message ?? `已撤销“${habit.title}”的打卡`)
   }
@@ -64,11 +67,11 @@ export default function Home() {
             title='今天的习惯'
             trailing={
               <Text className='kp-home__progress'>
-                {`已完成 ${doneCount}/${store.habits.length}`}
+                {`已完成 ${doneCount}/${habits.length}`}
               </Text>
             }
           />
-          {store.habits.map((habit) => (
+          {habits.map((habit) => (
             <HabitTile
               key={habit.id}
               habit={habit}

@@ -53,7 +53,7 @@ class RuleTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    rule.detail,
+                    ruleDetail(rule),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

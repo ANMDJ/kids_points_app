@@ -26,8 +26,8 @@
 | 编号 | 缺陷 | 严重度 | **真实状态（2026-10-12）** | 证据锚点 |
 |---|---|---|---|---|
 | A1 | 负分规则被 `Math.abs()` 抹平 | 🔴 高 | ✅ **已修** | `store.ts:369` / `app_store.dart:345`：`rule.points < 0` → 拒绝并返回文案 |
-| A2 | `Habit` 无每日上限字段，频次是自由文本 | 🔴 高 | ❌ **未修** | `types.ts:34 limitText: string` 仍为可写字段；前端无 `dailyLimit` |
-| A3 | `checked: boolean` 与"每天最多 N 次"矛盾 | 🔴 高 | ❌ **未修** | `types.ts:40 checked: boolean`、`habit.dart:38 bool checked;` |
+| A2 | `Habit` 无每日上限字段，频次是自由文本 | 🔴 高 | ✅ **已修** | 结构字段 `types.ts:46 dailyLimit: number` / `habit.dart:60`；展示串降级为派生 `types.ts:207 limitTextOf()` / `habit.dart:14`；seed 不再写 `limitText`（`seed.ts:36`、`seed_data.dart:47`）；`addRule` 越界即拒 `store.ts:419` / `app_store.dart:380` |
+| A3 | `checked: boolean` 与「每天最多 N 次」矛盾 | 🔴 高 | ✅ **已修** | 派生化：`types.ts:239 checkedCountToday()` / `habit.dart:76`，Dart 侧为 getter `habit.dart:125`；打卡上限判定改走当天流水 `store.ts:187` / `app_store.dart:149`；两端 `*.checked =` 写入数 = 0（守门人钉住）→ 公式勘误见 §0.2 ② |
 | A4 | 流水硬编码"家长记录"，无操作人 | 🔴 高 | ✅ **已修** | `store.ts:131/138`：`recordSubtitle({time, source})` + `operatorRole: actor.role` |
 | A5 | `addQuickNote` 错误递增 `rewardCount` | 🟠 中 | ✅ **已修** | `store.ts:289` / `app_store.dart:258`：仅 `redeem` 递增；断言 `rewardCount === 4` |
 | B6 | 扣分静默截断，**账本不平** | 🔴 高 | ✅ **已修** | `store.ts:244` / `app_store.dart:213`：返回"积分不足…最多可扣 N 分"，不再 `clamp` |
@@ -38,16 +38,21 @@
 | C11 | 无 `AuditLog`，变更不可追溯 | 🟠 中 | ❌ **未修** | 前端无任何 audit 引用（后端 `AuditLog` 表已建） |
 | D12 | 测试器花括号嵌套错位 → **CI 假通过** | 🔴 高 | ✅ **已修** | `honesty:probe` 4/4；夹具 `__fixtures__/d12-misnested-runner.js` 证明**能失败** |
 | D13 | 测试断言把缺陷固化为"正确行为" | 🔴 高 | ✅ **已修（10/10）** | 1–9 条已改写；**第 10 条已随 C1 改写**：`run.js:409` / `test/app_test.dart:290` 断言「首启为空态」，演示数据降级为**显式夹具**（`run.js:58`、`test/app_test.dart:19`）→ 见 §E18 现状 |
-| E15 | `detail` 自由字符串，靠 `split(' · ')` 反解析 | 🟠 中 | ❌ **未修** | `store.ts:372`、`app_store.dart:348` 仍在 `rule.detail.split(' · ')` |
+| E15 | `detail` 自由字符串，靠 `split(' · ')` 反解析 | 🟠 中 | ✅ **已修** | `PointRule` 只留 `condition` + `dailyLimit`（`types.ts:121`）；展示串派生 `types.ts:293 ruleDetail()` / `point_rule.dart:45`；规则→习惯直取结构字段 `store.ts:461` / `app_store.dart:424`；两端 `rule.detail.split` 归零 → 语义变更见 §0.2 ① |
 | E16 | `backgroundIndex` 用数组下标，删项后配色漂移 | 🟡 低 | ❌ **未修** | `store.ts:321`、`app_store.dart:296`：`wishes.length % 4` |
-| E17 | `doneText` / `limitText` 是被外部写入的展示文案 | 🟠 中 | ❌ **未修** | `types.ts:36 doneText: string`、`habit.dart:32 final String doneText;` 仍可写 |
+| E17 | `doneText` / `limitText` 是被外部写入的展示文案 | 🟠 中 | ✅ **已修** | 派生 `types.ts:212 doneTextOf()` / `habit.dart:18`；唯一产出点 `types.ts:277 habitView()` / `habit.dart:134`；页面只消费 `store.habitViews`（`home/index.tsx:25`、`home_screen.dart:25`）；seed 不再写 `doneText` |
 | E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ✅ **已修** | 闸门＝**可测判据 + 编译期常量**：`store.ts:27 demoResetAllowed()` / `store.ts:38 ALLOW_DEMO_RESET`、`app_store.dart:22` / `app_store.dart:29`；首启空态：`store.ts:71 constructor(){ this.resetToEmpty() }`、`app_store.dart:41`；seed 只剩 `resetToSeed()` 一个显式入口（`store.ts:119`、`app_store.dart:96`） |
 | E19 | 小标题串接方式不统一 | 🟡 低 | ✅ **已修** | `types.ts:155` / `point_record.dart:52`：`recordSubtitle()` 派生 |
 
-**合计：✅ 已修 10 · ❌ 未修 8（A2 / A3 / C9 / C10 / C11 / E15 / E16 / E17）**
+**合计：✅ 已修 14 · ❌ 未修 4（C9 / C10 / C11 / E16）**
 
 > 已无「半修」与「已改 9/10」两档：**C1 把 E18 与 D13 一起收口**（台账那两行改口的**那一刻就被守门人拦下过** ——
 > 见 §0.1 第 2 条；这正是阶段 A5 建这个守卫的目的）。
+
+> **2026-10-12 阶段 C2**：把 E15 / E17 / A2 / A3 收口 —— 台账这 4 行改口的**同一刻**同样被守门人拦下过
+> （`backend` 的 `npm run ci` → `npm run defects:check` 报 `FAILED 4 项`：`台账=❌ 未修，代码只符合「✅ 已修」`）。
+> 它不只抓「**修了不改口**」，也抓「声明修了其实没修」——两种都必须红，否则守卫自己就是下一处假绿。
+> 两条诚实说明（真实语义变更 ＋ 公式勘误）见 §0.2。
 
 ### 0.1 本次对账暴露的 6 处问题（本条目的由来）
 
@@ -66,7 +71,7 @@
 D12 ✅ → A1 ✅ → A5 ✅ → A4 ✅ → B6 ✅ → B7 ✅ → B8 ✅ → E19 ✅ → D13 (10/10) ✅
    ↓ 剩余（阶段 C，每步先落"能失败"的用例）
 C1 ✅ E18 第二半（构造函数不再无条件 reset ＋ 第 10 条断言改写）—— 已落地
-C2  E15 ＋ E17 ＋ A2 ＋ A3      （双端同步：结构字段化，展示串降级为派生）
+C2 ✅ E15 ＋ E17 ＋ A2 ＋ A3    （双端同步：结构字段化，展示串降级为派生）—— 已落地
 C3  E16                        （WishCoverStyle 稳定枚举替换数组下标）
 C4  C9 / C10 / C11             （软删除 ＋ 规则编辑 ＋ AuditLog）
 C5  D9                         （新增 iconName → IconData 映射）
@@ -74,6 +79,34 @@ C5  D9                         （新增 iconName → IconData 映射）
 
 ---
 
+### 0.2 阶段 C2 的两条诚实说明（一处真实语义变更 ＋ 一处公式勘误）
+
+**①「每周 1 次」表达不了 —— 演示数据里 `rule-3` 的语义被真实地改了，不是随手改的文案。**
+
+`rule-3`（围棋课后作业）原展示串是 `'完成并检查 · 每周 1 次'`。但权威模型里**没有周期字段**：
+`backend/prisma/schema.prisma` 的 `PointRule` / `RuleTemplate` 只有 `condition: String` ＋ `dailyLimit: Int`
+（后端模板库同样把周意涵写在标题 / 条件里，例如「周末大扫除」也是 `dailyLimit = 1`）。
+结构字段化之后，「每周 1 次」只能落成 `dailyLimit: 1`，派生串随之变成「完成并检查 · 每天 1 次」——
+**「每周」不再被表达**。这不是漏改，是当前模型表达不了；要真正支持周频次，得先加周期字段（后端 schema 变更），
+**本阶段不做**。留此记录，避免下一个人把「演示数据文案变了」误当成随手改的。
+
+**② `03` §A3 的公式漏了一类记录 —— 只排除 `correction` 不够。**
+
+§A3 原写 `checkedCountToday = records.filter(同 habitId && 同一天 && source≠correction).length`。
+按此实现，**撤销打卡之后界面仍显示「已打卡」**：B7 的修法是「写一条冲正记录、原记录保留」（账本不可变），
+原记录仍满足「同 habitId ＋ 同一天 ＋ source≠correction」，于是被继续计入 —— 撤销看起来像没生效。
+实测修法是在公式里再排除**已被冲正的原记录**：
+
+```ts
+const reversedIds = new Set(records.filter((r) => r.reversesRecordId !== null).map((r) => r.reversesRecordId))
+checkedCountToday = records.filter((r) => r.habitId === habitId && r.category === 'praise'
+  && r.source !== 'correction' && !reversedIds.has(r.id) && isSameDay(r.time)).length
+```
+
+两端实现同源（`types.ts:254`、`habit.dart:92`），并各有回归用例（`run.js:498`、`app_test.dart:378`，
+断言理由写明「被冲正的原记录不得再计入 —— 否则撤销后仍显示已打卡」）。
+
+---
 ## A 类 · 模型与数据语义错误
 
 ### A1 负分规则被 `Math.abs()` 抹平 —— 扣分规则变成加分
@@ -117,6 +150,14 @@ Habit     { title:'打人', points:  +3 }   ← 变成"打人 +3 分"！
 
 **修复**：新增 `Habit.dailyLimit: Int`；`limitText` 改为 getter（`dailyLimit === 1 ? '每天 1 次' : \`每天最多 ${dailyLimit} 次\``）。
 
+**现状（2026-10-12 阶段 C2 已落地）**：
+
+- **结构字段**：`types.ts:46 dailyLimit: number`、`habit.dart:60 final int dailyLimit;`，与权威 schema 的 `Habit.dailyLimit: Int` 同构；`PointRule` 侧同名字段（`types.ts:127`）。
+- **展示串降级为派生**：全仓库只有 `limitTextOf()` 一处写「每天 1 次 / 每天最多 N 次」（`types.ts:207`、`habit.dart:14`），两端同源。
+- **seed 不再提供展示串**：演示数据只写结构字段（`seed.ts:36`、`seed_data.dart:47`）；守门人以 `lack(seed, /limitText:/)` 钉死 —— 谁再往 seed 塞展示文案就变红。
+- **边界可校验**：`isDailyLimitValid()` 限 1–5 整数（`types.ts:198`、`habit.dart:10`），`addRule` 越界**拒绝并说明原因**（`store.ts:419`、`app_store.dart:380`）—— 不夹到边界：静默改写会让家长以为约定已按他的意思生效。
+- **回归用例**：`run.js:466`、`app_test.dart:349` / `app_test.dart:417`。
+
 ---
 
 ### A3 `checked: boolean` 与"每天最多 N 次"根本矛盾
@@ -144,6 +185,15 @@ checkedCountToday = records.filter(同 habitId && 同一天 && source≠correcti
 checked           = checkedCountToday >= dailyLimit
 doneText          = `今日已完成 ${checkedCountToday} 次`
 ```
+
+**现状（2026-10-12 阶段 C2 已落地）**：
+
+- `checked` 在两端都**不再是字段**：Taro 侧只存在于派生接口 `HabitView`（`types.ts:265` 起），Dart 侧是 getter `bool get checked =>`（`habit.dart:125`）。
+- `checkedCountToday()`（`types.ts:239`、`habit.dart:76`）由**当天流水**统计；打卡上限判定改走它（`store.ts:187`、`app_store.dart:149`）—— 「每天最多 2 次」因此真的能打 2 次。
+- ⚠️ **本条上面的公式有漏洞**：只排除 `source≠correction` 不够，还必须排除**已被冲正的原记录**，否则撤销后界面仍显示已打卡 —— 详见 §0.2 ②；两端实现已含 `reversedIds` 排除（`types.ts:254`、`habit.dart:92`）。
+- **页面不再读状态字段**：首页消费 `store.habitViews`（`home/index.tsx:25`、`home_screen.dart:25`），视图是快照对象、不回写 store。
+- **反回退**：守门人断言两端 `*.checked =` 写入数为 **0**、Dart 侧无 `bool checked;` 字段。
+- **回归用例**：`run.js:466` / `run.js:498`、`app_test.dart:349` / `app_test.dart:378`。
 
 ---
 
@@ -385,6 +435,14 @@ limitText : parts.length > 1 ? parts[1] : '每天 1 次'           // 第二个�
 
 **修复**：`condition` / `dailyLimit` 升为**结构字段**；`detail` 降级为**只读展示串**（由结构字段派生）。
 
+**现状（2026-10-12 阶段 C2 已落地）**：
+
+- `PointRule` 只留 `condition` ＋ `dailyLimit`（`types.ts:121`、`lib/models/point_rule.dart`），`detail` **字段已删除**；展示串改为 `ruleDetail(rule)`（`types.ts:293`、`point_rule.dart:45`）。
+- 规则 → 习惯**直取结构字段**（`store.ts:461`、`app_store.dart:424`）：原先的 `rule.detail.split(' · ')` 已归零，「多一段就丢一段」「没分隔符就静默落到默认值」这两种解析病随之消失。
+- 新增规则表单收的是**结构字段**：条件输入框 ＋ 频次 stepper（1–5 越界即拒），不再让家长手打「每天 1 次」这种展示串（`AddRuleSheet.tsx:40` / `:42`、`add_rule_sheet.dart:76` / `:78`）。
+- ⚠️ **语义变更（诚实说明）**：演示规则 `rule-3` 原为「完成并检查 · 每周 1 次」，结构字段化后落成 `dailyLimit: 1` → 派生串变成「每天 1 次」，**「每周」不再被表达**；原因与处置见 §0.2 ①。
+- **回归用例**：`run.js:521`、`app_test.dart:398`。
+
 ---
 
 ### E16 `Wish.backgroundIndex` 用数组下标表达配色，删除后漂移
@@ -410,6 +468,13 @@ limitText : parts.length > 1 ? parts[1] : '每天 1 次'           // 第二个�
 limitText = dailyLimit === 1 ? '每天 1 次' : `每天最多 ${dailyLimit} 次`
 doneText  = `今日已完成 ${checkedCountToday} 次`
 ```
+
+**现状（2026-10-12 阶段 C2 已落地）**：
+
+- 两端都**没有**可写的 `doneText` / `limitText`：它们只出现在派生视图里（Taro `HabitView`：`types.ts:265` 起；Dart `HabitView`：`habit.dart:102` 起），由 `doneTextOf()` / `limitTextOf()`（`types.ts:207` / `types.ts:212`、`habit.dart:14` / `habit.dart:18`）算出。
+- 视图工厂 `habitView()`（`types.ts:277`、`habit.dart:134`）是**唯一**产出点：输入「习惯结构字段 ＋ 当天流水」，页面拿不到可写展示串 —— 想改文案只能改派生函数（一处改、两端同步）。
+- seed 不再写 `doneText`（守门人 `lack(seed, /doneText:/)` 钉住）；页面只消费 `store.habitViews`（`home/index.tsx:25`、`home_screen.dart:25`）。
+- **回归用例**：`run.js:521`、`app_test.dart:333` / `app_test.dart:398`。
 
 ---
 
@@ -481,7 +546,7 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 | D12 ✅ 已修，安全网就绪 | ✅ 一致。且 `honesty:probe` 已用夹具 `d12-misnested-runner.js` 证明它**能失败** |
 | D13 断言改写 ← 必须与缺陷修复同批，否则测试会「正确地失败」 | ✅ **10/10 已收口**（C1）：第 10 条（首启 124 分 / 324 好习惯）与 **E18** 同批改写为「首启空态 ＋ seed 显式夹具」 |
 | A1 → A5 → A4 → B6 → B7 → B8 → **E18** → E19 → E16（双端同步，纯前端可控） | ✅ A1 / A5 / A4 / B6 / B7 / B8 / E19 已落地；✅ **E18 已收口**（C1：守卫 ＋ 首启空态，构造函数不再无条件 `reset()`）；❌ **E16 未动**（下一阶段 C3） |
-| E15/E17 → A2/A3 → C9/C10/C11（依赖 W0 schema 变更，与后端一并落地） | ❌ 全部未动。但 **W0 schema 已就绪**（`deletedAt` / `status` / `PointRule.currentVersion` / `AuditLog` 表）→ **已不构成阻塞**，只剩前端改造 |
+| E15/E17 → A2/A3 → C9/C10/C11（依赖 W0 schema 变更，与后端一并落地） | ✅ **E15 / E17 / A2 / A3 已收口**（C2，双端同步：`condition` / `dailyLimit` 升为结构字段，`checked` / `limitText` / `doneText` / `detail` 全部降级为派生）；❌ **C9 / C10 / C11 仍未动**（下一阶段 C4）。但 **W0 schema 已就绪**（`deletedAt` / `status` / `PointRule.currentVersion` / `AuditLog` 表）→ **已不构成阻塞**，只剩前端改造 |
 
 **验收门（W0 exit）**：
 - **从仓库根**执行 `node kids_points_mp/.tmp_test/run.js` 与 `flutter test`，**均能真实失败**（诚实性探针通过）
@@ -490,5 +555,12 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
   且**篡改任意一条状态后必须变红**（7 份副本已验证）—— 否则它自己就是下一处假绿
 - 上述 18 条缺陷全部有对应的**新回归用例**（每轮修复后能复现修复前失败）
 - 双端行为一致（同一用例在 Taro / Flutter 两侧结论相同）
+- **反回退粒度（C2 起）**：结构字段化的四条不只是「新符号在不在」，还含**反回退断言** —— `*.checked =` 写入数必须为 0、seed 不得再出现 `limitText:` / `doneText:`、`rule.detail.split` 归零、两端必须排除 `reversedIds`、首页必须消费 `habitViews`。只断言「新符号存在」是不够的：旧写法完全可以与它并存 —— 那正是 A2 / A3 / E15 / E17 当初「看着像修了」却还活着的原因。
+- **C2 闸门实测（2026-10-12）**
+- **C2 证伪自测（2026-10-12，6/6）**：注入反例必须**变红并点名对应条目**，还原后必须回绿 ——
+  ① Taro seed 塞回 `limitText:` → **A2 红**；② Flutter seed 塞回 `doneText:` → **E17 红**；
+  ③ Taro store 塞回 `rule.detail.split(' · ')` → **E15 红**；④ Flutter store 塞回 `habit.checked = true` → **A3 红**；
+  ⑤ 台账副本把 E15 改回「❌ 未修」→ **E15 红**；⑥ 删掉守门人里的 E17 验证器 → **E17 红**（「台账有、验证器没有」fail-closed）。
+  还原全部走**内存快照 ＋ sha256 比对**（不用 `git checkout`：工作区有未提交改动，`git checkout` 会连真改动一起丢掉）。：Taro `tsc --noEmit` 0 错、现编 `run.js` 19/19 ALL PASS、`flutter analyze` 0 issue、`flutter test` 29/29、`backend npm run ci` ALL PASS（18 条对账）。
 
 

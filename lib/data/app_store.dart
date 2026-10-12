@@ -108,6 +108,17 @@ class AppStore extends ChangeNotifier {
     return records.where((PointRecord r) => r.category == category).toList();
   }
 
+  /// 首页用的**派生视图**列表 —— 修 A2 / A3 / E17。
+  ///
+  /// 页面不再读任何“状态字段”：checked / limitText / doneText 都在这里
+  /// 由 `dailyLimit` ＋ 当天流水现算。视图是**快照对象**，不回写 store，
+  /// 因此也不存在“谁改了 checked 导致状态与流水不一致”的可能。
+  List<HabitView> get habitViews =>
+      habits.map((Habit habit) => habitView(habit, records)).toList();
+
+  /// 单个习惯的派生视图（用于“刚打完卡”的单点查询）。
+  HabitView habitViewOf(Habit habit) => habitView(habit, records);
+
   bool canRedeem(Wish wish) => !wish.redeemed && _points >= wish.cost;
 
   int gapOf(Wish wish) {
@@ -122,30 +133,43 @@ class AppStore extends ChangeNotifier {
   /// [actor] 记录**真实操作人** —— 修 A4：原先无论谁打卡都写死“家长记录”，
   /// 孩子自己完成也显示“家长记录”，流水在撒谎且责任链断裂。
   String? checkIn(Habit habit, {ActorContext actor = const ActorContext()}) {
-    if (habit.checked) {
-      return '“${habit.title}”今天已经完成过啦，明天继续加油～';
+    // 修 A3：上限判定必须来自**当天流水**，不能是布尔量 checked ——
+    // 否则“每天最多 2 次”的规则打完 1 次就再也打不了第 2 次（承诺的次数永远不可达）。
+    // 习惯以 store 里的**当前**定义为准（视图是快照，不能信任调用方传进来的副本）。
+    Habit? live;
+    for (final Habit item in habits) {
+      if (item.id == habit.id) {
+        live = item;
+        break;
+      }
+    }
+    if (live == null) {
+      return '“${habit.title}”已经不在今天的习惯里了';
+    }
+    final int done = checkedCountToday(records, live.id);
+    if (done >= live.dailyLimit) {
+      return '“${live.title}”今天已经完成 $done 次啦，明天继续加油～';
     }
     final RecordSource source = actor.role == MemberRole.child
         ? RecordSource.childSelf
         : RecordSource.guardian;
-    habit.checked = true;
-    _points += habit.points;
+    _points += live.points;
     profile.goodHabitCount += 1;
     final DateTime time = DateTime.now();
     records.insert(
       0,
       PointRecord(
         id: _newId('rec'),
-        title: habit.title,
+        title: live.title,
         subtitle: recordSubtitle(time: time, source: source),
-        points: habit.points,
+        points: live.points,
         time: time,
         category: RecordCategory.praise,
-        icon: habit.icon,
-        color: habit.color,
+        icon: live.icon,
+        color: live.color,
         source: source,
         operatorRole: actor.role,
-        habitId: habit.id,
+        habitId: live.id,
         balanceAfter: _points,
       ),
     );
@@ -163,7 +187,9 @@ class AppStore extends ChangeNotifier {
     Habit habit, {
     ActorContext actor = const ActorContext(),
   }) {
-    if (!habit.checked) {
+    // 修 A3：可撤销性同样按**当天流水**判定（checked 已不是可写字段）；
+    // 真正决定“撤销哪一条”的仍是下面按 habitId 定位的 target。
+    if (checkedCountToday(records, habit.id) == 0) {
       return '“${habit.title}”今天还没有打卡，不用撤销';
     }
     final Set<String?> reversedIds = records
@@ -176,7 +202,7 @@ class AppStore extends ChangeNotifier {
           r.category == RecordCategory.praise &&
           r.source != RecordSource.correction &&
           !reversedIds.contains(r.id) &&
-          _isToday(r.time)) {
+          isSameDay(r.time)) {
         target = r;
         break;
       }
@@ -188,7 +214,8 @@ class AppStore extends ChangeNotifier {
     if (target.points > _points) {
       return '积分不足，无法撤销（需扣回 ${target.points} 分，当前只有 $_points 分）';
     }
-    habit.checked = false;
+    // 修 A3：这里不再写 habit.checked = false —— 它是派生值，
+    // 撤销通过「新增一条指向原记录的冲正记录」表达（见 habit.dart 的 checkedCountToday）
     _points -= target.points;
     if (profile.goodHabitCount > 0) profile.goodHabitCount -= 1;
     final DateTime time = DateTime.now();
@@ -337,25 +364,36 @@ class AppStore extends ChangeNotifier {
 
   // ------------------------------------------------------------ 积分规则
 
-  void addRule({
+  /// 新增规则。成功返回 null，失败返回提示文案。
+  ///
+  /// **修 E15 / A2**：参数由 `detail` 自由串改为 `condition` ＋ `dailyLimit` 结构字段
+  /// （展示串交给 [ruleDetail] 派生）；`dailyLimit` 越界时**拒绝**而不是夹到边界 ——
+  /// 静默改写会让家长以为约定已按他的意思生效。
+  String? addRule({
     required String title,
-    required String detail,
+    required String condition,
+    required int dailyLimit,
     required int points,
     required IconData icon,
     required Color color,
   }) {
+    if (!isDailyLimitValid(dailyLimit)) {
+      return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
+    }
     rules.insert(
       0,
       PointRule(
         id: _newId('rule'),
         title: title.trim(),
-        detail: detail.trim().isEmpty ? '家长约定' : detail.trim(),
+        condition: condition.trim().isEmpty ? '家长约定' : condition.trim(),
+        dailyLimit: dailyLimit,
         points: points,
         icon: icon,
         color: color,
       ),
     );
     _persist();
+    return null;
   }
 
   void removeRule(PointRule rule) {
@@ -376,14 +414,15 @@ class AppStore extends ChangeNotifier {
     if (rule.points < 0) {
       return '“${rule.title}”是扣分规则，不能加入今天的习惯';
     }
-    final List<String> parts = rule.detail.split(' · ');
+    // 修 E15：条件与频次**直取结构字段** —— 原先这里 rule.detail.split(' · ')
+    // 反解析：多一段就丢一段、没分隔符就静默落到默认值「每天 1 次」。
     habits.add(
       Habit(
         id: _newId('habit'),
         title: rule.title,
         points: rule.points,
-        condition: parts.isNotEmpty ? parts.first : rule.detail,
-        limitText: parts.length > 1 ? parts[1] : '每天 1 次',
+        condition: rule.condition,
+        dailyLimit: rule.dailyLimit,
         icon: rule.icon,
         color: rule.color,
       ),
@@ -408,10 +447,6 @@ class AppStore extends ChangeNotifier {
   String _newId(String prefix) =>
       '$prefix-${DateTime.now().microsecondsSinceEpoch}-${_seq++}';
 
-  bool _isToday(DateTime time) {
-    final DateTime now = DateTime.now();
-    return time.year == now.year &&
-        time.month == now.month &&
-        time.day == now.day;
-  }
+  // （原先这里有个 _isToday()：现统一用 habit.dart 的 isSameDay()，
+  //   与 Taro 侧同一个判据，避免“两端各自实现、各自漂移”）
 }

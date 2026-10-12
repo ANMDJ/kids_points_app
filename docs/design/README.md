@@ -41,13 +41,16 @@
 | D13 | 测试断言把缺陷固化为"正确行为"（C1 补齐 10/10 条） | ✅ | ✅ |
 
 验证结果：
-- `node kids_points_mp/.tmp_test/run.js` → **16/16 PASS，`EXIT_CODE=0`**（产物由下方流水线第 1 步现编，见「陈旧产物」说明）
+- `node kids_points_mp/.tmp_test/run.js` → **19/19 PASS，`EXIT_CODE=0`**（产物由下方流水线第 1 步现编，见「陈旧产物」说明）
 - `npx tsc --noEmit -p tsconfig.json` → **`EXIT=0`**
-- `flutter test` → **24/24 PASS**（`TEST_EXIT=0`；`app_test.dart` **23** ＋ `widget_test.dart` **1**）
-  —— 修前 **21/21**，C1 新增 3 条（首启空态 ×2 ＋ 空态渲染冒烟 ×1）。**别只数 `app_test.dart`**：`flutter test` 会跑 `test/` 下全部文件。
+- `flutter test` → **29/29 PASS**（`TEST_EXIT=0`；`app_test.dart` **28** ＋ `widget_test.dart` **1**）
+  —— 修前 **21/21**，C1 新增 3 条（首启空态 ×2 ＋ 空态渲染冒烟 ×1），**C2 再新增 5 条**（演示数据只带结构字段 ×1、
+  「每天最多 2 次」真能打 2 次 ×1、冲正排除 ×1、展示串由结构字段派生 ×1、频次越界被拒 ×1）。
+  **别只数 `app_test.dart`**：`flutter test` 会跑 `test/` 下全部文件。
 - `flutter analyze` → **0 issue，`EXIT=0`**（C1 顺手清零了 6 条既有 `prefer_const_constructors` info：
   **info 也会让 `flutter analyze` 退出码为 1** —— 于是它与 `analysis_options.yaml` 里"不阻断构建"的注释互相矛盾，
-  流水线的 `flutter analyze && flutter test` 更是根本串不起来。已实测：清零后 exit 0、测试仍 24/24）
+  流水线的 `flutter analyze && flutter test` 更是根本串不起来。已实测：清零后 exit 0、测试仍 29/29）
+- **C2 追加**：`backend npm run ci` **ALL PASS**（含 `defects:check` **18/18**）；另跑 **6 例代码级证伪**全部变红、还原回绿。
 
 **阶段 C1（2026-10-12）新增的回归用例 —— 全部先验证过"能失败"再让它们变绿**：
 - `E18 首启必须为空态：不预置任何演示数据`（Taro）／`首启空态（修 E18）`（Flutter）
@@ -66,7 +69,7 @@
 | 13 个域模块签名 + Prisma 7 adapter 接入 | `tsc --noEmit` | ✅ `EXIT=0` |
 | 构建 | `nest build` | ✅ `EXIT=0` |
 | **CI 诚实性探针**（含 D12 回归守卫） | `npm run honesty:probe` | ✅ 4/4，**且经夹具证明能失败** |
-| **缺陷台账对账守卫（2026-10-12 新增）** | `npm run defects:check` | ✅ 18 条声明与代码逐条一致；**7 类篡改台账全部变红** |
+| **缺陷台账对账守卫（2026-10-12 新增）** | `npm run defects:check` | ✅ 18 条声明与代码逐条一致；**7 类篡改台账全部变红**；**C2 起补反回退断言**（`*.checked =` 写入数 = 0 / seed 不得再写展示串 / `rule.detail.split` 归零），并再加 **6 例代码级证伪全部变红** |
 | 模板库（18 条，按 P2 缩减） | `npm run templates:check` | ✅ 7 类坏数据全拦 |
 | 跨语言契约 | `npm run contracts:emit` | ✅ 25 动作 → JSON |
 | 工具代码类型检查（**新增**） | `npm run typecheck:tools` | ✅ 覆盖 `scripts/**`、`prisma/**`、`prisma.config.ts` |
@@ -88,8 +91,9 @@
 3. ~~**L5 · git 仓库**~~ → ✅ **已完成（2026-10-12）**：`git init -b main` + 首次提交
    **`35c0d62`**（234 个文件入库、工作区 0 差异），建仓卫生一并修正（见下方「Git 记录规范」）。
    **仍待你定**：**CI 平台**（GitHub Actions / Gitee Go / 自建）—— 流水线命令本身已就绪（`npm run ci`）。
-4. **W2**：`03` 剩余 8 条缺陷（`E15` / `E16` / `E17` / `A2` / `A3` / `C9` / `C10` / `C11`）
-   必须与后端 schema **同批落地**；同时新增 `iconName → IconData` 映射（决策 **D9**）。
+4. **W2**：`03` 剩余 4 条缺陷（`E16` / `C9` / `C10` / `C11`）必须与后端 schema **同批落地**；
+   同时新增 `iconName → IconData` 映射（决策 **D9**）。
+   （原列 8 条里的 `E15` / `E17` / `A2` / `A3` **已于阶段 C2 收口** —— 见第 9 条。）
 5. ~~**请你逐条确认 `06` §3 的 D1–D10**~~ → ✅ **已全部裁定（2026-10-12）**：**12 条锁定**
    （含本轮新立的 **D1b** `relation` 升枚举 / **D3b** `restrictions` 定形校验），结果见 `06` §3.1。
    **待落地**：D1b → 阶段 D-a ／ D3b → 阶段 D-b ／ D9 → 阶段 C5。
@@ -105,6 +109,14 @@
    `defects:check` **18/18**，守门人 7 个篡改反例全部变红。
    **下一步**：**首启引导流程**（`04`）—— 空态目前**只渲染空列表，没有引导**，别把「空态」当成「引导已完成」；
    引导落地前，`04` 的能力清单仍是"未实现"状态。
+9. ~~**C2 · `E15` ＋ `E17` ＋ `A2` ＋ `A3` 收口**~~ → ✅ **已完成（2026-10-12）**：
+   双端同步把 `condition` / `dailyLimit` 升为**结构字段**，`detail` / `checked` / `limitText` / `doneText`
+   全部降级为**派生值**；`run.js` **19/19**、`flutter test` **29/29**、`flutter analyze` **0 issue**、
+   `defects:check` **18/18**、`backend npm run ci` ALL PASS；**证伪 6/6**（造假必红、还原必绿）。
+   **两条诚实说明**（写进 `03` §0.2）：① 演示规则 `rule-3` 的「每周 1 次」在权威 schema 里**没有周期字段可表达**，
+   结构字段化后落成 `dailyLimit: 1`，派生串变「每天 1 次」—— **真实语义变更**，不是漏改；
+   ② `03` §A3 原公式只排除 `correction`，**漏了「已被冲正的原记录」**（撤销后界面仍显示已打卡），已修正。
+   **遗留**：`rule-3` 的周频次要真支持，得先给后端 schema 加周期字段；`C9` / `C10` / `C11` 与 `E16` 仍在队列（C4 / C3）。
 
 ### 文档缺陷修正记录
 
@@ -172,7 +184,7 @@ npm run ci
 会让两侧同时被骗（本工具首跑就因此误报 2 条：A1 / A5）。已用 **7 份被篡改的台账副本**证明能变红
 （谎称已修 / 谎称未修 / 删行 / 伪造新增行 / 改表头列名），并以「调换列顺序仍正确」证明它**按表头定位列**、不写死列号。
 **C1 又加了 7 个反例重验一遍**（谎称未修 / 谎称半修 / 删行 / 伪造新增行 / 改表头列名 ＋ **2 处代码回退**：
-把首启改回注入 seed、把守卫常量改回字面恒真）—— 7/7 全部变红，还原后重回全绿（`.git/_tools/c1-tamper.mjs`，可复跑）。
+把首启改回注入 seed、把守卫常量改回字面恒真）—— 7/7 全部变红，还原后重回全绿（`tools/_scratch/c1-tamper.mjs`，可复跑）。
 > 反例本身也要证伪：第一版「伪造新增行」反例隔了空行，被解析器按"表格已结束"正确忽略 —— **绿的是我的反例，不是守卫**；
 > 改成紧贴末行后才复现。写反例时踩的坑，恰好说明"绿"必须能被解释。
 
@@ -244,7 +256,7 @@ npm run ci
 | `docs/`、`contracts/`、双端源码、迁移 SQL、`package-lock.json`、`pubspec.lock` | `node_modules/`、`dist/`、`build/`、`.dart_tool/`、`.swc/`、`*.log`、`*.iml`、`.idea/` |
 | `.env.example`（模板） | **`.env`（含真实口令，绝不入库）** |
 | 手写验证脚本（`run.js` / `h5_*.js`） | 它们的产物：截图 `*.png`、`chrome-profile/`、探针日志 |
-| 仓库级守卫脚本（`tools/defect-status.mjs`） | 一次性补丁脚本与自测副本放 **`.git/_tools/`**（在 `.git` 内 → 天然不入库，不污染工作区） |
+| 仓库级守卫脚本（`tools/defect-status.mjs`） | 一次性脚手架（补丁脚本 / 闸门日志 / 守门人证伪自测副本）放 **`tools/_scratch/`**：在仓库树内、可检索可复查，由根锚定规则 `/tools/_scratch/` 关在版本库外（工作区保持干净）。**不要**再放 `.git/` 里 —— 那是 git 内部目录，越界使用且重建即丢失 |
 
 ### 行尾策略（`.gitattributes`）
 

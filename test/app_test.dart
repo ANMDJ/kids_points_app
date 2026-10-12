@@ -5,6 +5,7 @@ import 'package:kids_points_app/data/app_store.dart';
 import 'package:kids_points_app/main.dart';
 import 'package:kids_points_app/models/habit.dart';
 import 'package:kids_points_app/models/point_record.dart';
+import 'package:kids_points_app/models/point_rule.dart';
 import 'package:kids_points_app/models/wish.dart';
 import 'package:kids_points_app/screens/wishlist_screen.dart';
 import 'package:kids_points_app/theme/app_colors.dart';
@@ -38,12 +39,13 @@ void main() {
   group('习惯打卡', () {
     test('打卡成功后积分与好习惯次数增加，并写入表扬流水', () {
       final AppStore store = seededStore();
-      final Habit habit = store.habits.first..checked = false;
+      // 番茄钟：今天演示流水已有 1 条，上限 2 次 → 还能再打一次
+      final Habit habit = store.habits.first;
 
       final String? message = store.checkIn(habit);
 
       expect(message, isNull);
-      expect(habit.checked, isTrue);
+      expect(habitView(habit, store.records).checkedCountToday, 2);
       expect(store.points, 125);
       expect(store.profile.goodHabitCount, 325);
       expect(store.records.first.category, RecordCategory.praise);
@@ -53,24 +55,24 @@ void main() {
 
     test('重复打卡会被拦下，积分不变', () {
       final AppStore store = seededStore();
-      final Habit habit = store.habits.first..checked = false;
+      final Habit habit = store.habits[2]; // 自主阅读：每天 1 次
       store.checkIn(habit);
 
       final String? message = store.checkIn(habit);
 
       expect(message, isNotNull);
-      expect(store.points, 125);
+      expect(store.points, 126);
     });
 
     test('撤销打卡会扣回积分并写入冲正记录（修 B7）', () {
       final AppStore store = seededStore();
-      final Habit habit = store.habits.first..checked = false;
+      final Habit habit = store.habits[2];
       store.checkIn(habit);
 
       final String? message = store.undoCheckIn(habit);
 
       expect(message, isNull);
-      expect(habit.checked, isFalse);
+      expect(habitView(habit, store.records).checked, isFalse);
       expect(store.points, 124);
       expect(store.profile.goodHabitCount, 324);
     });
@@ -158,23 +160,31 @@ void main() {
 
     test('新增规则后可以一键加入今天的习惯', () {
       final AppStore store = seededStore();
-      store.addRule(
-        title: '每天练琴 30 分钟',
-        detail: '认真练习不断开 · 每天 1 次',
-        points: 3,
-        icon: Icons.music_note_rounded,
-        color: Colors.amber,
+      expect(
+        store.addRule(
+          title: '每天练琴 30 分钟',
+          condition: '认真练习不断开',
+          dailyLimit: 2,
+          points: 3,
+          icon: Icons.music_note_rounded,
+          color: Colors.amber,
+        ),
+        isNull,
       );
 
       expect(store.rules.length, 5);
       expect(store.rules.first.amountText, '+3');
+      expect(store.rules.first.dailyLimit, 2);
+      expect(ruleDetail(store.rules.first), '认真练习不断开 · 每天最多 2 次');
 
-      store.addHabitFromRule(store.rules.first);
+      expect(store.addHabitFromRule(store.rules.first), isNull);
 
       expect(store.habits.length, 4);
       expect(store.habits.last.title, '每天练琴 30 分钟');
       expect(store.habits.last.points, 3);
-      expect(store.habits.last.limitText, '每天 1 次');
+      expect(store.habits.last.condition, '认真练习不断开', reason: '条件直取结构字段');
+      expect(store.habits.last.dailyLimit, 2, reason: '频次直取结构字段');
+      expect(habitView(store.habits.last, store.records).checked, isFalse);
     });
   });
 
@@ -234,7 +244,8 @@ void main() {
       final AppStore store = seededStore();
       store.addRule(
         title: '打人',
-        detail: '不可以打人 · 每天 1 次',
+        condition: '不可以打人',
+        dailyLimit: 1,
         points: -3,
         icon: Icons.warning_amber_rounded,
         color: Colors.red,
@@ -315,6 +326,113 @@ void main() {
         expect(store.points, 124, reason: '显式载入后回到演示数据');
         expect(store.habits.length, 3);
       }
+    });
+  });
+
+  group('频次结构字段与派生状态（修 A2 / A3 / E15 / E17）', () {
+    test('演示数据只带结构字段，展示串一律派生（修 A2 / E17）', () {
+      final AppStore store = seededStore();
+
+      expect(
+        store.habits.map((Habit h) => h.dailyLimit).toList(),
+        <int>[2, 1, 1],
+      );
+      expect(
+        store.rules.map((PointRule r) => r.dailyLimit).toList(),
+        <int>[2, 1, 1, 1],
+      );
+      // checked / limitText / doneText 已不是字段 —— 这里能编译过本身就是证据
+      expect(habitView(store.habits.first, store.records).limitText, '每天最多 2 次');
+      expect(habitView(store.habits.first, store.records).doneText, '今日已完成 1 次');
+    });
+
+    test('「每天最多 2 次」真的可以打卡 2 次，第 3 次才被拦（修 A3）', () {
+      final AppStore store = seededStore();
+      final Habit pomodoro = store.habits.first;
+
+      final HabitView before = habitView(pomodoro, store.records);
+      expect(before.checkedCountToday, 1);
+      expect(before.checked, isFalse, reason: '1 < 2：还没到上限，必须还能打卡');
+
+      expect(store.checkIn(pomodoro), isNull, reason: '第 2 次打卡必须成功');
+
+      final HabitView after = habitView(pomodoro, store.records);
+      expect(after.checkedCountToday, 2);
+      expect(after.doneText, '今日已完成 2 次');
+      expect(after.checked, isTrue);
+      expect(store.points, 125);
+
+      expect(
+        store.checkIn(pomodoro),
+        '“番茄钟写作业”今天已经完成 2 次啦，明天继续加油～',
+      );
+      expect(store.records.length, 5, reason: '被拦时不写流水');
+
+      expect(
+        habitView(store.habits[1], store.records).checked,
+        isTrue,
+        reason: '每天 1 次的习惯 1 次即到上限',
+      );
+    });
+
+    test('已打卡次数由当天流水派生，被冲正的原记录不再计入（修 A3）', () {
+      final AppStore store = seededStore();
+      final Habit reading = store.habits[2];
+
+      expect(habitView(reading, store.records).doneText, '今日已完成 0 次');
+      expect(habitView(reading, store.records).limitText, '每天 1 次');
+
+      expect(store.checkIn(reading), isNull);
+      expect(habitView(reading, store.records).checkedCountToday, 1);
+
+      expect(store.undoCheckIn(reading), isNull);
+      expect(
+        habitView(reading, store.records).checkedCountToday,
+        0,
+        reason: '被冲正的原记录不得再计入（否则撤销后仍显示已打卡）',
+      );
+      expect(habitView(reading, store.records).checked, isFalse);
+      expect(store.checkIn(reading), isNull, reason: '撤销后应当可以重新打卡');
+    });
+
+    test('展示串由结构字段派生，结构字段是唯一真相（修 E15 / E17）', () {
+      expect(limitTextOf(1), '每天 1 次');
+      expect(limitTextOf(2), '每天最多 2 次');
+      expect(doneTextOf(0), '今日已完成 0 次');
+      expect(doneTextOf(3), '今日已完成 3 次');
+
+      final AppStore store = seededStore();
+      store.addRule(
+        title: '练琴',
+        condition: '连续 3 天',
+        dailyLimit: 1,
+        points: 4,
+        icon: Icons.music_note_rounded,
+        color: Colors.amber,
+      );
+      expect(store.rules.first.condition, '连续 3 天', reason: '条件不被 split 切碎');
+      expect(ruleDetail(store.rules.first), '连续 3 天 · 每天 1 次');
+    });
+
+    test('频次越界被拒绝（1–5 的整数），且不写规则（修 A2）', () {
+      final AppStore store = seededStore();
+      for (final int bad in <int>[0, 6, -1]) {
+        expect(
+          store.addRule(
+            title: '越界频次',
+            condition: '条件',
+            dailyLimit: bad,
+            points: 1,
+            icon: Icons.star_rounded,
+            color: Colors.amber,
+          ),
+          isNotNull,
+          reason: 'dailyLimit=$bad 应被拒绝',
+        );
+      }
+      expect(store.rules.length, 4, reason: '被拒绝时不写规则');
+      expect(isDailyLimitValid(dailyLimitMax), isTrue);
+      expect(isDailyLimitValid(dailyLimitMax + 1), isFalse);
     });
   });
 
