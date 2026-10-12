@@ -1,0 +1,140 @@
+{
+  "$schema": "generated — 请勿手工编辑",
+  "generatedFrom": "backend/src/contracts/permission-matrix.ts",
+  "authority": "HTTP Guard 与 Agent action-dispatcher 消费本文件，权限定义只能存在于唯一事实源",
+  "actionCount": 25,
+  "verdictSeverity": {
+    "ALLOW": 0,
+    "REQUIRE_APPROVAL": 1,
+    "DENY": 2
+  },
+  "actions": [
+    "view_child_points",
+    "view_records",
+    "view_rules",
+    "view_wishes",
+    "check_in_habit",
+    "undo_check_in",
+    "add_rule",
+    "update_rule",
+    "delete_rule",
+    "add_habit_from_rule",
+    "add_wish",
+    "request_redeem",
+    "delete_wish",
+    "adjust_points",
+    "request_points_bonus",
+    "redeem",
+    "request_approval",
+    "review_approvals",
+    "withdraw_request",
+    "invite_member",
+    "remove_member",
+    "switch_role_mode",
+    "edit_child_profile",
+    "apply_onboarding",
+    "reset_demo_data"
+  ],
+  "matrix": {
+    "view_child_points": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "view_records": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "view_rules": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "view_wishes": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "check_in_habit": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "undo_check_in": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "add_rule": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "update_rule": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "delete_rule": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "add_habit_from_rule": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "add_wish": {
+      "guardian": "ALLOW",
+      "child": "REQUIRE_APPROVAL"
+    },
+    "request_redeem": {
+      "guardian": "ALLOW",
+      "child": "REQUIRE_APPROVAL"
+    },
+    "delete_wish": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "adjust_points": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "request_points_bonus": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "redeem": {
+      "guardian": "REQUIRE_APPROVAL",
+      "child": "REQUIRE_APPROVAL"
+    },
+    "request_approval": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "review_approvals": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "withdraw_request": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "invite_member": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "remove_member": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "switch_role_mode": {
+      "guardian": "ALLOW",
+      "child": "ALLOW"
+    },
+    "edit_child_profile": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "apply_onboarding": {
+      "guardian": "ALLOW",
+      "child": "DENY"
+    },
+    "reset_demo_data": {
+      "guardian": "DENY",
+      "child": "DENY"
+    }
+  }
+}

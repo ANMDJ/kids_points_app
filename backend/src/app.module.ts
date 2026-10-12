@@ -1,0 +1,52 @@
+import { Module } from '@nestjs/common'
+import { ApprovalsModule } from './approvals/approvals.module'
+import { AuditModule } from './audit/audit.module'
+import { DeviceSessionModule } from './device-session/device-session.module'
+import { HabitsModule } from './habits/habits.module'
+import { IdempotencyModule } from './idempotency/idempotency.module'
+import { InvitesModule } from './invites/invites.module'
+import { LedgerModule } from './ledger/ledger.module'
+import { MembershipModule } from './membership/membership.module'
+import { NotificationsModule } from './notifications/notifications.module'
+import { OnboardingModule } from './onboarding/onboarding.module'
+import { PermissionsModule } from './permissions/permissions.module'
+import { PrismaModule } from './prisma/prisma.module'
+import { RulesModule } from './rules/rules.module'
+import { WishesModule } from './wishes/wishes.module'
+
+/**
+ * 应用装配 —— 模块边界 = 02 §3 的三道屏障 + 01 §4 的事务边界。
+ *
+ * ┌ 成员资格门  membership       屏障一：这个人跟这个孩子有没有关系
+ * ├ 权限判定    permissions      屏障二(矩阵) + 屏障三(成员级收紧) + action-dispatcher
+ * ├ 账本内核    ledger           ★ 不可变 PointRecord / 冲正 / balanceAfter
+ * ├ 规则        rules            PointRule + PointRuleVersion（只增不删）
+ * ├ 习惯        habits
+ * ├ 心愿        wishes
+ * ├ 审批        approvals        5 终态状态机（含 invalidated）
+ * ├ 引导        onboarding       模板库 + 监护人同意
+ * ├ 邀请码      invites          条件 UPDATE 原子占位（02 §8）
+ * ├ 设备会话    device-session   服务端持有的 activeRole（02 §7）
+ * ├ 审计        audit            追加式，DB 层 REVOKE UPDATE/DELETE
+ * ├ 通知        notifications    ★ 必须在账本事务**之外**（01 §4）
+ * └ 幂等        idempotency      防重放重复扣分
+ */
+@Module({
+  imports: [
+    PrismaModule,
+    MembershipModule,
+    PermissionsModule,
+    LedgerModule,
+    RulesModule,
+    HabitsModule,
+    WishesModule,
+    ApprovalsModule,
+    OnboardingModule,
+    InvitesModule,
+    DeviceSessionModule,
+    AuditModule,
+    NotificationsModule,
+    IdempotencyModule
+  ]
+})
+export class AppModule {}

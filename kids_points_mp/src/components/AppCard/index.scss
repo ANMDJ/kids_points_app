@@ -1,0 +1,15 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-card {
+  box-sizing: border-box;
+  background-color: $surface;
+  box-shadow: 0 f2r(8) f2r(18) $shadow;
+}
+
+.kp-card.is-border {
+  border: 1px solid $divider;
+}
+
+.kp-card:active {
+  opacity: 0.92;
+}

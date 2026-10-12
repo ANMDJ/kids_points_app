@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.temp/
+.rn_temp/
+.swc/
+*.log
+npm-install.log
+.DS_Store
+
+# 微信开发者工具的个人配置（含本地路径/编译设置，不应入库）
+project.private.config.json
+
+# ⚠️ 不要写成 `.tmp_test/`（整目录忽略）—— 该目录里混着两类东西：
+#   · 产物：dist/（tsc 编译输出）、chrome-profile/、*.png 截图、*.log 探针日志
+#   · 资产：run.js / h5_probe.js / h5_serve.js / h5_compat_check.js（手写验证脚本）
+# 曾经整目录忽略，会把上面 4 个手写脚本一起静默排除（建仓即丢资产）。
+# 因此只忽略产物；脚本必须入库。
+# TODO(阶段 B2)：把脚本迁到 tests/，产物集中到 .cache/，彻底消除这个混装目录。
+.tmp_test/dist/
+.tmp_test/chrome-profile/
+.tmp_test/*.png
+.tmp_test/*.log

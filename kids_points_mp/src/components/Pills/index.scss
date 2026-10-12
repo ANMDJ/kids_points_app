@@ -1,0 +1,79 @@
+@use '../../styles/vars.scss' as *;
+
+// ---------------------------------------------------------------- SmallPill
+.kp-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: $chip-bg;
+}
+
+.kp-pill.is-filled {
+  background-color: #c6e8ac;
+}
+
+.kp-pill__label {
+  font-size: f2r(12.5);
+  font-weight: 700;
+  color: $text-secondary;
+}
+
+.kp-pill.is-filled .kp-pill__label {
+  color: $primary-text;
+}
+
+.kp-pill:active {
+  opacity: 0.8;
+}
+
+// ----------------------------------------------------------------- SoftChip
+.kp-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: f2r(7) f2r(16);
+  background-color: $chip-bg;
+  border-radius: f2r(999);
+}
+
+.kp-chip__label {
+  font-size: f2r(13);
+  font-weight: 500;
+  color: $text-secondary;
+}
+
+.kp-chip.is-selected {
+  background-color: $primary;
+}
+
+.kp-chip.is-selected .kp-chip__label {
+  font-weight: 700;
+  color: $primary-text;
+}
+
+// ------------------------------------------------------------------ QuickTag
+.kp-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: f2r(6) f2r(12);
+  background-color: $chip-bg;
+  border: 1px solid transparent;
+  border-radius: f2r(10);
+}
+
+.kp-tag__label {
+  font-size: f2r(12.5);
+  font-weight: 500;
+  color: $text-secondary;
+}
+
+.kp-tag.is-selected {
+  background-color: $primary-soft;
+  border-color: $primary-deep;
+}
+
+.kp-tag.is-selected .kp-tag__label {
+  font-weight: 600;
+  color: $primary-text;
+}

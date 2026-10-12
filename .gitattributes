@@ -1,0 +1,42 @@
+# 行尾与二进制策略
+#
+# 背景：本仓库在 Windows 上开发（工作区文件既有 CRLF 也有 LF），
+# 若不固定策略，同一文件在不同机器上会出现"整文件级 diff"的假变更，
+# 审查与 git blame 都会被噪音淹没。
+#
+# 约定：
+#   · 仓库内文本一律以 LF 存储与检出（跨平台安全，杜绝行尾抖动）
+#   · Windows 批处理保留 CRLF（cmd.exe 对 LF 的兼容性不稳）
+#   · 二进制显式声明，禁止任何行尾/编码转换
+
+* text=auto eol=lf
+
+# Windows 专用格式必须保留 CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 二进制（禁止转换）
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.eot    binary
+*.jar    binary
+*.keystore binary
+*.jks    binary
+*.p12    binary
+
+# 锁文件按文本处理（便于 diff 与冲突解决，禁止 Git LFS/二进制化）
+package-lock.json text
+pnpm-lock.yaml    text
+yarn.lock         text
+pubspec.lock      text
+
+# 生成物标记（供 GitHub/Gitee 等平台在 diff 中折叠）
+contracts/permission-matrix.json linguist-generated=true

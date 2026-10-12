@@ -1,0 +1,81 @@
+@use '../styles/vars.scss' as *;
+
+// 弹窗里的标签组：外层用负外边距抵消首尾间距，保证 8px 的间距在换行后也一致
+.kp-sheet-tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 -#{f2r(4)} -#{f2r(8)};
+}
+
+.kp-sheet-tags__item {
+  margin: 0 f2r(4) f2r(8);
+}
+
+.kp-sheet-tags--center {
+  justify-content: center;
+}
+
+// 弹窗内的垂直间距（对应 Flutter 的 SizedBox）
+.kp-sheet-gap-xs {
+  height: f2r(6);
+}
+
+.kp-sheet-gap-10 {
+  height: f2r(10);
+}
+
+.kp-sheet-gap-sm {
+  height: f2r(12);
+}
+
+.kp-sheet-gap-md {
+  height: f2r(14);
+}
+
+.kp-sheet-gap-lg {
+  height: f2r(16);
+}
+
+.kp-sheet-gap-xxl {
+  height: f2r(18);
+}
+
+// 新增心愿时的小提示条
+.kp-wish-tip {
+  padding: f2r(12) f2r(14);
+  background-color: $primary-soft;
+  border-radius: f2r(14);
+}
+
+.kp-wish-tip__text {
+  font-size: f2r(12.5);
+  color: $primary-text;
+}
+
+// 规则长按菜单里的操作行
+.kp-sheet-row {
+  display: flex;
+  align-items: center;
+  padding: f2r(15) f2r(16);
+  border-radius: f2r(14);
+  background-color: $primary-soft;
+}
+
+.kp-sheet-row:active {
+  opacity: 0.8;
+}
+
+.kp-sheet-row__label {
+  margin-left: f2r(10);
+  font-size: f2r(14.5);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-sheet-row.is-danger {
+  background-color: #fdf1e9;
+}
+
+.kp-sheet-row.is-danger .kp-sheet-row__label {
+  color: $point-spend;
+}

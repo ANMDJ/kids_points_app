@@ -1,0 +1,66 @@
+@use '../../styles/vars.scss' as *;
+
+// 顶部栏：左右各 56 固定宽度，标题居中（与 Flutter PageHeader 一致）
+.kp-header {
+  display: flex;
+  align-items: center;
+  height: f2r(50);
+}
+
+.kp-header__side {
+  width: f2r(56);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.kp-header__side--right {
+  justify-content: flex-end;
+}
+
+.kp-header__back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(44);
+  height: f2r(44);
+  margin-left: f2r(6);
+  border-radius: 50%;
+}
+
+.kp-header__back:active {
+  opacity: 0.6;
+}
+
+.kp-header__center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-header__title {
+  font-size: f2r(17);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+// 小节标题
+.kp-section-title {
+  display: flex;
+  align-items: center;
+  padding-bottom: f2r(12);
+}
+
+.kp-section-title__text {
+  font-size: f2r(16);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-section-title__trailing {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}

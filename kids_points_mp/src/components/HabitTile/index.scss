@@ -1,0 +1,47 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-habit__row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-habit__check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(27);
+  height: f2r(27);
+  border-radius: 50%;
+  background-color: #f1f3ed;
+  border: 1px solid #e1e6d9;
+}
+
+.kp-habit__check.is-done {
+  background-color: $primary-deep;
+  border: none;
+}
+
+.kp-habit__body {
+  flex: 1;
+  min-width: 0;
+  margin-left: f2r(12);
+}
+
+.kp-habit__title {
+  font-size: f2r(14.5);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-habit__subtitle {
+  margin-top: f2r(4);
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-habit__amount {
+  margin-left: f2r(8);
+  font-size: f2r(15);
+  font-weight: 800;
+  color: $point-gain;
+}

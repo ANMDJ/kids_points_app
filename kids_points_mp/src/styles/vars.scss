@@ -1,0 +1,54 @@
+// =============================================================================
+// 设计稿换算 + 全局色板
+// -----------------------------------------------------------------------------
+// Flutter 设计稿逻辑宽度 400px，小程序 750rpx = 屏幕宽度，
+// 因此 1 Flutter px = 750 / 400 = 1.875rpx，用 f2r() 统一换算，
+// 这样在任何机型上都保持和设计稿完全一致的比例。
+// =============================================================================
+
+$kp-ratio: 1.875;
+
+@function f2r($v) {
+  @return $v * $kp-ratio * 1rpx;
+}
+
+// 页面背景渐变（AppColors.pageTop / pageBottom）
+$page-top: #fdfff9;
+$page-bottom: #f1f8e9;
+
+// 主色（薄荷绿系）
+$primary: #b7e28f;
+$primary-deep: #7fbf55;
+$primary-soft: #e8f6da;
+$primary-text: #3f6b2e;
+$nav-inactive: #b9c2b0;
+
+// 文字
+$text-primary: #33382f;
+$text-secondary: #909889;
+$text-hint: #b6bdb0;
+
+// 中性
+$surface: #ffffff;
+$chip-bg: #f4f6f0;
+$divider: #eef2e8;
+$shadow: rgba(92, 138, 60, 0.1); // AppColors.shadow = 0x1A5C8A3C
+
+// 功能色
+$orange: #f5a24b;
+$point-gain: #6fbf4b;
+$point-spend: #e9834b;
+
+// 心愿卡奶油底色
+$cream: #fff8e6;
+$cream-deep: #fbedc4;
+
+// 积分罐
+$star-yellow: #f6c64a;
+$leaf-green: #dcefc8;
+
+// 按钮阴影（SoftButton / FloatingAddButton 共用）
+$soft-shadow: rgba(127, 191, 85, 0.2); // 0x337FBF55
+
+// 渐变胶囊按钮
+$button-gradient: linear-gradient(180deg, #d8f1ba 0%, #b4e08c 100%);

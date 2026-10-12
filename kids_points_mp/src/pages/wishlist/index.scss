@@ -1,0 +1,78 @@
+@use '../../styles/vars.scss' as *;
+
+// 固定一屏的布局：标题栏固定 + 列表在中间滚动 + 右下角悬浮按钮
+.kp-wishlist {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+// 标题栏（对应 Flutter SizedBox(height: 56) 里的 Row）
+.kp-wishlist__header {
+  display: flex;
+  align-items: center;
+  height: f2r(56);
+  padding: 0 f2r(20);
+}
+
+.kp-wishlist__title {
+  font-size: f2r(20);
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-wishlist__title-icon {
+  display: flex;
+  align-items: center;
+  margin-left: f2r(6);
+}
+
+.kp-wishlist__spacer {
+  flex: 1;
+}
+
+.kp-wishlist__caption {
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-wishlist__points {
+  margin-left: f2r(4);
+  font-size: f2r(14);
+  font-weight: 800;
+  color: $point-gain;
+}
+
+// 滚动区：撑满标题栏与导航栏之间
+.kp-wishlist__scroll {
+  flex: 1;
+  height: 0;
+  overflow: hidden;
+}
+
+// 列表内边距：底部预留悬浮按钮的位置（对应 _fabHeight + _fabMargin）
+.kp-wishlist__content {
+  padding: f2r(12) f2r(20) f2r(72);
+}
+
+.kp-wishlist__grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.kp-wishlist__cell {
+  margin-bottom: f2r(14);
+}
+
+.kp-wishlist__tail {
+  height: f2r(18);
+}
+
+// 悬浮按钮固定在导航栏上方
+.kp-wishlist__fab {
+  position: fixed;
+  right: f2r(20);
+  z-index: 4;
+}

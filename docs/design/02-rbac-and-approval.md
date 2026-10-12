@@ -1,0 +1,553 @@
+# 02 · 双角色权限矩阵与审批工作流
+
+> 本文档定义 guardian / child 双角色的完整权限模型、审批请求状态机，
+> 以及**积分记录的不可变性与规则版本化**（§4–§5，回应"记录是否完整、改规则后历史是否变化"）。
+
+## 1. 角色与成员模型
+
+```
+User（自然人，一个家长一个 User）
+  │
+  ├─ UserChildRelation（监护关系）
+  │    └─ Child（孩子档案：姓名、学段、积分余额）
+  │         └─ ChildMember（孩子侧成员位）★ 新增
+  │              role ∈ { guardian, child }
+  │
+  └─ 通过 邀请码 加入其他 Child
+```
+
+**关键设计：一个 User 对一个 Child 可以同时是 `guardian`（家长）或 `child`（孩子本人账号）。**
+
+`ChildMember` 是权限判定的**唯一入口**（而非 `UserChildRelation`），因为：
+
+| 场景 | 是否需要 `ChildMember` |
+|---|---|
+| 爸爸（guardian）查看孩子积分 | ✅ 需要 |
+| 孩子用自己的设备登录打卡 | ✅ 需要（role=child） |
+| 妈妈（第二个 guardian）也能审批 | ✅ 需要 |
+| 只读分享（爷爷奶奶看战绩） | ✅ 需要（可扩展 role=viewer） |
+
+`ChildMember` 唯一约束：`@@unique([childId, userId])` —— 同一人对同一孩子只有一个成员位。
+
+```
+ChildMember {
+  id, childId, userId, role, status(active|removed),
+  joinedAt, removedAt, invitedByUserId, pinHash?, pinSetAt?
+}
+```
+
+---
+
+## 2. `PERMISSION_MATRIX` —— 单一声明式事实源
+
+**架构约束：权限只能在一处定义。** HTTP Guard 与 Agent `action-dispatcher` **必须消费同一张表**
+（见 §3 屏障二），否则两条入口必然漂移。
+
+```ts
+// contracts/permission-matrix.ts  —— 后端与 Agent 共享的唯一事实源
+export type Role = 'guardian' | 'child'
+export type Verdict = 'ALLOW' | 'DENY' | 'REQUIRE_APPROVAL'
+
+export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
+  /* ── 查询类 ───────────────────────────────────────────── */
+  view_child_points:      { guardian: 'ALLOW', child: 'ALLOW' },
+  view_records:           { guardian: 'ALLOW', child: 'ALLOW' },
+  view_rules:             { guardian: 'ALLOW', child: 'ALLOW' },
+  view_wishes:            { guardian: 'ALLOW', child: 'ALLOW' },
+
+  /* ── 打卡 ─────────────────────────────────────────────── */
+  check_in_habit:         { guardian: 'ALLOW', child: 'ALLOW' },
+  undo_check_in:          { guardian: 'ALLOW', child: 'DENY'  },
+
+  /* ── 规则 ─────────────────────────────────────────────── */
+  add_rule:               { guardian: 'ALLOW', child: 'DENY'  },
+  update_rule:            { guardian: 'ALLOW', child: 'DENY'  },
+  delete_rule:            { guardian: 'ALLOW', child: 'DENY'  },
+  add_habit_from_rule:    { guardian: 'ALLOW', child: 'DENY'  },
+
+  /* ── 心愿 ─────────────────────────────────────────────── */
+  add_wish:               { guardian: 'ALLOW', child: 'REQUIRE_APPROVAL' },
+  request_redeem:         { guardian: 'ALLOW', child: 'REQUIRE_APPROVAL' },
+  delete_wish:            { guardian: 'ALLOW', child: 'DENY'  },
+
+  /* ── 积分 ─────────────────────────────────────────────── */
+  adjust_points:          { guardian: 'ALLOW', child: 'DENY'  },  // ← 见 §6 归一化
+  request_points_bonus:   { guardian: 'ALLOW', child: 'ALLOW' },  // 孩子仅可"申请"
+  redeem:                 { guardian: 'REQUIRE_APPROVAL', child: 'REQUIRE_APPROVAL' },
+
+  /* ── 审批 ─────────────────────────────────────────────── */
+  request_approval:       { guardian: 'ALLOW', child: 'ALLOW' },
+  review_approvals:       { guardian: 'ALLOW', child: 'DENY'  },
+  withdraw_request:       { guardian: 'ALLOW', child: 'ALLOW' },
+
+  /* ── 成员与设置 ───────────────────────────────────────── */
+  invite_member:          { guardian: 'ALLOW', child: 'DENY'  },
+  remove_member:          { guardian: 'ALLOW', child: 'DENY'  },
+  switch_role_mode:       { guardian: 'ALLOW', child: 'ALLOW' },  // 受 PIN 保护
+  edit_child_profile:     { guardian: 'ALLOW', child: 'DENY'  },
+  apply_onboarding:       { guardian: 'ALLOW', child: 'DENY'  },  // 见 04
+  reset_demo_data:        { guardian: 'DENY',  child: 'DENY'  }   // ← E18：生产永久关闭
+}
+```
+
+**为什么孩子的 `adjust_points` 是 `DENY` 而不是 `REQUIRE_APPROVAL`：**
+因为"孩子申请加分"和"孩子申请奖励"是**两类不同的意图**，应为**两个 ActionType**。
+混为一谈会导致审批界面上无法区分"孩子想要什么"。见 §6。
+
+---
+
+## 3. 三道屏障（每一道都必须独立成立）
+
+```
+请求 / Agent 动作
+   │
+   ├─ 屏障一：成员资格门（Membership Gate）
+   │    ChildMember(childId, userId).status === 'active' ？
+   │    ✗ → 403 MEMBER_NOT_FOUND / MEMBER_REMOVED
+   │    作用：回答"这个人跟这个孩子有没有关系"
+   │
+   ├─ 屏障二：权限矩阵（PERMISSION_MATRIX）
+   │    verdict = MATRIX[action][member.role]
+   │    DENY             → 403 FORBIDDEN
+   │    REQUIRE_APPROVAL → 202 + 创建 ApprovalRequest（见 §4）
+   │    ALLOW            → 进入屏障三
+   │    作用：回答"这个角色能不能做这件事"
+   │
+   └─ 屏障三：成员级收紧（Member-level Tightening）
+        家长可对**单个孩子**追加限制，只能更严、不能更松：
+        ChildMember.restrictions: {
+          childCannotUndoCheckIn?: boolean
+          childCannotAddWish?: boolean
+          requireApprovalForBonusOver?: number   // 超过 N 分需审批（Q15：默认 ±50）
+          ...
+        }
+        作用：回答"这个家里对这件事有没有额外约定"
+```
+
+**屏障三的方向性约束（重要）**：`restrictions` 只能把 `ALLOW` 收紧为 `REQUIRE_APPROVAL` 或 `DENY`，
+**永远不能把 `DENY` 放宽**。否则家长可绕过产品安全底线（如让孩子自己审批自己的申请）。
+
+```
+最终判定 = min(矩阵判定, 成员级限制)    // 按 严苛度 排序：DENY > REQUIRE_APPROVAL > ALLOW
+```
+
+**为什么必须是三道而不是一道**：如果只做矩阵，家长无法对个别孩子加严；
+如果只做成员限制，每加一个孩子都要重新配置全部权限，且产品无法保证安全底线。三者职责正交。
+
+---
+
+## 4. `ApprovalRequest` 状态机
+
+### 4.1 状态图
+
+```
+                        ┌──────────────┐
+   创建（屏障二命中）───▶ │   pending    │
+                        └──────┬───────┘
+                               │
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+        ▼                      ▼                      ▼
+  ┌───────────┐         ┌───────────┐         ┌──────────────┐
+  │ approved  │         │ rejected  │         │ withdrawn    │
+  └─────┬─────┘         └───────────┘         └──────────────┘
+        │ 执行动作失败 / 前提消失
+        ▼
+  ┌───────────────┐
+  │ invalidated   │ ★ 第 5 个终态（Q4 = 甲）
+  └───────────────┘
+```
+
+**终态集合**：`approved` / `rejected` / `withdrawn` / `invalidated` / `expired`（TTL 触发）
+
+### 4.2 为什么需要 `invalidated`（不能只靠 `rejected`）
+
+审批是**跨时间**的：家长 3 小时后才点"同意"，但**这段时间里前提可能已经消失**。
+
+| 场景 | 无 `invalidated` 的后果 |
+|---|---|
+| 孩子申请兑换「汪汪零食」，家长同意前**孩子把该心愿删了** | 审批通过后**无法执行** → 只能报 500 或静默丢弃 |
+| 孩子申请兑换，家长同意前**积分已被别的操作花掉** | 通过后扣成负数 → 账本不平 |
+| 孩子申请"加分"，家长同意前**规则被删了** | 依据消失，无法解释这笔分从何而来 |
+| 成员在审批期间**被移出家庭** | 不该再给已离开的成员发分 |
+
+`invalidated` 携带 `autoReason`：
+```ts
+type AutoReason = 'WISH_DELETED' | 'RULE_DELETED' | 'HABIT_GONE'
+                | 'INSUFFICIENT_POINTS' | 'MEMBER_REMOVED'
+```
+
+**语义区别（必须在 UI 上区分）**：
+- `rejected` = **家长不同意**（人的决定）→ 孩子看到"爸爸说这次先不换"
+- `invalidated` = **前提消失了**（系统的判定）→ 孩子看到"这个心愿已经不在心愿单里了，申请自动取消"
+
+两者混用会让家长"莫名其妙背锅"，是必须避免的体验缺陷。
+
+### 4.3 `ApprovalRequest` 表
+
+```prisma
+model ApprovalRequest {
+  id              String   @id @default(cuid())
+  childId         String
+  requesterUserId String
+  requesterRole   MemberRole
+  actionType      ActionType
+  payload         Json        // 动作参数快照（如 { wishId, costSnapshot }）
+  status          ApprovalStatus  // pending|approved|rejected|withdrawn|invalidated|expired
+  autoReason      AutoReason?     // 仅 invalidated 时存在
+  decidedByUserId String?
+  decidedAt       DateTime?
+  decisionNote    String?
+  expiresAt       DateTime        // TTL，默认 72h
+  executedRecordId String?        // 批准并执行后产出哪条流水
+  createdAt       DateTime @default(now())
+  @@index([childId, status, createdAt])
+  @@index([status, expiresAt])    // 供 TTL 扫描
+}
+```
+
+**`payload` 必须快照成本**（`costSnapshot`），不能只存 `wishId`：
+否则家长同意时心愿价格已被改过，扣分金额与孩子申请时看到的不一致 —— 又是一次"账对不上"。
+
+### 4.4 审批通过的执行必须幂等
+
+```
+家长点「同意」
+  → 检查 status === 'pending'（乐观锁：UPDATE ... WHERE id=? AND status='pending'）
+  → 未命中 → 返回 409 ALREADY_DECIDED（防重复点击）
+  → 命中   → 同一事务内：写 PointRecord + 更新余额 + status='approved' + executedRecordId
+```
+
+「同意」与分析统计、通知发送**必须分离**：推送失败不能回滚账本（见 `01` §事务边界）。
+
+---
+
+## 5. ★ 积分记录的不可变性与规则版本化（核心）
+
+> 回应问题：**"积分记录是否完整记录了积分规则？改规则后已完成记录是否变化？"**
+> 答案：**完整记录（引用 + 快照双层）；改规则后历史记录完全不变化 —— 值、含义、可解释性皆不变。**
+
+### 5.1 为什么"完整"必须是两层，而不是单纯复制
+
+**反例：只有 `ruleId` 是不够的**
+```ts
+PointRecord { title:'番茄钟写作业', ruleId:'rule-A', pointsDelta: +1 }
+// 家长后来把 rule-A 的分值改成 +3
+// 追问："这条 +1 是按什么规则给的？"
+//   → 查 rule-A 得到 { points: 3 } → 与记录的 +1 矛盾 → 无法解释
+```
+
+只有 `ruleId` 时，记录会指向**已变形的规则**，历史失去可解释性。**必须有 `ruleVersion`。**
+
+**设计结构**
+```
+PointRecord（账本，append-only）
+  ├─ 引用层  → ruleId + ruleVersion  →  PointRuleVersion（全量真相，永不修改）
+  └─ 快照层  → titleSnapshot / pointsDelta / conditionSnapshot / dailyLimitSnapshot
+                                       （反规范化，只为"列表渲染不用 join"）
+```
+
+| 层 | 作用 | 缺了会怎样 |
+|---|---|---|
+| `ruleId` + `ruleVersion` → `PointRuleVersion` | **"当时的规则完整是什么"** 的真相之源 | 无法解释历史（上面的反例） |
+| 记录内快照字段 | 列表渲染、对账查询、统计 | 每渲染一行都要 join（性能），且规则被删后链条断裂 |
+
+**一致性规则**：二者同事务写入；若不一致，**以 `PointRuleVersion` 为准**（真相之源，快照只是缓存）。
+
+### 5.2 `PointRecord` 完整字段（设计规定）
+
+| 字段 | 解决什么问题 | 缺了会怎样 |
+|---|---|---|
+| `ruleId` + `ruleVersion` | 依据哪条规则的哪个版本 | 无法解释"这分怎么来的" |
+| `pointsDelta` | 本次变动（不可变） | — |
+| `titleSnapshot` | 当时标题（**完整，不截断**） | 现状 `shortTitle` 截到 10 字符，标题永久丢失（B8） |
+| `conditionSnapshot` / `dailyLimitSnapshot` | 当时的达成条件与频次上限 | 无法判断"当时允许几次" |
+| `costSnapshot` | 兑换时的成本 | 心愿成本变更后无法解释历史扣分 |
+| `wishId` / `habitId` | 回指对象 | 心愿删除后扣分原因永久丢失 |
+| `source` | `child_self`/`guardian`/`agent`/`approval`/`system`/`correction` | 无法区分操作来源（A4） |
+| `operatorUserId` + `operatorRole` | **真实操作人** | 现状硬编码"家长记录"，流水在撒谎（A4） |
+| `approvalRequestId` | 由哪条审批产生 | 决策链断裂 |
+| `balanceAfter` | **记完后的余额** | **无法对账** —— 财务账本的基本要求（B6） |
+| `idempotencyKey` | 防重复执行 | 重放会重复扣分 |
+| `reversesRecordId` / `reversedAt` | 冲正关系 | 现状靠**删除**记录来撤销（B7） |
+| `createdAt` | 时间 | — |
+
+其中 `ruleVersion`、`operatorUserId`、`balanceAfter` 三项是本次设计**不可省略**的新增，
+分别解决"解释不清 / 责任不明 / 对不上账"。
+
+### 5.3 `PointRuleVersion` —— 规则版本表
+
+```prisma
+model PointRule {
+  id             String  @id
+  childId        String
+  title          String
+  condition      String        // 结构字段（原 detail 第一段，见 E15）
+  dailyLimit     Int           // 结构字段（原 limitText，见 A2）
+  points         Int           // 恒为正；奖惩由 direction 表达
+  direction      RuleDirection // reward | penalty
+  icon           String
+  color          String
+  currentVersion Int     @default(1)
+  status         RecordStatus  // active | deleted（软删，C9）
+  deletedAt      DateTime?
+  @@index([childId, status])
+}
+
+model PointRuleVersion {        // 只增不删，永久保留
+  id              String  @id
+  ruleId          String
+  version         Int
+  title           String
+  condition       String
+  dailyLimit      Int
+  points          Int
+  direction       RuleDirection
+  changedByUserId String
+  changedAt       DateTime @default(now())
+  changeNote      String?
+  @@unique([ruleId, version])
+}
+```
+
+**`update_rule` 事务**（原子）：
+```
+1. 读 currentVersion = v
+2. 写 PointRuleVersion { version: v+1, ...新值 }
+3. 更新 PointRule（含 currentVersion = v+1）
+4. 写 AuditLog { action:'point_rule.update', before:{...v}, after:{...v+1} }
+   ↑ 三步同一 $transaction
+```
+
+### 5.4 修改规则后的行为：具体时间线
+
+```
+3/1 10:00  家长建规则 R：「番茄钟写作业 +1 分 · 每天最多 2 次」
+           → PointRuleVersion { ruleId:R, version:1, points:1, dailyLimit:2 }
+
+3/2 09:00  孩子打卡
+           → PointRecord rec#1 {
+               ruleId:R, ruleVersion:1, pointsDelta:+1,
+               titleSnapshot:'番茄钟写作业', balanceAfter:1 }
+
+3/2 20:00  家长改规则 →「+3 分 · 每天最多 1 次」
+           → PointRuleVersion { ruleId:R, version:2, points:3, dailyLimit:1 }
+           → PointRule.currentVersion = 2
+           → AuditLog { before:{v1}, after:{v2} }
+           ★ rec#1 【完全不动】
+
+3/3 09:00  孩子打卡
+           → PointRecord rec#2 {
+               ruleId:R, ruleVersion:2, pointsDelta:+3, balanceAfter:4 }
+```
+
+| 记录 | 显示 | 可解释性 |
+|---|---|---|
+| `rec#1` | `+1 分（按 v1：每天最多 2 次）` | ✅ 永远能回答"为什么是 1 分" |
+| `rec#2` | `+3 分（按 v2：每天最多 1 次）` | ✅ 同上 |
+
+**三层都不变**：① **值不变**（`+1` 永远不是 `+3`）；② **含义不变**（指向 `version:1`）；
+③ **可对账**（`balanceAfter` 链：`0+1=1`，`1+3=4`）。
+
+### 5.5 必须显式定义的语义边界：改规则对"今天已打卡"的影响
+
+**场景**：规则「番茄钟 +1 · 每天最多 2 次」，孩子今天已打卡 1 次（拿到 1 分）。
+家长把规则改成「+2 · 每天最多 1 次」。问：今天还剩几次？已拿的 1 分要不要补？
+
+**规定语义（唯一能让双方都接受的）**：
+> **历史不可回溯，未来从新规。**
+> - 已发生的流水：**不动**（还是 +1）
+> - 今日已用额度：**按新规重新计算**（已打卡 1 次 ≥ 新上限 1 次 → 今日剩余 0 次）
+> - 已得的分：**不补差、不追扣**
+
+**必须明确提示家长**（否则必然产生投诉）：
+```
+改动后，小满今天已完成 1 次，按新规则「每天最多 1 次」，今天不能再打卡了。
+[确定修改] [取消]
+```
+
+> 本条是 `update_rule` 的**验收标准**，不是可选项。改完规则后"孩子今天打不了卡"却不知原因，
+> 是最典型的家长困惑来源。
+
+### 5.6 必须配套的限制：`PointRuleVersion` 永久保留
+
+```
+规则被删（软删）→ 规则主体从列表消失
+   ↓ 若连带删除 PointRuleVersion
+rec#1 的 (ruleId, ruleVersion) 指向空
+   ↓
+"这 +1 分按什么规则给的" → 永远无法回答
+   ↓
+"完整记录"的承诺失效
+```
+
+**规定**：
+- `PointRule` 主体：可软删（`status=deleted`），90 天内可恢复（Q12）
+- `PointRuleVersion`：**只增不删**（写入频率极低 —— 只在改规则时写一条，非每次打卡）
+- `PointRecord`：**只增不删**（append-only），撤销用冲正而非删除
+
+> 注意：**"配置 90 天可恢复"与"流水永久保留"是两件事**（Q12 修订）。
+> 回收站只作用于"配置"（规则/心愿），永远不作用于"账本"。
+
+**边界情况（W10 合规定稿）**：账号删除权 vs 账本保留。
+- 建议：账号删除时**保留会计数据**（`pointsDelta`/`createdAt`/`ruleId` 等结构数据），
+  **匿名化描述性文本**（`titleSnapshot`/`conditionSnapshot` 置为 `[已删除]`）。
+- 效果：账仍然平、链条完整，但内容不可读 → 同时满足"删除权"与"账本完整性"。
+- **schema 现在就要支持**（`titleSnapshot` 允许写占位值），否则 W10 要改表。
+
+### 5.7 验收不变量 I1–I6（直接可写成测试）
+
+| # | 不变量 | 测试方式 |
+|---|---|---|
+| I1 | 改规则后，所有已有记录的所有字段**逐字段不变** | 改前 `SELECT * FROM point_record WHERE rule_id=R` → 改规则 → 再查，**diff 必须为空** |
+| I2 | `balanceAfter` 链自洽 | 按 `childId, createdAt` 排序滚动求和 == `balanceAfter` |
+| I3 | 每条记录的 `(ruleId, ruleVersion)` 必须能命中 `PointRuleVersion` | 左连接查 `NULL` 必须为 0 行 |
+| I4 | 记录快照 == 其 `PointRuleVersion` 的对应值 | 写入时联合校验 |
+| I5 | `PointRecord`/`PointRuleVersion` **无 UPDATE/DELETE 端点**，DB 层 `REVOKE` | 尝试直连 UPDATE 必须报错 |
+| I6 | 撤销打卡后，原记录仍在且新增一条冲正记录 | 记录数 **+1** 而非 −1；`reversesRecordId` 已设置 |
+
+---
+
+## 6. 孩子 `adjust_points` 的归一化（dispatcher 层）
+
+矩阵中孩子 `adjust_points = DENY`。但**不能简单返回 403** —— 孩子确实有"我想要更多分"的正当诉求。
+
+**在 `action-dispatcher` 归一化**（而非在矩阵里）：
+
+```ts
+// 孩子调用 adjust_points 时
+if (role === 'child' && action === 'adjust_points') {
+  if (payload.delta > 0) {
+    // 归一化为"申请加分" → 走审批流（Q2 = B：孩子仅可申请正向加分）
+    return dispatch('request_points_bonus', {
+      ...payload,
+      amount: payload.delta,
+      requestedBy: 'child'
+    })
+  }
+  // delta <= 0（孩子想给自己扣分）→ 无正当理由，且可能被自罚/炫耀滥用
+  return deny('CHILD_CANNOT_DEDUCT')
+}
+```
+
+**为什么在 dispatcher 而不在矩阵**：矩阵是**角色 × 动作**的静态表；
+"按 `delta` 符号分流"是**参数相关**的业务逻辑。放进矩阵会让矩阵变形为代码。
+
+**孩子申请加分的限额**（Q13 = 3 条/天，Q15 = 单笔 ±50）：
+```
+- 每日申请上限 3 条
+- 24h 内相同事由（reason 归一化后）去重
+- 单笔金额 ≤ 50
+超出 → 403 CHILD_REQUEST_QUOTA_EXCEEDED（可读文案，禁止静默丢弃）
+```
+
+---
+
+## 7. 角色模式切换（PIN）
+
+**问题**：同一台手机，家长和孩子都要用。需要一个**低成本、可审计**的切换机制。
+
+**设计**：服务端保存当前模式（**不信客户端**）：
+
+```prisma
+model DeviceSession {
+  id         String   @id
+  deviceId   String
+  childId    String
+  userId     String
+  activeRole MemberRole        // 服务端权威
+  issuedAt   DateTime @default(now())
+  expiresAt  DateTime          // TTL 5 分钟，到期回落 child
+  @@unique([deviceId, childId])
+}
+```
+
+| 规则 | 说明 |
+|---|---|
+| 默认角色 | `child`（**最小权限默认**）—— 手机在孩子手里时不能是家长模式 |
+| 切到 `guardian` | 需输入 **PIN**（scrypt 哈希，`ChildMember.pinHash`） |
+| TTL | 5 分钟无操作回落 `child`；每次 guardian 操作刷新 |
+| PIN 错误 | 5 次锁定 15 分钟（防暴力） |
+| 审计 | 每次切换写 `AuditLog`（含 `deviceId`） |
+
+**为什么不存客户端**：客户端可被改（小程序 storage 可直接改）。服务端持有 `activeRole` 才能让
+"家长模式"成为一个**真实的权限提升**，而不是一个 UI 开关。
+
+---
+
+## 8. 邀请码（并发安全）
+
+**问题**：邀请码的"校验剩余次数 → 插入成员 → 次数 +1"若分步执行，**并发下会超发**。
+
+```ts
+// ✗ 错误：读-改-写，两个请求可能同时通过校验
+const code = await findCode(code)
+if (code.usedCount >= code.maxUses) throw ...
+await createMember(...)
+await updateCode({ usedCount: code.usedCount + 1 })
+
+// ✓ 正确：单条条件 UPDATE，原子占用
+const rows = await prisma.$queryRaw`
+  UPDATE "InviteCode"
+     SET used_count = used_count + 1, used_by_user_id = ${userId}, used_at = now()
+   WHERE code = ${code}
+     AND used_count < max_uses
+     AND expires_at > now()
+     AND revoked = false
+  RETURNING id
+`
+if (rows.length === 0) throw new ConflictException('INVITE_CODE_UNAVAILABLE')
+// ↑ 只有真正抢到名额的请求才会继续创建成员
+```
+
+**要点**：`UPDATE ... WHERE used_count < max_uses RETURNING` 是原子的 —— 数据库行锁保证
+至多 `max_uses` 个请求能拿到 `RETURNING` 行。这比"先查后改"或"分布式锁"都更简单可靠。
+
+```prisma
+model InviteCode {
+  id            String   @id
+  childId       String
+  code          String   @unique
+  role          MemberRole       // child | guardian | viewer
+  maxUses       Int
+  usedCount     Int      @default(0)
+  usedByUserId  String?
+  usedAt        DateTime?
+  expiresAt     DateTime
+  revoked       Boolean  @default(false)
+  createdByUserId String
+  createdAt     DateTime @default(now())
+}
+```
+
+---
+
+## 9. 验收测试计划（节选）
+
+| # | 用例 | 期望 |
+|---|---|---|
+| 9.1 | 家长 `add_rule` | 201 |
+| 9.2 | 孩子 `add_rule` | 403 FORBIDDEN |
+| 9.3 | 孩子 `request_points_bonus(amount=10)` | 202 + `ApprovalRequest{status:pending}` |
+| 9.4 | 家长 `adjust_points(-9999)` | 400 INSUFFICIENT_POINTS（**不静默截断**，B6） |
+| 9.5 | 孩子 `adjust_points(delta=+10)` | 归一化为 `request_points_bonus`，202 |
+| 9.6 | 邀请码并发 10 请求，`maxUses=3` | **恰好 3 成功**，7 个 409 |
+| 9.7 | 家长批准后，孩子撤回 | 409 ALREADY_DECIDED |
+| 9.8 | 批准兑换，但心愿在批准前被删 | `status=invalidated`, `autoReason=WISH_DELETED` |
+| 9.9 | Agent 伪造 `plan.role=guardian`（实际 child） | **401，整份 plan 作废** |
+| 9.10 | 同一家长双击「同意」 | 第二次 409（乐观锁），账本只扣一次 |
+| 9.11 | **I1**：改规则后查历史记录 | **逐字段 diff 为空** |
+| 9.12 | **I2**：`balanceAfter` 滚动求和 == 余额 | 相等 |
+| 9.13 | **I6**：撤销打卡 | 记录数 **+1**（冲正），原记录保留 |
+| 9.14 | **I5**：直连 DB `UPDATE point_record` | 权限错误 |
+| 9.15 | 孩子 `adjust_points(delta=-5)` | 403 CHILD_CANNOT_DEDUCT |
+| 9.16 | 孩子第 4 次申请加分（同日） | 403 CHILD_REQUEST_QUOTA_EXCEEDED |
+| 9.17 | 孩子申请加分 51 分（Q15 = ±50） | 403 AMOUNT_EXCEEDS_LIMIT |
+| 9.18 | PIN 连错 5 次 | 锁定 15 分钟 |
+| 9.19 | `DeviceSession` 到期 | 角色回落 `child` |
+| 9.20 | 撤回同意（`GuardianConsent`） | 全链路写入停止，导出可下载 |
+| 9.21 | 非成员访问 | 403 MEMBER_NOT_FOUND |
+| 9.22 | 成员级 `restrictions` 试图放宽矩阵 `DENY` | 被忽略，仍为 DENY（屏障三方向性） |
+| 9.23 | 通知发送失败 | 账本已提交不受影响（事务边界） |
+| 9.24 | 孩子自助打卡 | `source=child_self`，`subtitle` **不含**"家长"（A4） |
+

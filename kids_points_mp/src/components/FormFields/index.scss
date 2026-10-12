@@ -1,0 +1,67 @@
+@use '../../styles/vars.scss' as *;
+
+// --------------------------------------------------------------- FieldLabel
+.kp-field__label {
+  display: block;
+  padding: f2r(4) 0 f2r(8);
+  font-size: f2r(12.5);
+  font-weight: 700;
+  color: $text-secondary;
+}
+
+// ----------------------------------------------------------- SoftTextField
+.kp-field__input {
+  width: 100%;
+  padding: f2r(13) f2r(14);
+  font-size: f2r(14);
+  line-height: 1.4;
+  color: $text-primary;
+  background-color: $chip-bg;
+  border: 1px solid transparent;
+  border-radius: f2r(14);
+}
+
+.kp-field__input.is-focused {
+  border-color: $primary;
+}
+
+.kp-field__placeholder {
+  font-size: f2r(13.5);
+  color: $text-hint;
+}
+
+// ----------------------------------------------------------- Icon 选择器
+.kp-picker {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.kp-picker__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(44);
+  height: f2r(44);
+  margin: 0 f2r(10) f2r(10) 0;
+  border: f2r(1.6) solid transparent;
+  border-radius: f2r(14);
+  background-color: $chip-bg;
+}
+
+.kp-picker__item:active {
+  opacity: 0.75;
+}
+
+.kp-picker__item--emoji {
+  background-color: $chip-bg;
+  border-width: f2r(1.6);
+}
+
+.kp-picker__item--emoji.is-selected-soft {
+  background-color: $primary-soft;
+  border-color: $primary-deep;
+}
+
+.kp-picker__emoji {
+  font-size: f2r(22);
+}

@@ -1,0 +1,41 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-nav {
+  width: 100%;
+  background-color: $surface;
+  border-top-left-radius: f2r(22);
+  border-top-right-radius: f2r(22);
+  box-shadow: 0 f2r(-6) f2r(20) $shadow;
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.kp-nav__row {
+  display: flex;
+  height: f2r(64);
+  align-items: center;
+}
+
+.kp-nav__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-nav__item:active {
+  opacity: 0.72;
+}
+
+.kp-nav__label {
+  margin-top: f2r(3);
+  font-size: f2r(11);
+  font-weight: 500;
+  color: $nav-inactive;
+}
+
+.kp-nav__item.is-active .kp-nav__label {
+  font-weight: 700;
+  color: $primary-deep;
+}

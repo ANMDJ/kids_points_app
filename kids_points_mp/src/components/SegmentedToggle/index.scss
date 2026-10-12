@@ -1,0 +1,41 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-segment {
+  display: flex;
+  align-items: center;
+  padding: f2r(4);
+  background-color: $chip-bg;
+  border-radius: f2r(999);
+}
+
+.kp-segment__item {
+  flex: 1;
+  height: f2r(38);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-segment__item.is-selected {
+  background-color: $surface;
+  box-shadow: 0 f2r(4) f2r(10) $shadow;
+}
+
+.kp-segment__label {
+  font-size: f2r(13.5);
+  font-weight: 500;
+  color: $text-secondary;
+}
+
+// 选中态才用红/绿色，未选中统一灰色
+.kp-segment__item.is-selected .kp-segment__label {
+  font-weight: 700;
+}
+
+.kp-segment__item.is-selected .kp-segment__label--gain {
+  color: $point-gain;
+}
+
+.kp-segment__item.is-selected .kp-segment__label--spend {
+  color: $point-spend;
+}

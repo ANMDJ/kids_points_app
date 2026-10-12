@@ -1,0 +1,40 @@
+@use '../../styles/vars.scss' as *;
+
+// 记录流水 / 积分规则共用的列表项排版
+.kp-tile__row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-tile__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(38);
+  height: f2r(38);
+  border-radius: f2r(12);
+}
+
+.kp-tile__body {
+  flex: 1;
+  min-width: 0;
+  margin-left: f2r(12);
+}
+
+.kp-tile__title {
+  font-size: f2r(14);
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.kp-tile__subtitle {
+  margin-top: f2r(3);
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-tile__amount {
+  margin-left: f2r(8);
+  font-size: f2r(15);
+  font-weight: 800;
+}

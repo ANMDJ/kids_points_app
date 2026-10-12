@@ -1,0 +1,25 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-soft-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $button-gradient;
+  box-shadow: 0 f2r(8) f2r(16) $soft-shadow;
+}
+
+.kp-soft-button:active {
+  opacity: 0.85;
+}
+
+.kp-soft-button.is-disabled {
+  opacity: 0.55;
+}
+
+.kp-soft-button__label {
+  margin-left: f2r(8);
+  font-size: f2r(15.5);
+  font-weight: 700;
+  color: $primary-text;
+  letter-spacing: f2r(0.5);
+}

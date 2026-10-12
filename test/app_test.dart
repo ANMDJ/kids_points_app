@@ -1,0 +1,383 @@
+// flutter_test 会在 Windows/macOS 上把中文按原样比较，无需额外配置。
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:kids_points_app/data/app_store.dart';
+import 'package:kids_points_app/main.dart';
+import 'package:kids_points_app/models/habit.dart';
+import 'package:kids_points_app/models/point_record.dart';
+import 'package:kids_points_app/models/wish.dart';
+import 'package:kids_points_app/screens/wishlist_screen.dart';
+import 'package:kids_points_app/theme/app_colors.dart';
+import 'package:kids_points_app/widgets/floating_add_button.dart';
+import 'package:kids_points_app/widgets/wish_card.dart';
+
+void main() {
+  group('演示数据', () {
+    test('首次启动的数值与设计稿一致', () {
+      final AppStore store = AppStore();
+      expect(store.points, 124);
+      expect(store.profile.goodHabitCount, 324);
+      expect(store.profile.rewardCount, 4);
+      expect(store.habits.length, 3);
+      expect(store.rules.length, 4);
+      expect(store.wishes.length, 4);
+      expect(store.records.length, 4);
+    });
+  });
+
+  group('习惯打卡', () {
+    test('打卡成功后积分与好习惯次数增加，并写入表扬流水', () {
+      final AppStore store = AppStore();
+      final Habit habit = store.habits.first..checked = false;
+
+      final String? message = store.checkIn(habit);
+
+      expect(message, isNull);
+      expect(habit.checked, isTrue);
+      expect(store.points, 125);
+      expect(store.profile.goodHabitCount, 325);
+      expect(store.records.first.category, RecordCategory.praise);
+      expect(store.records.first.points, 1);
+      expect(store.records.first.title, '番茄钟写作业');
+    });
+
+    test('重复打卡会被拦下，积分不变', () {
+      final AppStore store = AppStore();
+      final Habit habit = store.habits.first..checked = false;
+      store.checkIn(habit);
+
+      final String? message = store.checkIn(habit);
+
+      expect(message, isNotNull);
+      expect(store.points, 125);
+    });
+
+    test('撤销打卡会扣回积分并写入冲正记录（修 B7）', () {
+      final AppStore store = AppStore();
+      final Habit habit = store.habits.first..checked = false;
+      store.checkIn(habit);
+
+      final String? message = store.undoCheckIn(habit);
+
+      expect(message, isNull);
+      expect(habit.checked, isFalse);
+      expect(store.points, 124);
+      expect(store.profile.goodHabitCount, 324);
+    });
+  });
+
+  group('记一笔与兑换', () {
+    test('加分会记录为调整流水，但不累加奖励次数（修 A5）', () {
+      final AppStore store = AppStore();
+
+      final String? message =
+          store.addQuickNote(delta: 5, reason: '主动帮忙做家务');
+
+      expect(message, isNull);
+      expect(store.points, 129);
+      // rewardCount 语义是“奖励兑换次数”，手动加分不得递增
+      expect(store.profile.rewardCount, 4);
+      expect(store.records.first.category, RecordCategory.adjust);
+      expect(store.records.first.amountText, '+5');
+      expect(store.records.first.balanceAfter, 129);
+    });
+
+    test('超额扣分被拒绝，不再静默截断余额（修 B6）', () {
+      final AppStore store = AppStore();
+      final int before = store.records.length;
+
+      final String? message = store.addQuickNote(delta: -999, reason: '随便扣分');
+
+      expect(message, isNotNull, reason: '应返回拒绝原因而非静默失败');
+      expect(store.points, 124, reason: '被拒绝时余额不变（否则账本不平）');
+      expect(store.records.length, before, reason: '被拒绝时不写流水');
+    });
+
+    test('恰好扣光余额是允许的，且流水与余额一致', () {
+      final AppStore store = AppStore();
+
+      final String? message = store.addQuickNote(delta: -124, reason: '全扣');
+
+      expect(message, isNull);
+      expect(store.points, 0);
+      expect(store.records.first.points, -124);
+      expect(store.records.first.balanceAfter, 0);
+    });
+
+    test('积分足够时可以兑换心愿，并生成兑换流水', () {
+      final AppStore store = AppStore();
+      final Wish wish = store.wishes.first; // 40 积分
+
+      final bool ok = store.redeem(wish);
+
+      expect(ok, isTrue);
+      expect(wish.redeemed, isTrue);
+      expect(store.points, 84);
+      expect(store.profile.rewardCount, 5);
+      expect(store.records.first.category, RecordCategory.exchange);
+      expect(store.records.first.points, -40);
+      expect(store.canRedeem(wish), isFalse);
+      // 修 B8：完整标题快照（不再 shortTitle 截断）+ 回指心愿
+      expect(store.records.first.title, '兑换：${wish.title}');
+      expect(store.records.first.title.endsWith('…'), isFalse);
+      expect(store.records.first.wishId, wish.id);
+      // 修 A4 / E19：subtitle 由结构化字段派生
+      expect(store.records.first.subtitle.contains('兑换奖励'), isTrue);
+      expect(store.records.first.operatorRole, MemberRole.guardian);
+    });
+
+    test('积分不足时无法兑换', () {
+      final AppStore store = AppStore();
+      final Wish expensive = store.wishes[2]; // 445 积分
+
+      expect(store.canRedeem(expensive), isFalse);
+      expect(store.redeem(expensive), isFalse);
+      expect(store.points, 124);
+      expect(store.gapOf(expensive), 321);
+    });
+  });
+
+  group('筛选与规则', () {
+    test('记录可以按分类过滤', () {
+      final AppStore store = AppStore();
+      expect(store.recordsOf(null).length, 4);
+      expect(store.recordsOf(RecordCategory.praise).length, 3);
+      expect(store.recordsOf(RecordCategory.exchange).length, 1);
+      expect(store.recordsOf(RecordCategory.adjust), isEmpty);
+    });
+
+    test('新增规则后可以一键加入今天的习惯', () {
+      final AppStore store = AppStore();
+      store.addRule(
+        title: '每天练琴 30 分钟',
+        detail: '认真练习不断开 · 每天 1 次',
+        points: 3,
+        icon: Icons.music_note_rounded,
+        color: Colors.amber,
+      );
+
+      expect(store.rules.length, 5);
+      expect(store.rules.first.amountText, '+3');
+
+      store.addHabitFromRule(store.rules.first);
+
+      expect(store.habits.length, 4);
+      expect(store.habits.last.title, '每天练琴 30 分钟');
+      expect(store.habits.last.points, 3);
+      expect(store.habits.last.limitText, '每天 1 次');
+    });
+  });
+
+  group('账本可追溯性（A1 / A4 / B7 / B8 / I2 / I6）', () {
+    test('孩子自助打卡记录为 childSelf，不谎称“家长记录”（修 A4）', () {
+      final AppStore store = AppStore();
+      final Habit habit = store.habits[2]; // 自主阅读 +2
+
+      final String? message = store.checkIn(
+        habit,
+        actor: const ActorContext(role: MemberRole.child),
+      );
+
+      expect(message, isNull);
+      final PointRecord record = store.records.first;
+      expect(record.source, RecordSource.childSelf);
+      expect(record.operatorRole, MemberRole.child);
+      expect(record.subtitle.contains('家长'), isFalse);
+      expect(record.subtitle.endsWith('· 自己完成'), isTrue);
+      // subtitle 必须与派生函数一致，防止有人重新手写文案
+      expect(
+        record.subtitle,
+        recordSubtitle(time: record.time, source: record.source),
+      );
+      expect(record.balanceAfter, 126);
+      expect(record.habitId, habit.id);
+    });
+
+    test('撤销打卡写入冲正记录，原记录保留（修 B7 / I6）', () {
+      final AppStore store = AppStore();
+      final Habit habit = store.habits[2];
+      store.checkIn(habit);
+      final PointRecord origin = store.records.first;
+      final int before = store.records.length;
+
+      final String? message = store.undoCheckIn(habit);
+
+      expect(message, isNull);
+      expect(
+        store.records.length,
+        before + 1,
+        reason: '撤销应新增冲正记录，而非物理删除（条数 +1）',
+      );
+      final PointRecord revert = store.records.first;
+      expect(revert.source, RecordSource.correction);
+      expect(revert.reversesRecordId, origin.id);
+      expect(revert.points, -2);
+      expect(
+        store.records.where((PointRecord r) => r.id == origin.id).length,
+        1,
+        reason: '原记录不可被删除',
+      );
+      expect(store.points, 124);
+    });
+
+    test('扣分规则不能加入今天的习惯（修 A1，不再 abs 成加分）', () {
+      final AppStore store = AppStore();
+      store.addRule(
+        title: '打人',
+        detail: '不可以打人 · 每天 1 次',
+        points: -3,
+        icon: Icons.warning_amber_rounded,
+        color: Colors.red,
+      );
+      final int before = store.habits.length;
+
+      final String? message = store.addHabitFromRule(store.rules.first);
+
+      expect(message, isNotNull, reason: '应返回拒绝原因');
+      expect(store.habits.length, before, reason: '扣分规则不得生成习惯');
+      expect(store.habits.any((Habit h) => h.points < 0), isFalse);
+    });
+
+    test('balanceAfter 余额链自洽（I2，按写入顺序）', () {
+      final AppStore store = AppStore();
+      store.checkIn(store.habits[2]);
+      store.addQuickNote(delta: 3, reason: '家长奖励');
+      store.undoCheckIn(store.habits[2]);
+
+      final List<PointRecord> byInsertion =
+          store.records.reversed.toList(growable: false);
+      for (int i = 1; i < byInsertion.length; i++) {
+        expect(
+          byInsertion[i].balanceAfter,
+          byInsertion[i - 1].balanceAfter + byInsertion[i].points,
+          reason: '余额链断裂于「${byInsertion[i].title}」',
+        );
+      }
+      expect(store.records.first.balanceAfter, store.points);
+    });
+
+    test('生产构建下不允许恢复演示数据（修 E18）', () {
+      // 测试环境 kDebugMode 为 true，因此入口可用；此处只校验返回值契约。
+      final AppStore store = AppStore();
+      store.checkIn(store.habits[2]);
+      expect(store.points, 126);
+
+      expect(store.resetToSeed(), allowDemoReset);
+      if (allowDemoReset) {
+        expect(store.points, 124, reason: '恢复后回到演示数据');
+      } else {
+        expect(store.points, 126, reason: '被拒绝时数据不受影响');
+      }
+    });
+  });
+
+  group('界面冒烟测试', () {
+    Future<void> pumpApp(WidgetTester tester, AppStore store) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(PointsApp(store: store));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('首页展示积分、习惯与记一笔', (WidgetTester tester) async {
+      await pumpApp(tester, AppStore());
+
+      expect(find.text('当前可用积分'), findsWidgets);
+      expect(find.text('今天的习惯'), findsOneWidget);
+      expect(find.text('番茄钟写作业'), findsWidgets);
+      expect(find.text('记一笔'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('心愿单展示心愿卡片与新增心愿', (WidgetTester tester) async {
+      await pumpApp(tester, AppStore());
+
+      // 心愿单在 IndexedStack 里，切到这一页才“onstage”，查找才能命中。
+      await tester.tap(find.text('心愿单'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('甜的心愿单'), findsOneWidget);
+      expect(find.text('兑换'), findsWidgets);
+      expect(find.text('还差 321'), findsWidgets);
+      expect(find.text('新增心愿'), findsOneWidget);
+
+      // 设计稿 header：标题右侧是「编辑」图标，右侧的当前可用积分为绿色。
+      final Finder screen = find.byType(WishlistScreen);
+      final Icon editIcon = tester.widget<Icon>(
+        find.descendant(of: screen, matching: find.byIcon(Icons.edit_rounded)),
+      );
+      expect(editIcon.color, AppColors.starYellow);
+
+      final Text pointsText = tester.widget<Text>(
+        find.descendant(of: screen, matching: find.text('124')),
+      );
+      expect(pointsText.style?.color, AppColors.pointGain);
+
+      // 标题栏在滚动区域“上方”，不是压在列表上的浮层：标题与第一张心愿卡不重叠。
+      final Rect titleRect = tester.getRect(find.text('甜的心愿单'));
+      final Rect firstCardRect = tester.getRect(find.byType(WishCard).first);
+      expect(titleRect.top, greaterThan(0));
+      expect(firstCardRect.top, greaterThanOrEqualTo(titleRect.bottom));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('新增心愿默认收在右下角，滚到底部后展开成整行按钮', (WidgetTester tester) async {
+      final AppStore store = AppStore();
+      for (int i = 0; i < 6; i++) {
+        store.addWish(title: '测试心愿 $i', cost: 10 + i, emoji: '🎁');
+      }
+      await pumpApp(tester, store);
+      await tester.tap(find.text('心愿单'));
+      await tester.pumpAndSettle();
+
+      final Finder button = find.byType(FloatingAddButton);
+      final ScrollableState scrollable = tester.state(
+        find
+            .descendant(
+              of: find.byType(WishlistScreen),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+
+      // 列表还很长 → 收成右下角的圆形悬浮按钮。
+      expect(scrollable.position.maxScrollExtent, greaterThan(0));
+      expect(tester.getSize(button).width, 52);
+      expect(tester.getSize(button).height, 52);
+
+      // 滚到底部 → 展开成整行胶囊按钮（宽度为页面宽度减去左右各 20）。
+      scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(button).width, moreOrLessEquals(360, epsilon: 0.5));
+      expect(tester.getSize(button).height, 52);
+
+      // 再滚回顶部 → 又会收回右下角。
+      scrollable.position.jumpTo(0);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(button).width, 52);
+
+      // 悬浮按钮本身依然可以点到，并且能弹出“新增心愿”弹窗。
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.text('心愿名称'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('点击习惯卡片即可打卡加分', (WidgetTester tester) async {
+      final AppStore store = AppStore();
+      await pumpApp(tester, store);
+      expect(store.points, 124);
+
+      await tester.tap(find.text('自主阅读'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(store.points, 126);
+      expect(find.textContaining('+2 积分'), findsWidgets);
+      // 让 SnackBar 自动关闭，避免留下未完成的定时器
+      await tester.pumpAndSettle(const Duration(seconds: 5));
+    });
+  });
+}

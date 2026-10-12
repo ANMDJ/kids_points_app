@@ -1,0 +1,164 @@
+@use '../../styles/vars.scss' as *;
+
+// “我的”：整页可滚动，底部靠 kp-nav-space 给导航栏让位
+// ListView padding = EdgeInsets.fromLTRB(20, 22, 20, 0)
+.kp-profile {
+  padding: f2r(22) f2r(20) 0;
+}
+
+.kp-profile__head {
+  display: flex;
+  align-items: center;
+}
+
+// 圆形头像：奶油色渐变 + 主色描边
+.kp-profile__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(62);
+  height: f2r(62);
+  border-radius: 50%;
+  background-image: linear-gradient(135deg, $cream, $cream-deep);
+  border: 2px solid $primary;
+}
+
+.kp-profile__avatar:active {
+  opacity: 0.85;
+}
+
+.kp-profile__avatar-emoji {
+  font-size: f2r(30);
+  line-height: 1;
+}
+
+.kp-profile__info {
+  flex: 1;
+  min-width: 0;
+  margin-left: f2r(14);
+}
+
+.kp-profile__name {
+  font-size: f2r(18);
+  font-weight: 800;
+  color: $text-primary;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+// “ID:xxx + 复制图标”这一行（Flutter 里整行可点）
+.kp-profile__id {
+  display: flex;
+  align-items: center;
+  margin-top: f2r(6);
+}
+
+.kp-profile__id:active {
+  opacity: 0.7;
+}
+
+.kp-profile__id-text {
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-profile__id-icon {
+  display: flex;
+  align-items: center;
+  margin-left: f2r(6);
+}
+
+.kp-profile__stats {
+  margin-top: f2r(20);
+}
+
+.kp-profile__stat-row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-profile__stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.kp-profile__stat-value {
+  font-size: f2r(24);
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-profile__stat-label {
+  margin-top: f2r(4);
+  font-size: f2r(12);
+  color: $text-secondary;
+}
+
+.kp-profile__stat-divider {
+  width: 1px;
+  height: f2r(38);
+  background-color: $divider;
+}
+
+.kp-profile__menu-card {
+  margin-top: f2r(16);
+}
+
+// 入口行：图标底色 36x36 圆角 11，右侧 chevron
+.kp-profile__menu {
+  display: flex;
+  align-items: center;
+  padding: f2r(15) f2r(16);
+}
+
+.kp-profile__menu:active {
+  opacity: 0.75;
+}
+
+.kp-profile__menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(36);
+  height: f2r(36);
+  border-radius: f2r(11);
+}
+
+.kp-profile__menu-label {
+  flex: 1;
+  min-width: 0;
+  margin-left: f2r(14);
+  font-size: f2r(14.5);
+  font-weight: 600;
+  color: $text-primary;
+}
+
+// Divider(indent: 66)：左侧缩进对齐到文字
+.kp-profile__menu-divider {
+  height: 1px;
+  margin-left: f2r(66);
+  background-color: $divider;
+}
+
+.kp-profile__reset {
+  display: flex;
+  justify-content: center;
+  margin-top: f2r(22);
+}
+
+.kp-profile__reset:active {
+  opacity: 0.6;
+}
+
+.kp-profile__reset-text {
+  font-size: f2r(12.5);
+  color: $text-secondary;
+}
+
+// ListView padding bottom 28：导航栏之外再留一点
+.kp-profile__gap {
+  height: f2r(28);
+}

@@ -1,0 +1,53 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-fab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  // 顶部浅绿 → 底部深绿，和设计稿一致
+  background-image: linear-gradient(
+    to bottom,
+    #d8f1ba,
+    #b4e08c
+  );
+  // 宽度 / 阴影做补间，对应 Flutter AnimatedContainer(340ms, easeOutCubic)
+  transition: width 340ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    box-shadow 340ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.kp-fab:active {
+  opacity: 0.85;
+}
+
+.kp-fab__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 340ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    margin 340ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.kp-fab__icon.is-collapsed {
+  transform: scale(1.16);
+}
+
+.kp-fab__label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: f2r(15.5);
+  font-weight: 700;
+  color: $primary-text;
+  opacity: 0;
+  transition: max-width 340ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 140ms ease-out;
+}
+
+.kp-fab__label.is-visible {
+  max-width: f2r(160);
+  padding: 0 f2r(6) 0 f2r(0);
+  opacity: 1;
+  transition: max-width 340ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 340ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}

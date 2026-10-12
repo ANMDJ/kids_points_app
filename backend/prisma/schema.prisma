@@ -1,0 +1,751 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  kids_points_api · Prisma schema
+//
+//  依据：docs/design/01 §5（数据模型总览）、02 §4/§5/§7/§8、03 C9–C11/E15–E17、04 §3/§5
+//
+//  ★ 关键事实（与 01 §5 的表述有出入，见 docs/design/06-w0-report.md §2）：
+//    01 §5 写「新增 11 张 + 改造 5 张」，但仓库内**从未存在过后端与数据库** ——
+//    那 5 张「既有表」只存在于客户端内存模型里。因此 W0 必须**一次创建全部 18 张表**，
+//    不存在「对既有库做 ALTER」这件事。
+//
+//  ★ 不可拆分性（01 §5.3）：PointRuleVersion + 不可变 PointRecord + 软删除 + AuditLog
+//    是同一次 schema 变更。本文件一次性包含全部四者。
+// ═══════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // ★ Prisma 7 破坏性变更：`url` 已**不再支持**写在 schema 里
+  //   （P1012: The datasource property `url` is no longer supported in schema files）。
+  //   连接串移至 prisma.config.ts 的 datasource.url，客户端则通过 driver adapter 接入。
+  //   来源：https://pris.ly/d/config-datasource
+  //   —— 这一点是 01 §1 写「Prisma 7.10.0」时未预见的，见 06-w0-report.md §2。
+}
+
+// ─────────────────────────────── 枚举 ───────────────────────────────
+
+/// 02 §1：成员位角色。viewer 为「只读分享」预留（02 §1 场景表最后一行）。
+enum MemberRole {
+  guardian
+  child
+  viewer
+}
+
+/// 02 §1：成员位状态。
+enum MemberStatus {
+  active
+  removed
+}
+
+/// 用户状态（用户注销权见 02 §5.6 边界情况）。
+enum UserStatus {
+  active
+  suspended
+  deleted
+}
+
+/// 02 §4.1：审批终态集合 = approved / rejected / withdrawn / invalidated / expired。
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  withdrawn
+  invalidated
+  expired
+}
+
+/// 02 §4.2：仅 invalidated 时存在的自动原因（区分「家长不同意」与「前提消失」）。
+enum AutoReason {
+  WISH_DELETED
+  RULE_DELETED
+  HABIT_GONE
+  INSUFFICIENT_POINTS
+  MEMBER_REMOVED
+}
+
+/// 02 §5.3：奖惩方向。points 恒为正，正负由 direction 表达（修 A1 的根源）。
+enum RuleDirection {
+  reward
+  penalty
+}
+
+/// 03 C9：软删除统一状态（规则 / 习惯 / 心愿共用）。
+enum RecordStatus {
+  active
+  deleted
+}
+
+/// 客户端既有分类（Taro types.ts `RecordCategory`，Flutter `RecordCategory`）。
+enum RecordCategory {
+  praise
+  exchange
+  adjust
+}
+
+/// 客户端既有来源（修 A4；值必须与双端 `RecordSource` 一一对应）。
+enum RecordSource {
+  child_self
+  guardian
+  agent
+  approval
+  system
+  correction
+}
+
+/// 04 §2 步骤③：学段（模板过滤依据）。
+enum AgeBand {
+  preschool
+  primary_low
+  primary_high
+  junior_high
+}
+
+/// 03 E16：配色改为**稳定枚举**，不再用数组下标（删项后不漂移）。
+enum WishCoverStyle {
+  A
+  B
+  C
+  D
+}
+
+/// 04 §5 + 02 §9.20：监护人同意状态（撤回后引导入口重新出现）。
+enum ConsentStatus {
+  granted
+  withdrawn
+}
+
+/// 推送平台（03 §L3：双端目前零推送依赖）。
+enum DevicePlatform {
+  weapp
+  ios
+  android
+}
+
+/// 02 §2：ActionType —— 与 PERMISSION_MATRIX 的键**必须逐一对应**（25 个）。
+/// 该矩阵同时被 HTTP Guard 与 Agent action-dispatcher 消费（02 §3 屏障二）。
+enum ActionType {
+  view_child_points
+  view_records
+  view_rules
+  view_wishes
+  check_in_habit
+  undo_check_in
+  add_rule
+  update_rule
+  delete_rule
+  add_habit_from_rule
+  add_wish
+  request_redeem
+  delete_wish
+  adjust_points
+  request_points_bonus
+  redeem
+  request_approval
+  review_approvals
+  withdraw_request
+  invite_member
+  remove_member
+  switch_role_mode
+  edit_child_profile
+  apply_onboarding
+  reset_demo_data
+}
+
+// ═══════════════════ 一、身份与成员（02 §1） ═══════════════════
+//  ★ 文档空白：`User` 与 `UserChildRelation` 被 02 §1 引用，但**从未给出字段定义**。
+//    以下为 W0 补齐的字段，见 06-w0-report.md §3「待确认决策 D1」。
+
+/// 自然人（一个家长一个 User）。
+model User {
+  id          String     @id @default(cuid())
+  /// 微信 openid / unionid。L2（主体认证）完成前可能为空。
+  openId      String?    @unique
+  displayName String?
+  /// scrypt 哈希；禁止明文，禁止客户端持有（02 §2 架构约束）。
+  status      UserStatus @default(active)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  relations          UserChildRelation[]
+  members            ChildMember[]
+  deviceSessions     DeviceSession[]
+  deviceTokens       DeviceToken[]
+  changedVersions    PointRuleVersion[]
+  operatedRecords    PointRecord[]       @relation("RecordOperator")
+  submittedApprovals ApprovalRequest[]   @relation("ApprovalRequester")
+  decidedApprovals   ApprovalRequest[]   @relation("ApprovalDecider")
+  createdInviteCodes InviteCode[]        @relation("InviteCreator")
+  usedInviteCodes    InviteCode[]        @relation("InviteUser")
+  consents           GuardianConsent[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+}
+
+/// 监护关系（02 §1）。**注意：它不是权限判定的入口** ——
+/// 权限一律走 ChildMember（02 §1：ChildMember 是权限判定的唯一入口）。
+model UserChildRelation {
+  id        String   @id @default(cuid())
+  userId    String
+  childId   String
+  /// 关系描述：father / mother / grandparent / other
+  relation  String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, childId])
+  @@index([childId])
+}
+
+/// 孩子档案。
+model Child {
+  id String @id @default(cuid())
+
+  /// 昵称。引导第②步就采集 → 因此同意必须在第①步取得（04 §5）。
+  name String
+
+  /// ★ 权威余额。所有变更必须在 $transaction 内与 PointRecord 一同写入（01 §4）。
+  pointsBalance Int @default(0)
+
+  // ── 04 §3：引导三字段 ──────────────────────────────────────────
+  ageBand     AgeBand?
+  focusAreas  String[]  @default([])
+  /// null = 未完成引导 → 前端强制进入引导（04 §3：引导的权威状态，服务端持有）
+  onboardedAt DateTime?
+
+  // ── 软删除（03 C9）────────────────────────────────────────────
+  status    RecordStatus @default(active)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 注意：客户端的 goodHabitCount / rewardCount **不落库** ——
+  // 它们是聚合结果，落库正是 A5（奖励次数虚高）的成因。改为按需 SELECT COUNT。
+  // 见 06-w0-report.md §3「待确认决策 D2」。
+
+  relations          UserChildRelation[]
+  members            ChildMember[]
+  rules              PointRule[]
+  records            PointRecord[]
+  habits             Habit[]
+  wishes             Wish[]
+  approvals          ApprovalRequest[]
+  inviteCodes        InviteCode[]
+  consents           GuardianConsent[]
+  notifications      Notification[]
+  deviceSessions     DeviceSession[]
+  deviceTokens       DeviceToken[]
+  auditLogs          AuditLog[]
+  idempotencyRecords IdempotencyRecord[]
+
+  @@index([status])
+}
+
+/// 成员位（02 §1）★ 新增 —— 权限判定的唯一入口。
+model ChildMember {
+  id      String       @id @default(cuid())
+  childId String
+  userId  String
+  role    MemberRole
+  status  MemberStatus @default(active)
+
+  joinedAt        DateTime  @default(now())
+  removedAt       DateTime?
+  invitedByUserId String?
+
+  // ── 02 §7：PIN（scrypt 哈希）──────────────────────────────────
+  pinHash        String?
+  pinSetAt       DateTime?
+  /// 02 §7：连错 5 次锁定 15 分钟（计数落在成员位上，而非设备上 —— 见 06 §3 D3）
+  pinFailedCount Int       @default(0)
+  pinLockedUntil DateTime?
+
+  /// 02 §3 屏障三：成员级收紧。**只能更严、不能更松**（方向性约束）。
+  /// 形状：{ childCannotUndoCheckIn?, childCannotAddWish?, requireApprovalForBonusOver? }
+  restrictions Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 02 §1：同一人对同一孩子只有一个成员位。
+  @@unique([childId, userId])
+  @@index([userId, status])
+}
+
+/// 02 §7：服务端持有的 activeRole（**不信客户端**）。
+/// 客户端 storage 可被直接修改，服务端持有才能让「家长模式」成为真实的权限提升。
+model DeviceSession {
+  id       String @id @default(cuid())
+  deviceId String
+  childId  String
+  userId   String
+
+  /// 服务端权威。默认 child（最小权限默认，02 §7）。
+  activeRole MemberRole @default(child)
+
+  issuedAt   DateTime @default(now())
+  /// TTL 5 分钟，到期回落 child；每次 guardian 操作刷新（02 §7）。
+  expiresAt  DateTime
+  lastSeenAt DateTime @default(now())
+
+  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, childId])
+  @@index([expiresAt])
+}
+
+/// 推送 token（03 L3：双端目前零推送依赖，此表为 W6 预留）。
+model DeviceToken {
+  id       String         @id @default(cuid())
+  userId   String
+  childId  String?
+  platform DevicePlatform
+  token    String         @unique
+  active   Boolean        @default(true)
+
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  child Child? @relation(fields: [childId], references: [id], onDelete: SetNull)
+
+  @@index([userId, active])
+}
+
+// ═════════ 二、规则与账本（02 §5 · 本项目最不可妥协的部分） ═════════
+
+/// 积分规则（家长约定「做到什么 → 得多少分」）。
+/// 修 A2（`dailyLimit` 结构化）、A3、C9（软删除）、C10（可编辑，靠 currentVersion）、
+/// E15（`condition`/`dailyLimit` 升为结构字段，`detail` 降级为派生展示串，不再落库）。
+model PointRule {
+  id      String @id @default(cuid())
+  childId String
+
+  title      String
+  /// ★ 结构字段（原 `detail` 第一段）。03 E15：不再靠 `split(' · ')` 反解析。
+  condition  String
+  /// ★ 结构字段（原 `limitText`）。03 A2：频次必须是可运算、可校验的数字。
+  dailyLimit Int
+  /// 恒为正；奖惩由 direction 表达 —— 修 A1 的根源（`Math.abs()` 抹平负分）。
+  points     Int
+  direction  RuleDirection
+
+  icon  String
+  color String
+
+  /// 当前版本号。每次 update_rule 在**同一事务内** +1（02 §5.3）。
+  currentVersion Int @default(1)
+
+  // ── 软删除（03 C9）：可软删，90 天内可恢复；回收站只作用于「配置」 ──
+  status    RecordStatus @default(active)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child    Child              @relation(fields: [childId], references: [id], onDelete: Cascade)
+  versions PointRuleVersion[]
+  habits   Habit[]
+
+  @@index([childId, status])
+  @@index([childId, deletedAt])
+}
+
+/// ★ 规则版本（02 §5.3）—— **只增不删，永久保留**。
+///
+/// 为什么必须有：只有 `ruleId` 时，记录指向的是**已变形的规则**，
+/// 历史失去可解释性（02 §5.1 的反例：`+1` 的流水在规则改成 `+3` 后无法解释）。
+///
+/// 「规则被软删」与「版本被删除」是两件事：规则主体可软删，
+/// 版本永不删 —— 否则 `rec#1` 的 `(ruleId, ruleVersion)` 指向空，承诺失效（02 §5.6）。
+model PointRuleVersion {
+  id      String @id @default(cuid())
+  ruleId  String
+  version Int
+
+  // ── 全量真相（不可变快照）──────────────────────────────────────
+  title      String
+  condition  String
+  dailyLimit Int
+  points     Int
+  direction  RuleDirection
+
+  changedByUserId String
+  changedAt       DateTime @default(now())
+  changeNote      String?
+
+  rule      PointRule     @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  /// ★ 规则版本必须能回答「谁改的」—— 与 03 C11（变更不可追溯）同类要求。
+  ///   onDelete: Restrict：审计性记录不得因删除用户而丢失作者。
+  changedBy User          @relation(fields: [changedByUserId], references: [id], onDelete: Restrict)
+  records   PointRecord[]
+
+  /// 02 §5.3。★ 此唯一约束同时被 PointRecord 的复合外键引用 →
+  /// **I3 不变量（每条记录的 (ruleId, ruleVersion) 必能命中版本行）由数据库强制**。
+  @@unique([ruleId, version])
+}
+
+/// ★ 积分流水（账本，**append-only**）。
+///
+/// - 撤销用**冲正**（`reversesRecordId`），绝不删改 —— 修 B7
+/// - `balanceAfter` 是账本对账基准 —— 修 B6
+/// - `operatorUserId` / `operatorRole` 记录真实操作人 —— 修 A4（原先硬编码「家长记录」）
+/// - `titleSnapshot` 完整不截断 —— 修 B8
+/// - 客户端 `subtitle` **不落库**：它由 `source + createdAt + note` 派生 —— 修 A4/E19
+model PointRecord {
+  id      String @id @default(cuid())
+  childId String
+
+  // ── 引用层：定位「当时的规则完整是什么」（02 §5.1）──────────────
+  ruleId         String?
+  ruleVersion    Int?
+  /// ★ 复合外键 → PointRuleVersion(ruleId, version)。
+  /// 数据库层保证 I3：不存在指向空版本的历史记录。
+  ruleVersionRef PointRuleVersion? @relation(fields: [ruleId, ruleVersion], references: [ruleId, version], onDelete: Restrict)
+
+  habitId String?
+  wishId  String?
+
+  // ── 快照层（反规范化，仅为列表渲染不必 join；与版本行不一致时以版本行为准）──
+  titleSnapshot      String
+  conditionSnapshot  String?
+  dailyLimitSnapshot Int?
+  costSnapshot       Int?
+
+  // ── 变动本身 ───────────────────────────────────────────────────
+  /// 正数为加分，负数为扣分。**不可变**。
+  pointsDelta Int
+  category    RecordCategory
+  source      RecordSource
+  note        String         @default("")
+
+  /// 真实操作人（`system` / `correction` 时可为空）—— 修 A4
+  operatorUserId String?
+  operatorRole   MemberRole?
+
+  /// ★ 记完之后的余额 —— 修 B6。缺失即无法对账。
+  balanceAfter Int
+
+  /// 幂等键：防重放重复扣分（02 §4.4）
+  idempotencyKey String?
+
+  // ── 冲正关系（02 §5.7 I6）──────────────────────────────────────
+  reversesRecordId String?
+  reversesRecord   PointRecord?  @relation("RecordReversal", fields: [reversesRecordId], references: [id], onDelete: Restrict)
+  reversedBy       PointRecord[] @relation("RecordReversal")
+  reversedAt       DateTime?
+
+  /// 由哪条审批执行产生（02 §4.3 的 `executedRecordId` 的另一侧）
+  executedByApproval ApprovalRequest?
+
+  createdAt DateTime @default(now())
+
+  child    Child  @relation(fields: [childId], references: [id], onDelete: Restrict)
+  habit    Habit? @relation(fields: [habitId], references: [id], onDelete: Restrict)
+  wish     Wish?  @relation(fields: [wishId], references: [id], onDelete: Restrict)
+  operator User?  @relation("RecordOperator", fields: [operatorUserId], references: [id], onDelete: Restrict)
+
+  /// 幂等键在**同一孩子**范围内唯一。
+  @@unique([childId, idempotencyKey])
+  /// I2 对账：按 (childId, createdAt) 排序滚动求和 == balanceAfter。
+  @@index([childId, createdAt])
+  @@index([childId, source, createdAt])
+  @@index([ruleId, ruleVersion])
+}
+
+/// 可打卡的习惯（首页「今天的习惯」）。
+///
+/// 修 A2（`dailyLimit`）、A3（`checked` 派生）、C9（软删除）、E17（`limitText`/`doneText` 派生）。
+/// ★ **不落库**的字段：`checked` / `doneText` / `limitText` ——
+/// 03 E17：它们一旦被外部写入就必然与真实状态脱节；改为由 `dailyLimit` + 今日计数计算。
+model Habit {
+  id      String @id @default(cuid())
+  childId String
+
+  /// 由某条规则采纳而来（`addHabitFromRule`）。采纳即复制，与规则脱钩后仍保留来源。
+  sourceRuleId String?
+
+  title      String
+  points     Int
+  condition  String
+  /// 修 A2：频次上限是数字，不是自由文本。
+  dailyLimit Int
+
+  icon  String
+  color String
+
+  status    RecordStatus @default(active)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child      Child         @relation(fields: [childId], references: [id], onDelete: Cascade)
+  sourceRule PointRule?    @relation(fields: [sourceRuleId], references: [id], onDelete: SetNull)
+  records    PointRecord[]
+
+  @@index([childId, status])
+}
+
+/// 心愿（可兑换的奖励）。
+/// 修 C9（软删除）、E16（`coverStyle` 稳定枚举替换 `backgroundIndex` 数组下标）。
+model Wish {
+  id      String @id @default(cuid())
+  childId String
+
+  title      String
+  /// 兑换所需积分（**快照进审批 payload 的 `costSnapshot`**，见 02 §4.3）
+  cost       Int
+  emoji      String
+  /// ★ 03 E16：稳定枚举。原先 `wishes.length % 4` 会因删项而漂移/撞色。
+  coverStyle WishCoverStyle @default(A)
+
+  redeemed   Boolean   @default(false)
+  redeemedAt DateTime?
+
+  status    RecordStatus @default(active)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child   Child         @relation(fields: [childId], references: [id], onDelete: Cascade)
+  records PointRecord[]
+
+  @@index([childId, status])
+}
+
+// ═════════ 三、审批 / 邀请 / 合规 / 审计 / 模板 ═════════
+
+/// 02 §4.1：审批请求状态机（5 个终态 + pending）。
+///
+/// 为什么必须有 `invalidated`（02 §4.2）：审批是**跨时间**的，家长 3 小时后才点同意时
+/// 前提可能已消失（心愿被删、积分被花掉、规则被删、成员被移出）。
+/// 与 `rejected`（人的决定）语义不同，UI 上必须区分 —— 否则家长「莫名其妙背锅」。
+model ApprovalRequest {
+  id              String     @id @default(cuid())
+  childId         String
+  requesterUserId String
+  requesterRole   MemberRole
+
+  actionType ActionType
+  /// 动作参数**快照**。必须含 `costSnapshot`（02 §4.3）：
+  /// 否则家长同意时心愿价格已被改过，扣分金额与孩子申请时看到的不一致 —— 又一次账对不上。
+  payload    Json
+
+  status     ApprovalStatus @default(pending)
+  /// 仅 `invalidated` 时存在（02 §4.2）
+  autoReason AutoReason?
+
+  decidedByUserId String?
+  decidedAt       DateTime?
+  decisionNote    String?
+
+  /// TTL，默认 72h；到期由扫描任务置 `expired`（02 §4.3）。
+  expiresAt DateTime
+
+  /// 批准并执行后产出的流水（02 §4.3）。**1:1**，故 @unique。
+  executedRecordId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child          Child        @relation(fields: [childId], references: [id], onDelete: Cascade)
+  requester      User         @relation("ApprovalRequester", fields: [requesterUserId], references: [id], onDelete: Restrict)
+  decidedBy      User?        @relation("ApprovalDecider", fields: [decidedByUserId], references: [id], onDelete: Restrict)
+  executedRecord PointRecord? @relation(fields: [executedRecordId], references: [id], onDelete: Restrict)
+
+  @@index([childId, status, createdAt])
+  /// 供 TTL 扫描（02 §4.3）
+  @@index([status, expiresAt])
+}
+
+/// 02 §8：邀请码。★ 并发安全的要点在**使用侧**，不在表本身 ——
+/// 必须用单条条件 UPDATE（`used_count < max_uses` 与自增在同一语句内）原子占位，
+/// 而不是「先查后改」。参见 06-w0-report.md §3「待确认决策 D5」（§8 的示例 SQL 用了
+/// snake_case 列名，而本 schema 未使用 @map，需改写为带引号的 camelCase）。
+model InviteCode {
+  id      String     @id @default(cuid())
+  childId String
+  code    String     @unique
+  /// 不能给别人比自己更高的角色（02 §8）。
+  role    MemberRole
+
+  maxUses   Int
+  usedCount Int @default(0)
+
+  usedByUserId String?
+  usedAt       DateTime?
+
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  child     Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  createdBy User  @relation("InviteCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  usedBy    User? @relation("InviteUser", fields: [usedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([childId, revoked])
+  /// 原子占位语句的 WHERE 依赖 (code, expiresAt, revoked)
+  @@index([code, revoked, expiresAt])
+}
+
+/// 04 §5：监护人同意记录（合规前置）。
+///
+/// 必须放在引导第①步而非设置页：儿童个人信息的同意**必须在采集之前**取得，
+/// 而引导第②步就开始采集昵称 —— 放到设置页等于「先采集后征求」（04 §5）。
+model GuardianConsent {
+  id              String @id @default(cuid())
+  childId         String
+  grantedByUserId String
+
+  /// 协议版本号（《用户协议》《儿童个人信息保护规则》定稿后写入）
+  consentVersion String
+  status         ConsentStatus @default(granted)
+
+  grantedAt     DateTime  @default(now())
+  withdrawnAt   DateTime?
+  /// 不存原始 IP，只存哈希（最小化个人信息）
+  ipHash        String?
+  userAgentHash String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child     Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  grantedBy User  @relation(fields: [grantedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([childId, status])
+}
+
+/// 03 C11：变更审计（追加式）。
+/// - 与业务写入**同一事务**；DB 层 `REVOKE UPDATE, DELETE`（见 prisma/sql/900_ledger_revoke.sql）
+/// - 白名单模型：规则 / 心愿 / 习惯 / 成员 / 同意
+model AuditLog {
+  id      String  @id @default(cuid())
+  childId String?
+
+  actorUserId String?
+  actorRole   MemberRole?
+  /// 动作标识，如 `point_rule.update`（02 §5.3 第 4 步）
+  action      String
+  targetType  String
+  targetId    String?
+
+  /// 变更前后快照（JSON）
+  before Json?
+  after  Json?
+
+  /// 02 §7：角色切换需记录 deviceId
+  deviceId String?
+  ipHash   String?
+
+  createdAt DateTime @default(now())
+
+  child Child? @relation(fields: [childId], references: [id], onDelete: SetNull)
+  actor User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([childId, createdAt])
+  @@index([targetType, targetId])
+  @@index([action, createdAt])
+}
+
+/// 站内通知（01 §5.1）。
+/// ★ 01 §4：推送/通知**必须排除在账本事务之外** ——
+/// 推送服务不可靠，若放进事务，一次模板消息失败会回滚一笔已经成立的加分。
+model Notification {
+  id              String      @id @default(cuid())
+  childId         String
+  recipientUserId String?
+  recipientRole   MemberRole?
+
+  /// 类型标识，如 `approval.approved` / `approval.invalidated` / `reward.redeemed`
+  type    String
+  title   String
+  body    String
+  payload Json?
+
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  child     Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  recipient User? @relation(fields: [recipientUserId], references: [id], onDelete: SetNull)
+
+  @@index([recipientUserId, readAt])
+  @@index([childId, createdAt])
+}
+
+/// 02 §4.4：幂等记录。防「双击同意」「网络重试」导致的重复扣分。
+/// 与 `PointRecord.idempotencyKey` 配合：唯一约束在数据库层兜底，不能只靠应用判断。
+model IdempotencyRecord {
+  id      String  @id @default(cuid())
+  /// 幂等键由客户端生成（UUID），同一孩子范围内唯一
+  key     String
+  childId String
+  userId  String?
+
+  actionType  ActionType
+  /// 请求体哈希：同一键但不同请求体 → 视为冲突，不得静默复用
+  requestHash String?
+
+  responseStatus Int?
+  responseBody   Json?
+  /// 本次执行产出的流水 id
+  recordId       String?
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, key])
+  @@index([expiresAt])
+}
+
+/// 04 §3：平台级规则模板库（不属任何 child）。
+///
+/// ★ 「采纳模板 = 复制而非引用」：采纳时生成 `PointRule` + `PointRuleVersion v1`，
+/// 采纳后**即与模板脱钩**。否则平台改一条模板会静默改动所有家庭的规则（04 §3）。
+///
+/// ★ 内容量（P2 决策，用户已裁定）：**不追求 90 条**，以当前设计内容为模板开发。
+model RuleTemplate {
+  id   String @id @default(cuid())
+  slug String @unique
+
+  title      String
+  /// 结构字段（04 §3）：'专注 25 分钟'
+  condition  String
+  /// 结构字段（04 §3）：2
+  dailyLimit Int
+  /// 恒为正（04 §4 约束：单条 ≤ 10）
+  points     Int
+  direction  RuleDirection
+
+  icon  String
+  color String
+
+  ageBand    AgeBand
+  focusAreas String[] @default([])
+
+  isSystem   Boolean      @default(true)
+  sortWeight Int          @default(0)
+  status     RecordStatus @default(active)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, ageBand, sortWeight])
+}

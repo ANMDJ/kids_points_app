@@ -1,0 +1,95 @@
+@use '../../styles/vars.scss' as *;
+
+// 固定一屏：顶部标题栏 + 筛选行 + 中间滚动列表
+.kp-record {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+// Row 外包一层 EdgeInsets.symmetric(horizontal: 20)
+.kp-record__filters {
+  display: flex;
+  align-items: center;
+  padding: 0 f2r(20);
+}
+
+// 横向滚动的筛选标签（scroll-view 需要 white-space: nowrap）
+.kp-record__chips {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.kp-record__chips-row {
+  display: inline-flex;
+  align-items: center;
+}
+
+// 每个标签右侧留 8（对应 Flutter 的 Padding(right: 8)）
+.kp-record__chip {
+  display: inline-block;
+  margin-right: f2r(8);
+}
+
+.kp-record__count {
+  margin-left: f2r(8);
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+// SizedBox(height: 14)
+.kp-record__gap {
+  height: f2r(14);
+}
+
+.kp-record__list {
+  flex: 1;
+  height: 0;
+  overflow: hidden;
+}
+
+// ListView padding = EdgeInsets.fromLTRB(20, 0, 20, 24)
+.kp-record__list-content {
+  padding: 0 f2r(20) f2r(24);
+}
+
+// 日期分组标题：第一组不要上间距，每组下面留 10
+.kp-record__day {
+  padding: f2r(8) 0 f2r(10);
+}
+
+.kp-record__day.is-first {
+  padding-top: 0;
+}
+
+.kp-record__day-label {
+  font-size: f2r(13);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+// 空状态：整块垂直居中
+.kp-record__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-record__empty-emoji {
+  font-size: f2r(40);
+  line-height: 1.2;
+}
+
+.kp-record__empty-gap {
+  height: f2r(10);
+}
+
+.kp-record__empty-text {
+  font-size: f2r(13.5);
+  color: $text-secondary;
+}

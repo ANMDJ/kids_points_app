@@ -1,0 +1,43 @@
+@use '../../styles/vars.scss' as *;
+
+// =============================================================================
+// 页面外壳：固定渐变背景 + 内容层（右下角叶子见 components/LeafDecoration）
+// =============================================================================
+
+.kp-gradient {
+  position: relative;
+  min-height: 100vh;
+}
+
+.kp-gradient__bg {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  background: linear-gradient(180deg, $page-top 0%, $page-bottom 100%);
+}
+
+.kp-gradient__content {
+  position: relative;
+  z-index: 2;
+}
+
+.kp-gradient__content.is-safe-top {
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top);
+}
+
+.kp-gradient__content.is-safe-bottom {
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.kp-gradient__footer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+}

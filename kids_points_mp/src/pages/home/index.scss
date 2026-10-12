@@ -1,0 +1,53 @@
+@use '../../styles/vars.scss' as *;
+
+// 对应 Flutter ListView padding: EdgeInsets.fromLTRB(20, 18, 20, 28)
+.kp-home {
+  padding: f2r(18) f2r(20) f2r(28);
+}
+
+.kp-home__caption {
+  display: block;
+  font-size: f2r(13.5);
+  letter-spacing: f2r(0.4);
+  color: $text-secondary;
+  text-align: center;
+}
+
+.kp-home__points {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: f2r(4);
+}
+
+.kp-home__points-text {
+  font-size: f2r(46);
+  font-weight: 800;
+  line-height: 1.06;
+  color: $text-primary;
+}
+
+.kp-home__jar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-home__progress {
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-home__button {
+  margin-top: f2r(10);
+}
+
+.kp-home__hint {
+  margin-top: f2r(10);
+  text-align: center;
+}
+
+.kp-home__hint-text {
+  font-size: f2r(11);
+  color: $text-hint;
+}

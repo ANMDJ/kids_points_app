@@ -1,0 +1,92 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-wish {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: f2r(9);
+  background-color: $surface;
+  border: 1px solid $divider;
+  border-radius: f2r(18);
+  box-shadow: 0 #{f2r(6)} #{f2r(16)} $shadow;
+}
+
+.kp-wish__illustration {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: f2r(14);
+  overflow: hidden;
+}
+
+.kp-wish__emoji {
+  font-size: f2r(46);
+  line-height: 1;
+}
+
+.kp-wish__sparkle {
+  position: absolute;
+  top: f2r(6);
+  right: f2r(8);
+  font-size: f2r(14);
+  line-height: 1;
+}
+
+.kp-wish__redeemed {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.63);
+  border-radius: f2r(14);
+}
+
+.kp-wish__redeemed-label {
+  font-size: f2r(13);
+  font-weight: 800;
+  color: $text-secondary;
+}
+
+.kp-wish__title {
+  display: -webkit-box;
+  margin-top: f2r(8);
+  overflow: hidden;
+  font-size: f2r(11.5);
+  line-height: 1.35;
+  color: $text-primary;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.kp-wish__bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: f2r(6);
+}
+
+.kp-wish__cost {
+  display: flex;
+  align-items: baseline;
+}
+
+.kp-wish__cost-value {
+  font-size: f2r(15);
+  font-weight: 800;
+  color: $orange;
+}
+
+.kp-wish__cost-unit {
+  margin-left: f2r(2);
+  font-size: f2r(10.5);
+  color: $orange;
+}

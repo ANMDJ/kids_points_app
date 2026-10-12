@@ -1,0 +1,54 @@
+@use './styles/vars.scss' as *;
+
+// 全局基础样式：与 Flutter ThemeData / Scaffold 背景保持一致。
+page {
+  background-color: $page-top;
+  color: $text-primary;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue',
+    Helvetica, 'Microsoft YaHei', Arial, sans-serif;
+  font-size: f2r(13.5);
+  line-height: 1.45;
+}
+
+view,
+text,
+input,
+textarea,
+image {
+  box-sizing: border-box;
+}
+
+// 单行省略
+.kp-ellipsis {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+// 多行省略（心愿卡标题最多 3 行）
+.kp-clamp-2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.kp-clamp-3 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+// 点击态（对应 Flutter 的 InkWell 水波纹，小程序里用轻微压暗代替）
+.kp-press-active {
+  opacity: 0.72;
+}
+
+// 页面内容底部给自定义导航栏留出的空间（导航栏 64 + 安全区）
+.kp-nav-space {
+  height: f2r(64);
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}

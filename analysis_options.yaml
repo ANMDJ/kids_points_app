@@ -1,0 +1,18 @@
+# 这里不依赖 flutter_lints 包，保证离线 `flutter pub get` 也能通过。
+analyzer:
+  errors:
+    # 保留可读性相关的建议，但不阻断构建
+    unused_element: info
+    unused_field: info
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+
+linter:
+  rules:
+    - prefer_const_constructors
+    - prefer_final_locals
+    - avoid_print
+    - unnecessary_this
+    - use_super_parameters

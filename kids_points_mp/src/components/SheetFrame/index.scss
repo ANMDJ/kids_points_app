@@ -1,0 +1,128 @@
+@use '../../styles/vars.scss' as *;
+
+.kp-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 900;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 220ms ease-out, visibility 220ms ease-out;
+}
+
+.kp-sheet.is-visible {
+  visibility: visible;
+  opacity: 1;
+}
+
+.kp-sheet__mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background-color: rgba(51, 56, 47, 0.35);
+}
+
+.kp-sheet__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  // 底部安全区（全面屏）由 JS 算好后内联覆盖 padding-bottom：
+  // calc() 里混用 rpx 与 env() 会被 postcss-calc 判定为非法单位，直接把声明丢掉。
+  padding: f2r(14) f2r(20) f2r(18);
+  background-color: $surface;
+  border-top-left-radius: f2r(26);
+  border-top-right-radius: f2r(26);
+  transform: translateY(100%);
+  transition: transform 300ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.kp-sheet.is-visible .kp-sheet__panel {
+  transform: translateY(0);
+}
+
+.kp-sheet__handle {
+  width: f2r(40);
+  height: f2r(4);
+  margin: 0 auto f2r(12);
+  background-color: $divider;
+  border-radius: f2r(999);
+}
+
+.kp-sheet__header {
+  display: flex;
+  align-items: flex-start;
+}
+
+.kp-sheet__titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.kp-sheet__title {
+  font-size: f2r(17);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-sheet__subtitle {
+  display: block;
+  margin-top: f2r(4);
+  font-size: f2r(12);
+  color: $text-secondary;
+}
+
+.kp-sheet__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(36);
+  height: f2r(36);
+  margin-left: f2r(8);
+}
+
+.kp-sheet__close:active {
+  opacity: 0.6;
+}
+
+.kp-sheet__body {
+  margin-top: f2r(10);
+}
+
+.kp-sheet__scroll {
+  max-height: 62vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.kp-sheet__content {
+  padding-bottom: f2r(2);
+}
+
+.kp-sheet__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: f2r(16);
+  background-image: linear-gradient(to bottom, #d8f1ba, #b4e08c);
+}
+
+.kp-sheet__action:active {
+  opacity: 0.85;
+}
+
+.kp-sheet__action-icon {
+  display: flex;
+  align-items: center;
+  margin-right: f2r(8);
+}
+
+.kp-sheet__action-label {
+  font-size: f2r(15);
+  font-weight: 700;
+  color: $primary-text;
+}

@@ -1,0 +1,48 @@
+@use '../../styles/vars.scss' as *;
+
+// 固定一屏：标题栏 + 提示语 + 中间滚动列表 + 底部“新增规则”
+.kp-rule {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+// Padding(20, 4, 20, 12) + Align(centerLeft)
+.kp-rule__hint {
+  display: flex;
+  padding: f2r(4) f2r(20) f2r(12);
+}
+
+.kp-rule__hint-text {
+  font-size: f2r(11.5);
+  color: $text-hint;
+}
+
+.kp-rule__list {
+  flex: 1;
+  height: 0;
+  overflow: hidden;
+}
+
+// ListView padding = EdgeInsets.fromLTRB(20, 0, 20, 12)
+.kp-rule__list-content {
+  padding: 0 f2r(20) f2r(12);
+}
+
+.kp-rule__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-rule__empty-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+// Padding(20, 8, 20, 14)：底部安全区由页面外层内边距负责
+.kp-rule__footer {
+  padding: f2r(8) f2r(20) f2r(14);
+}
