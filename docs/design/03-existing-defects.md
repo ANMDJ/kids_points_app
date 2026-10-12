@@ -16,7 +16,7 @@
 > 该守卫已用 **7 份被篡改的台账副本**证明能变红（见 `docs/design/README.md`「CI 步骤」）。
 > **行号口径**：本表「证据锚点」列的 27 条 `文件:行号` 已于 2026-10-12 逐条复核（**全部命中，且指向代码而非注释**）；
 > 但下方 A–E 各节正文里的 `文件:行号` 是**当时快照、随后已漂移** —— 例：§E18 正文写 `store.ts:67-70` 的
-> `resetToSeed()`，实际已在 **84 行**。**引用代码请 `grep` 符号名，不要依赖行号。**
+> `resetToSeed()`，**C1 落地后已在 119 行**。**引用代码请 `grep` 符号名，不要依赖行号。**
 > **教训**：核实"某字段 / 某能力是否存在"**必须读模型或文件，不许只靠字段名搜索**
 > —— 该错误已记录在 `06` §3.2（曾据此误判 D3"未落地"）。
 >
@@ -37,21 +37,24 @@
 | C10 | 规则无法编辑（无 `updateRule`） | 🔴 高 | ❌ **未修** | 前端无 `updateRule`（后端 `PointRule.currentVersion` 已备） |
 | C11 | 无 `AuditLog`，变更不可追溯 | 🟠 中 | ❌ **未修** | 前端无任何 audit 引用（后端 `AuditLog` 表已建） |
 | D12 | 测试器花括号嵌套错位 → **CI 假通过** | 🔴 高 | ✅ **已修** | `honesty:probe` 4/4；夹具 `__fixtures__/d12-misnested-runner.js` 证明**能失败** |
-| D13 | 测试断言把缺陷固化为"正确行为" | 🔴 高 | ⚠️ **已改 9/10** | 1–9 条已改写（`修 A5` / `修 B8` / "被拒绝时余额不变"等注释在案）；**第 10 条仍断言首启 124 分 / 324 好习惯**（`run.js:83-90`、`test/app_test.dart:18-20`）→ 与 E18 同批处置 |
+| D13 | 测试断言把缺陷固化为"正确行为" | 🔴 高 | ✅ **已修（10/10）** | 1–9 条已改写；**第 10 条已随 C1 改写**：`run.js:409` / `test/app_test.dart:290` 断言「首启为空态」，演示数据降级为**显式夹具**（`run.js:58`、`test/app_test.dart:19`）→ 见 §E18 现状 |
 | E15 | `detail` 自由字符串，靠 `split(' · ')` 反解析 | 🟠 中 | ❌ **未修** | `store.ts:372`、`app_store.dart:348` 仍在 `rule.detail.split(' · ')` |
 | E16 | `backgroundIndex` 用数组下标，删项后配色漂移 | 🟡 低 | ❌ **未修** | `store.ts:321`、`app_store.dart:296`：`wishes.length % 4` |
 | E17 | `doneText` / `limitText` 是被外部写入的展示文案 | 🟠 中 | ❌ **未修** | `types.ts:36 doneText: string`、`habit.dart:32 final String doneText;` 仍可写 |
-| E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ⚠️ **半修** | 守卫**已加**（`store.ts:25 ALLOW_DEMO_RESET`、`app_store.dart:19-21 allowDemoReset`）**但 `store.ts:50-52 constructor(){ this.reset() }` 仍无条件执行** → 首启假数据仍在 |
+| E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ✅ **已修** | 闸门＝**可测判据 + 编译期常量**：`store.ts:27 demoResetAllowed()` / `store.ts:38 ALLOW_DEMO_RESET`、`app_store.dart:22` / `app_store.dart:29`；首启空态：`store.ts:71 constructor(){ this.resetToEmpty() }`、`app_store.dart:41`；seed 只剩 `resetToSeed()` 一个显式入口（`store.ts:119`、`app_store.dart:96`） |
 | E19 | 小标题串接方式不统一 | 🟡 低 | ✅ **已修** | `types.ts:155` / `point_record.dart:52`：`recordSubtitle()` 派生 |
 
-**合计：✅ 已修 8 · ⚠️ 半修 1（E18）· ⚠️ 已改 9/10 1（D13）· ❌ 未修 8（A2 / A3 / C9 / C10 / C11 / E15 / E16 / E17）**
+**合计：✅ 已修 10 · ❌ 未修 8（A2 / A3 / C9 / C10 / C11 / E15 / E16 / E17）**
+
+> 已无「半修」与「已改 9/10」两档：**C1 把 E18 与 D13 一起收口**（台账那两行改口的**那一刻就被守门人拦下过** ——
+> 见 §0.1 第 2 条；这正是阶段 A5 建这个守卫的目的）。
 
 ### 0.1 本次对账暴露的 6 处问题（本条目的由来）
 
 | # | 问题 | 处置 |
 |---|---|---|
 | 1 | **本表状态列长期失实**：8 条早已修好却标"待修" | ✅ 已重写（本表） |
-| 2 | **E18 是真实生产缺陷**；且第 10 条测试断言**把它固化成了"正确行为"** | → 阶段 C1（E18 第二半 + 该断言同批改） |
+| 2 | **E18 是真实生产缺陷**；且第 10 条测试断言**把它固化成了"正确行为"** | ✅ 已修（阶段 C1：E18 第二半 + 该断言同批改） |
 | 3 | `01` §3 承诺"接 API 不改 UI"**过宽**（图标字段不成立，见 D9） | → 阶段 A4 收敛 |
 | 4 | 本文档验收门写的 `node .tmp_test/run.js` **缺工作目录前提** | ✅ 已修（见文末"验收门"） |
 | 5 | `kids_points_mp/.gitignore` 的 `.tmp_test/` 整目录忽略会**吞掉 4 个手写脚本** | ✅ 已修（建仓时拆弹，见设计文档索引「Git 记录规范」） |
@@ -60,9 +63,9 @@
 **修复顺序（按真实状态重排）**：
 
 ```
-D12 ✅ → A1 ✅ → A5 ✅ → A4 ✅ → B6 ✅ → B7 ✅ → B8 ✅ → E19 ✅ → D13 (9/10)
+D12 ✅ → A1 ✅ → A5 ✅ → A4 ✅ → B6 ✅ → B7 ✅ → B8 ✅ → E19 ✅ → D13 (10/10) ✅
    ↓ 剩余（阶段 C，每步先落"能失败"的用例）
-C1  E18 第二半（构造函数不得无条件 reset ＋ 第 10 条断言改写）
+C1 ✅ E18 第二半（构造函数不再无条件 reset ＋ 第 10 条断言改写）—— 已落地
 C2  E15 ＋ E17 ＋ A2 ＋ A3      （双端同步：结构字段化，展示串降级为派生）
 C3  E16                        （WishCoverStyle 稳定枚举替换数组下标）
 C4  C9 / C10 / C11             （软删除 ＋ 规则编辑 ＋ AuditLog）
@@ -357,7 +360,7 @@ EXIT_CODE=0
 | 7 | `test/app_test.dart:75` `expect(rewardCount, 5)` | A5 | `expect(rewardCount, 4)` |
 | 8 | `test/app_test.dart:80-87` `'扣分不会把余额扣成负数'` | B6 | 扣分被拒绝；`amountText` 与余额变动一致 |
 | 9 | `test/app_test.dart:55-65` `'撤销打卡会扣回积分并移除今天的表扬记录'` | B7 | 改为断言**冲正记录**存在 |
-| 10 | `run.js` / `app_test.dart` 首启 124 分 / 324 好习惯 | E18 | 生产路径首启为 **0 分 0 记录**；seed 仅作测试夹具 |
+| 10 | `run.js` / `app_test.dart` 首启 124 分 / 324 好习惯 | E18 | ✅ 已改写：生产路径首启为 **0 分 0 记录**；seed 降级为**显式**测试夹具（`seededStore()`）—— 见 §E18「现状」 |
 
 ---
 
@@ -414,8 +417,8 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 
 | 端 | 位置 |
 |---|---|
-| Taro | `store.ts:67-70` `resetToSeed()` 为公开方法；`store.ts:56-64` `reset()` 被构造函数调用 |
-| Flutter | `app_store.dart:50-53`；`app_store.dart:31-47` |
+| Taro | （W0 快照）`store.ts:67-70` `resetToSeed()` 为公开方法；`store.ts:56-64` `reset()` 被构造函数调用 |
+| Flutter | （W0 快照）`app_store.dart:50-53`；`app_store.dart:31-47` |
 
 两个问题：
 1. **`reset()` 在构造函数中调用** → 应用**首启即为假数据**（124 分 / 324 好习惯 / 4 次奖励 / "萌新铲屎官的小可爱"）。
@@ -425,6 +428,24 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 **修复**：
 - `resetToSeed` 移出生产构建（`process.env.NODE_ENV !== 'production'` 守卫 / Flutter `kDebugMode` 守卫）
 - 首启改为**空态 + 引导流程**（见 `04`）；seed 保留为**测试夹具**（`buildSeedData()` 仍供测试调用）
+
+**现状（2026-10-12 阶段 C1 已修）**：
+
+- **闸门拆成两件东西**：可测判据 `demoResetAllowed()`（`store.ts:27`、`app_store.dart:22`）
+  ＋ 由它派生的编译期常量 `ALLOW_DEMO_RESET` / `allowDemoReset`（`store.ts:38`、`app_store.dart:29`）。
+  理由：判据若只活在常量里，测试就只能靠"碰巧跑在开发环境"才验证得到它 ——
+  现在两套测试都能**确定性地**断言 release 必须被拒，而生产构建仍整段可 DCE。
+- **生产不可达有两层证明**：① 判据断言 `demoResetAllowed('production') === false`；
+  ② 以 `NODE_ENV=production` **重新加载真实模块**，断言 `ALLOW_DEMO_RESET === false`、
+  `resetToSeed()` 返回 false 且真实数据没被清空（`run.js:433` 起）。
+- **首启＝空态**：构造函数只调 `resetToEmpty()`（`store.ts:71/89`、`app_store.dart:41/57`），
+  seed 降级为**显式夹具**、唯一入口是 `resetToSeed()`（`store.ts:119`、`app_store.dart:96`）。
+- **回归用例（先验证过"能失败"）**：`run.js:409`「E18 首启必须为空态」、
+  `test/app_test.dart:290`「首启为空态：不预置任何演示数据」，
+  外加界面层 `test/app_test.dart:331`「首启空态不崩」；修前分别报
+  `首启不得预置 124 分假数据` 与编译期缺符号 `demoResetAllowed`。
+- ⚠️ **仍待补**：首启的**引导流程**（`04`）尚未开发 —— 当前空态直接渲染空列表
+  （已有界面冒烟用例保证不崩），引导流程属后续阶段。
 
 ---
 
@@ -458,8 +479,8 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 | W0 原计划 | 现实（2026-10-12） |
 |---|---|
 | D12 ✅ 已修，安全网就绪 | ✅ 一致。且 `honesty:probe` 已用夹具 `d12-misnested-runner.js` 证明它**能失败** |
-| D13 断言改写 ← 必须与缺陷修复同批，否则测试会「正确地失败」 | ⚠️ **只做到 9/10**。第 10 条（首启 124 分 / 324 好习惯）与 **E18** 绑定，必须同批完成 |
-| A1 → A5 → A4 → B6 → B7 → B8 → **E18** → E19 → E16（双端同步，纯前端可控） | ✅ A1 / A5 / A4 / B6 / B7 / B8 / E19 已落地；⚠️ **E18 只完成「守卫」那一半**（构造函数仍无条件 `reset()`）；❌ **E16 未动** |
+| D13 断言改写 ← 必须与缺陷修复同批，否则测试会「正确地失败」 | ✅ **10/10 已收口**（C1）：第 10 条（首启 124 分 / 324 好习惯）与 **E18** 同批改写为「首启空态 ＋ seed 显式夹具」 |
+| A1 → A5 → A4 → B6 → B7 → B8 → **E18** → E19 → E16（双端同步，纯前端可控） | ✅ A1 / A5 / A4 / B6 / B7 / B8 / E19 已落地；✅ **E18 已收口**（C1：守卫 ＋ 首启空态，构造函数不再无条件 `reset()`）；❌ **E16 未动**（下一阶段 C3） |
 | E15/E17 → A2/A3 → C9/C10/C11（依赖 W0 schema 变更，与后端一并落地） | ❌ 全部未动。但 **W0 schema 已就绪**（`deletedAt` / `status` / `PointRule.currentVersion` / `AuditLog` 表）→ **已不构成阻塞**，只剩前端改造 |
 
 **验收门（W0 exit）**：

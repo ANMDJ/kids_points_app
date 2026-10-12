@@ -36,15 +36,26 @@
 | B6 | 扣分静默截断 → **账本不平** | ✅ | ✅ |
 | B7 | `undoCheckIn` 物理删除流水 → 改为**冲正** | ✅ | ✅ |
 | B8 | 兑换标题被 `shortTitle` **永久截断** | ✅ | ✅ |
-| E18 | `resetToSeed` 生产可达 | ✅ | ✅ |
+| E18 | `resetToSeed` 生产可达 **＋ 首启即假数据**（C1 补第二半） | ✅ | ✅ |
 | E19 | 小标题串接方式不统一 | ✅ | ✅ |
-| D13 | 测试断言把缺陷固化为"正确行为" | ✅ | ✅ |
+| D13 | 测试断言把缺陷固化为"正确行为"（C1 补齐 10/10 条） | ✅ | ✅ |
 
 验证结果：
-- `node kids_points_mp/.tmp_test/run.js` → **14/14 PASS，`EXIT_CODE=0`**
+- `node kids_points_mp/.tmp_test/run.js` → **16/16 PASS，`EXIT_CODE=0`**（产物由下方流水线第 1 步现编，见「陈旧产物」说明）
 - `npx tsc --noEmit -p tsconfig.json` → **`EXIT=0`**
-- `flutter test` → **21/21 PASS**（`TEST_EXIT=0`）
-- `flutter analyze` → 0 error / 0 warning（6 条 info 为既有基线）
+- `flutter test` → **24/24 PASS**（`TEST_EXIT=0`；`app_test.dart` **23** ＋ `widget_test.dart` **1**）
+  —— 修前 **21/21**，C1 新增 3 条（首启空态 ×2 ＋ 空态渲染冒烟 ×1）。**别只数 `app_test.dart`**：`flutter test` 会跑 `test/` 下全部文件。
+- `flutter analyze` → **0 issue，`EXIT=0`**（C1 顺手清零了 6 条既有 `prefer_const_constructors` info：
+  **info 也会让 `flutter analyze` 退出码为 1** —— 于是它与 `analysis_options.yaml` 里"不阻断构建"的注释互相矛盾，
+  流水线的 `flutter analyze && flutter test` 更是根本串不起来。已实测：清零后 exit 0、测试仍 24/24）
+
+**阶段 C1（2026-10-12）新增的回归用例 —— 全部先验证过"能失败"再让它们变绿**：
+- `E18 首启必须为空态：不预置任何演示数据`（Taro）／`首启空态（修 E18）`（Flutter）
+  —— 修前分别报 `首启不得预置 124 分假数据` 与符号缺失；**种子数据降级为显式夹具** `seededStore()`
+  （靠构造函数偷偷种数据，正是 E18 本身）。
+- `E18 生产构建不可达：判据语义 + 真实生产模块双证` —— ①纯函数 `demoResetAllowed('production') === false`；
+  ②以 `NODE_ENV=production` **重新加载真实模块**，断言 `ALLOW_DEMO_RESET === false`、
+  且 `resetToSeed()` 返回 `false` **且不清空真实数据**。守卫因此**可被测试**，不再依赖"恰好跑在开发机上"。
 
 ### ✅ W0 已执行（`06` §5 附真实命令与退出码）
 
@@ -154,14 +165,30 @@ npm run ci
 （**后者正是那 8 条失实的病**）。**证据只取代码、注释不算**：否则注释里那句「原先 `xxx` 如何错」
 会让两侧同时被骗（本工具首跑就因此误报 2 条：A1 / A5）。已用 **7 份被篡改的台账副本**证明能变红
 （谎称已修 / 谎称未修 / 删行 / 伪造新增行 / 改表头列名），并以「调换列顺序仍正确」证明它**按表头定位列**、不写死列号。
+**C1 又加了 7 个反例重验一遍**（谎称未修 / 谎称半修 / 删行 / 伪造新增行 / 改表头列名 ＋ **2 处代码回退**：
+把首启改回注入 seed、把守卫常量改回字面恒真）—— 7/7 全部变红，还原后重回全绿（`.git/_tools/c1-tamper.mjs`，可复跑）。
+> 反例本身也要证伪：第一版「伪造新增行」反例隔了空行，被解析器按"表格已结束"正确忽略 —— **绿的是我的反例，不是守卫**；
+> 改成紧贴末行后才复现。写反例时踩的坑，恰好说明"绿"必须能被解释。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：
 
 ```
-1. 前端 Taro:    npx tsc --noEmit -p tsconfig.json && node .tmp_test/run.js
+1. 前端 Taro:    npx tsc --noEmit -p tsconfig.json          # 类型检查（不产出）
+                  npx tsc src/data/{store,seed,types}.ts src/utils/color.ts \
+                      --outDir .tmp_test/dist --module commonjs --target es2017 \
+                      --strictNullChecks --esModuleInterop --skipLibCheck   # run.js 要 require 的产物
+                  node .tmp_test/run.js
 2. 前端 Flutter: flutter analyze && flutter test
 3. 后端:         cd backend && npm run ci
 ```
+
+⚠️ **两处诚实标注（都不掩盖）**：
+1. **第 1–2 步尚未接进 `npm run ci`** —— CI 平台未定（见待办 3），且前端产物不入库。
+   补偿：`defects:check` 已把 C1 的**代码形态**（构造函数空态初始化、守卫由 `demoResetAllowed()` 派生）
+   与**回归用例是否还在**一并纳入对账 —— 修复被回退或用例被删，后端 CI 仍会红（已用 2 个代码回退反例验证）。
+2. **`run.js` 跑的是 `dist/` 产物，不是 `.ts` 源码** —— 产物陈旧就会"用旧代码考满分"。
+   所以第 1 步的编译**必须现跑**（本条流水线如此写）；C1 收尾时删掉 `.tmp_test/dist` 全量重编复跑，
+   16/16 与源码一致后才敢签字。
 
 **一条不会失败的测试器等于没有测试器** —— D12 正是如此被瞒过很久的。
 同理：**一个永远不会失败的检查项、一句永远不报错的 `REVOKE`、一个从不生效的权限收回，

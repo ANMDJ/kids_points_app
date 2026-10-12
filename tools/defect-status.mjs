@@ -202,11 +202,21 @@ const DEFECTS = [
     A.lack(F_STORE, /auditLog|AuditLog/, '已出现审计痕迹'),
   ] },
   { id: 'D12', status: 'fixed', what: '测试器花括号嵌套错位 → CI 假通过', custom: checkD12 },
-  { id: 'D13', status: 'd13-partial', what: '测试断言把缺陷固化为「正确行为」', assertions: () => [
+  { id: 'D13', status: 'fixed', what: '测试断言把缺陷固化为「正确行为」', assertions: () => [
     A.has(T_RUNNER, /手动加分不应增加奖励次数/, 'run.js 缺少改写后的 A5 断言'),
     A.has(F_TESTS, /被拒绝时余额不变/, 'app_test.dart 缺少改写后的 B6 断言'),
-    A.has(T_RUNNER, /seed: 124 积分 \/ 324 好习惯/, 'run.js 第 10 条断言已消失 → 若已随 E18 改掉，台账应改为「已修」'),
-    A.has(F_TESTS, /expect\(store\.profile\.goodHabitCount, 324\)/, 'app_test.dart 第 10 条断言已消失'),
+    // 第 10 条（`首启 124 分 / 324 好习惯`）已随 E18 改写为「首启空态 + seed 是显式夹具」
+    A.has(T_RUNNER, /E18 首启必须为空态：不预置任何演示数据/, 'run.js 第 10 条断言未改写为「首启空态」'),
+    A.has(F_TESTS, /首启为空态：不预置任何演示数据/, 'app_test.dart 第 10 条断言未改写为「首启空态」'),
+    // 演示数据必须降级为**显式夹具**：靠构造函数偷偷种数据，就是 E18 本身
+    A.has(T_RUNNER, /function seededStore\(\)/, 'run.js 的演示数据未降级为显式夹具'),
+    A.has(F_TESTS, /AppStore seededStore\(\)/, 'app_test.dart 的演示数据未降级为显式夹具'),
+    // 反回退：不得再出现「直接构造出来的 store + 断言首启 124 分」这种固化写法
+    A.lack(
+      F_TESTS,
+      /AppStore\(\)(?:(?!resetToSeed)[\s\S]){0,200}?expect\(store\.points, 124\)/,
+      '又出现「首启即 124 分」的固化断言（回退）'
+    ),
   ] },
   { id: 'E15', status: 'unfixed', what: 'detail 自由串靠 split 反解析', assertions: () => [
     A.has(T_STORE, /rule\.detail\.split\(' · '\)/, '已不再 split 解析 → 缺陷可能已修，台账应更新'),
@@ -220,10 +230,29 @@ const DEFECTS = [
     A.has(T_TYPES, /doneText: string/, 'doneText 已不是可写字段 → 缺陷可能已修，台账应更新'),
     A.has(F_HABIT, /final String doneText;/, 'doneText 已不是可写字段'),
   ] },
-  { id: 'E18', status: 'partial', what: 'resetToSeed 生产可达 + 首启即假数据', assertions: () => [
-    A.has(T_STORE, /ALLOW_DEMO_RESET/, '缺少生产守卫'),
-    A.has(F_STORE, /fromEnvironment/, '缺少生产守卫'),
-    A.has(T_STORE, /constructor\(\)\s*\{[\r\n]+\s*this\.reset\(\)/, '构造函数已不再无条件 reset() → 若确已修，台账应改为「已修」并同步 01/06'),
+  { id: 'E18', status: 'fixed', what: 'resetToSeed 生产可达 + 首启即假数据', assertions: () => [
+    // ① 生产闸门：编译期常量（可 DCE）+ 可测判据（两侧必须同源，漂移即红）
+    A.has(T_STORE, /export function demoResetAllowed\(/, '缺少可测的生产判据'),
+    A.has(T_STORE, /ALLOW_DEMO_RESET = demoResetAllowed\(\)/, '守卫常量必须由判据派生（否则两处语义会漂移）'),
+    A.has(T_STORE, /if \(!ALLOW_DEMO_RESET\) return false/, 'resetToSeed 未被生产闸门拦住'),
+    A.has(F_STORE, /bool demoResetAllowed\(\{bool isRelease = _isReleaseBuild\}\)/, '缺少可测的生产判据'),
+    A.has(F_STORE, /const bool allowDemoReset = !_isReleaseBuild;/, '守卫常量必须由判据派生'),
+    A.has(F_STORE, /if \(!allowDemoReset\) return false;/, 'resetToSeed 未被生产闸门拦住'),
+    // ② 首启空态：构造函数只走空态，不再注入 seed（E18 第二半）
+    A.has(T_STORE, /constructor\(\) \{\s*this\.resetToEmpty\(\)/, '构造函数未改为空态初始化'),
+    A.lack(T_STORE, /constructor\(\)[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
+    A.has(T_STORE, /resetToEmpty\(\): void \{[\s\S]{0,200}?this\.points = 0/, '空态初始化不完整'),
+    A.has(F_STORE, /AppStore\(\) \{\s*_resetToEmpty\(\);/, '构造函数未改为空态初始化'),
+    A.lack(F_STORE, /AppStore\(\)[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
+    A.has(F_STORE, /_resetToEmpty\(\) \{[\s\S]{0,200}?_points = 0;/, '空态初始化不完整'),
+    A.has(T_STORE, /resetToSeed\(\): boolean \{[\s\S]{0,120}?this\.applySeed\(\)/, 'seed 不是唯一显式入口'),
+    // ③ 回归用例：两套测试都必须有「能失败」的首启空态 / 生产不可达断言
+    A.has(T_RUNNER, /E18 首启必须为空态：不预置任何演示数据/, 'run.js 缺少首启空态回归用例'),
+    A.has(T_RUNNER, /demoResetAllowed\('production'\), false/, 'run.js 缺少生产判据断言'),
+    A.has(T_RUNNER, /prod\.ALLOW_DEMO_RESET, false/, 'run.js 缺少「真实生产模块拒绝」断言'),
+    A.has(F_TESTS, /首启为空态：不预置任何演示数据/, 'app_test.dart 缺少首启空态回归用例'),
+    A.has(F_TESTS, /demoResetAllowed\(isRelease: true\), isFalse/, 'app_test.dart 缺少 release 判据断言'),
+    A.has(F_TESTS, /allowDemoReset, demoResetAllowed\(\)/, '缺少「闸门常量与判据不得漂移」断言'),
   ] },
   { id: 'E19', status: 'fixed', what: '小标题串接方式不统一', assertions: () => [
     A.has(T_TYPES, /export function recordSubtitle/, '缺少 recordSubtitle()'),
