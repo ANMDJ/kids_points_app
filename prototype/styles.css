@@ -1,0 +1,1874 @@
+/* ==========================================================================
+   积分小管家 · 微信小程序高保真原型 —— 样式
+   --------------------------------------------------------------------------
+   色值 / 数值与 kids_points_mp/src/styles/vars.scss 一一对应：
+     · Taro 侧 f2r(N)  →  本文件 Npx（画布 400 宽，两端完全等价）
+     · $primary-deep   →  var(--primary-deep)
+   布局尺寸也逐条对齐各页面 .scss（注释里标注了对应的设计稿来源）。
+   ========================================================================== */
+
+:root {
+  /* 页面背景渐变（AppColors.pageTop / pageBottom） */
+  --page-top: #fdfff9;
+  --page-bottom: #f1f8e9;
+
+  /* 主色（薄荷绿系） */
+  --primary: #b7e28f;
+  --primary-deep: #7fbf55;
+  --primary-soft: #e8f6da;
+  --primary-text: #3f6b2e;
+  --nav-inactive: #b9c2b0;
+
+  /* 文字 */
+  --text-primary: #33382f;
+  --text-secondary: #909889;
+  --text-hint: #b6bdb0;
+
+  /* 中性 */
+  --surface: #ffffff;
+  --chip-bg: #f4f6f0;
+  --divider: #eef2e8;
+  --shadow: rgba(92, 138, 60, 0.1);
+  --soft-shadow: rgba(127, 191, 85, 0.2);
+
+  /* 功能色 */
+  --orange: #f5a24b;
+  --point-gain: #6fbf4b;
+  --point-spend: #e9834b;
+
+  /* 奶油黄（心愿卡 / 头像） */
+  --cream: #fff8e6;
+  --cream-deep: #fbedc4;
+
+  /* 小程序外壳尺寸 */
+  --status-h: 44px; /* 状态栏（自定义导航栏时页面内容的下边界） */
+  --nav-h: 64px; /* AppBottomNav 的 .kp-nav__row */
+  --safe-bottom: 20px; /* 全面屏底部安全区（含 Home Indicator） */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 26px;
+  min-height: 100vh;
+  padding: 28px 24px 40px;
+  background: #eef1ea;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue',
+    Helvetica, 'Microsoft YaHei', Arial, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* ==========================================================================
+   1. 左侧原型导航（评审工具，不属于小程序本体）
+   ========================================================================== */
+
+.proto-nav {
+  flex: none;
+  width: 232px;
+  padding: 18px 16px;
+  border: 1px solid #dde4d6;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 30px rgba(70, 95, 55, 0.1);
+}
+
+.proto-nav__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.proto-nav__sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.proto-nav__meta {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-hint);
+}
+
+.proto-nav__group {
+  margin-top: 14px;
+}
+
+.proto-nav__label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+}
+
+.proto-nav__item {
+  display: block;
+  width: 100%;
+  margin-bottom: 5px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--primary-text);
+  background: var(--chip-bg);
+}
+
+.proto-nav__item:hover {
+  background: var(--primary-soft);
+}
+
+.proto-nav__item.is-active {
+  font-weight: 700;
+  background: var(--primary);
+}
+
+.proto-nav__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  color: var(--primary-text);
+  cursor: pointer;
+}
+
+.proto-nav__reset {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--text-primary);
+}
+
+.proto-nav__hint {
+  margin: 14px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   2. 手机外壳 + 微信小程序外壳（状态栏 / 胶囊按钮）
+   ========================================================================== */
+
+.stage {
+  flex: none;
+}
+
+.phone {
+  padding: 12px;
+  border-radius: 56px;
+  background: #1c2119;
+  box-shadow: 0 26px 60px rgba(50, 70, 40, 0.28), inset 0 0 0 2px #39412f;
+}
+
+.phone__screen {
+  position: relative;
+  width: 400px;
+  height: 866px;
+  overflow: hidden;
+  border-radius: 44px;
+  background: linear-gradient(180deg, var(--page-top) 0%, var(--page-bottom) 100%);
+  color: var(--text-primary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+/* 状态栏（真实机型上由系统绘制；原型里手绘以保证“像小程序”）
+   z-index 取 2000：真机的状态栏与胶囊是**原生 UI**，连弹窗遮罩也盖不住它 */
+.mp-status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--status-h);
+  padding: 4px 22px 0 28px;
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.mp-status__right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mp-status__ico {
+  width: 17px;
+  height: 11px;
+  fill: var(--text-primary);
+}
+
+.mp-status__ico:last-child {
+  width: 25px;
+}
+
+.mp-batt__body {
+  fill: none;
+  stroke: var(--text-primary);
+  stroke-opacity: 0.4;
+  stroke-width: 1;
+}
+
+/* 微信胶囊按钮（navigationStyle: custom 时由微信浮在右上角，同样是原生层） */
+.mp-capsule {
+  position: absolute;
+  top: 48px;
+  right: 8px;
+  z-index: 2001;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  width: 87px;
+  height: 32px;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.mp-capsule__dots {
+  margin-top: -4px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+.mp-capsule__line {
+  width: 1px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.mp-capsule__circle {
+  width: 15px;
+  height: 15px;
+  border: 1.4px solid var(--text-primary);
+  border-radius: 50%;
+}
+
+body.no-capsule .mp-capsule {
+  display: none;
+}
+
+/* 右下角手绘叶子（LeafDecoration，随页面固定不动） */
+.kp-leaf {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 132px;
+  height: 132px;
+  opacity: 0.85;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 132 132'%3E%3Cpath d='M15.84 126.72Q55.44 87.12 87.12 23.76' fill='none' stroke='%23dcefc8' stroke-width='2.9' stroke-linecap='round'/%3E%3Cpath d='M60.72 79.2Q124.08 71.28 126.72 29.04Q76.56 36.96 60.72 79.2Z' fill='%23dcefc8'/%3E%3Cpath d='M44.88 100.32Q2.64 97.68 5.28 60.72Q39.6 66 44.88 100.32Z' fill='%23dcefc8'/%3E%3C/svg%3E");
+}
+
+body.no-leaves .kp-leaf {
+  display: none;
+}
+
+/* 积分罐插画（PointsJar：180 × 196 设计稿，首页用 168 宽 → 183 高） */
+.kp-jar {
+  display: block;
+  width: 168px;
+  height: 183px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 196'%3E%3Cdefs%3E%3ClinearGradient id='b' gradientUnits='userSpaceOnUse' x1='30' y1='70' x2='150' y2='182'%3E%3Cstop offset='0' stop-color='%23FFFFFF' stop-opacity='0.949'/%3E%3Cstop offset='1' stop-color='%23EFF8E7'/%3E%3C/linearGradient%3E%3ClinearGradient id='c' gradientUnits='userSpaceOnUse' x1='57' y1='99' x2='123' y2='165'%3E%3Cstop offset='0' stop-color='%23FCEBA6'/%3E%3Cstop offset='1' stop-color='%23F3D878'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cellipse cx='90' cy='186' rx='58' ry='8' fill='%237FBF55' fill-opacity='0.133'/%3E%3Crect x='30' y='70' width='120' height='112' rx='26' fill='url(%23b)'/%3E%3Crect x='30' y='70' width='120' height='112' rx='26' fill='none' stroke='%23CFE6BC' stroke-width='2.6'/%3E%3Crect x='42' y='90' width='12' height='60' rx='6' fill='%23FFFFFF' fill-opacity='0.6'/%3E%3Crect x='57' y='99' width='66' height='66' rx='30' fill='url(%23c)'/%3E%3Crect x='67' y='106' width='18' height='15' rx='9' fill='%23FFFFFF' fill-opacity='0.5'/%3E%3Ccircle cx='76' cy='131' r='4' fill='%235F4B22'/%3E%3Ccircle cx='104' cy='131' r='4' fill='%235F4B22'/%3E%3Ccircle cx='64' cy='142' r='6.5' fill='%23E88E6A' fill-opacity='0.2'/%3E%3Ccircle cx='116' cy='142' r='6.5' fill='%23E88E6A' fill-opacity='0.2'/%3E%3Cpath d='M82 143Q90 152 98 143' fill='none' stroke='%237A5A22' stroke-width='2.4' stroke-linecap='round'/%3E%3Crect x='36' y='60' width='108' height='18' rx='10' fill='%239CCC79'/%3E%3Crect x='30' y='40' width='120' height='30' rx='14' fill='%23A9D98A'/%3E%3Crect x='30' y='40' width='120' height='30' rx='14' fill='none' stroke='%238CC468' stroke-width='2.4'/%3E%3Crect x='46' y='28' width='88' height='18' rx='10' fill='%23C9ECAB'/%3E%3Cpath d='M90 40Q78 22 62 26Q72 42 90 40Z' fill='%238CC468'/%3E%3C/svg%3E");
+}
+
+/* 空态：列表区变成纵向 flex，空状态块才能整块居中（对应 .kp-record__empty 的 flex:1） */
+.kp-record__list.is-empty,
+.kp-rule__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.kp-record__list.is-empty .kp-record__list-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 图标：SVG 由 app.js 注入（background-image，支持任意颜色） */
+.kp-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+}
+
+/* ==========================================================================
+   3. 页面骨架（GradientPage）
+   --------------------------------------------------------------------------
+   小程序里 5 个页面各自是一屏，这里用 .kp-screen 叠在一起、按 .is-active 切换。
+   背景渐变画在 .phone__screen 上（对应 .kp-gradient__bg 的 fixed 铺满视口）。
+   ========================================================================== */
+
+.kp-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: none;
+  overflow: hidden;
+}
+
+.kp-screen.is-active {
+  display: block;
+}
+
+/* 带底部导航的三个 Tab 页：整页可滚动，底部给导航栏留位 */
+.kp-screen[data-screen='home'],
+.kp-screen[data-screen='profile'] {
+  overflow-y: auto;
+  padding-top: var(--status-h);
+  padding-bottom: calc(var(--nav-h) + var(--safe-bottom));
+  scrollbar-width: none;
+}
+
+.kp-screen[data-screen='home']::-webkit-scrollbar,
+.kp-screen[data-screen='profile']::-webkit-scrollbar,
+.kp-wishlist__scroll::-webkit-scrollbar,
+.kp-record__chips::-webkit-scrollbar,
+.kp-record__chips::-webkit-scrollbar,
+.kp-record__list::-webkit-scrollbar,
+.kp-rule__list::-webkit-scrollbar,
+.kp-sheet__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 二级页（积分记录 / 积分规则）：固定一屏，内部列表自己滚 */
+.kp-screen[data-screen='record'],
+.kp-screen[data-screen='rule'] {
+  padding-top: var(--status-h);
+}
+
+/* 页面内容底部给自定义导航栏让出的空间（.kp-nav-space） */
+.kp-nav-space {
+  height: var(--nav-h);
+}
+
+/* ==========================================================================
+   4. 首页
+   ========================================================================== */
+
+/* ListView padding: EdgeInsets.fromLTRB(20, 18, 20, 28) */
+.kp-home {
+  padding: 18px 20px 28px;
+}
+
+.kp-home__caption {
+  display: block;
+  font-size: 13.5px;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.kp-home__points {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.kp-home__points-text {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1.06;
+  color: var(--text-primary);
+}
+
+.kp-home__jar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-home__progress {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.kp-home__button {
+  margin-top: 10px;
+}
+
+.kp-home__hint {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.kp-home__hint-text {
+  font-size: 11px;
+  color: var(--text-hint);
+}
+
+/* 小节标题（PageHeader.SectionTitle） */
+.kp-section-title {
+  display: flex;
+  align-items: center;
+  padding-bottom: 12px;
+}
+
+.kp-section-title__text {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.kp-section-title__trailing {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* ==========================================================================
+   5. 卡片 / 习惯卡 / 主按钮
+   ========================================================================== */
+
+.kp-card {
+  background-color: var(--surface);
+  box-shadow: 0 8px 18px var(--shadow);
+}
+
+.kp-card.is-border {
+  border: 1px solid var(--divider);
+}
+
+.kp-card:active {
+  opacity: 0.92;
+}
+
+/* 习惯卡（AppCard padding [14,13] → 13px 14px，radius 18，marginBottom 12） */
+.kp-habit {
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 13px 14px;
+  border-radius: 18px;
+  user-select: none;
+}
+
+.kp-habit__row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-habit__check {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  border: 1px solid #e1e6d9;
+  border-radius: 50%;
+  background-color: #f1f3ed;
+}
+
+.kp-habit__check.is-done {
+  border: none;
+  background-color: var(--primary-deep);
+}
+
+.kp-habit__body {
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+}
+
+.kp-habit__title {
+  display: block;
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kp-habit__subtitle {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kp-habit__amount {
+  margin-left: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--point-gain);
+}
+
+/* 主操作按钮（SoftButton） */
+.kp-soft-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 52px;
+  border-radius: 26px;
+  background-image: linear-gradient(180deg, #d8f1ba 0%, #b4e08c 100%);
+  box-shadow: 0 8px 16px var(--soft-shadow);
+}
+
+.kp-soft-button:active {
+  opacity: 0.85;
+}
+
+.kp-soft-button__label {
+  margin-left: 8px;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--primary-text);
+}
+
+/* 底部导航（AppBottomNav：白底 + 上圆角 + 上投影 + Home Indicator） */
+.kp-nav {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  background-color: var(--surface);
+  border-top-left-radius: 22px;
+  border-top-right-radius: 22px;
+  box-shadow: 0 -6px 20px var(--shadow);
+}
+
+.kp-nav.is-hidden {
+  display: none;
+}
+
+.kp-nav__row {
+  display: flex;
+  align-items: center;
+  height: var(--nav-h);
+}
+
+.kp-nav__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-nav__item:active {
+  opacity: 0.72;
+}
+
+.kp-nav__label {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--nav-inactive);
+}
+
+.kp-nav__item.is-active .kp-nav__label {
+  font-weight: 700;
+  color: var(--primary-deep);
+}
+
+.mp-home-indicator {
+  width: 134px;
+  height: 5px;
+  margin: 7px auto 8px;
+  border-radius: 999px;
+  background: rgba(51, 56, 47, 0.22);
+}
+
+/* ==========================================================================
+   6. 心愿单
+   ========================================================================== */
+
+.kp-wishlist {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding-top: var(--status-h);
+  padding-bottom: calc(var(--nav-h) + var(--safe-bottom));
+  overflow: hidden;
+}
+
+/* 标题栏（Flutter SizedBox(height: 56) 里的 Row） */
+.kp-wishlist__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 56px;
+  padding: 0 20px;
+}
+
+.kp-wishlist__header .kp-icon {
+  margin-left: 6px;
+}
+
+.kp-wishlist__title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.kp-wishlist__spacer {
+  flex: 1;
+}
+
+.kp-wishlist__caption {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.kp-wishlist__points {
+  margin-left: 4px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--point-gain);
+}
+
+.kp-wishlist__scroll {
+  flex: 1;
+  height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+/* 列表内边距：底部预留悬浮按钮的位置（FAB 高 52 + 边距 20） */
+.kp-wishlist__content {
+  padding: 12px 20px 72px;
+}
+
+.kp-wishlist__grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.kp-wishlist__cell {
+  margin-bottom: 14px;
+}
+
+.kp-wishlist__tail {
+  height: 18px;
+}
+
+/* FAB 固定在导航栏上方 */
+.kp-wishlist__fab {
+  position: absolute;
+  right: 20px;
+  bottom: calc(var(--nav-h) + 20px + var(--safe-bottom));
+  z-index: 4;
+}
+
+/* 心愿卡（WishCard）：固定宽高比 0.62，由 app.js 计算像素尺寸 */
+.kp-wish {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: 9px;
+  border: 1px solid var(--divider);
+  border-radius: 18px;
+  background-color: var(--surface);
+  box-shadow: 0 6px 16px var(--shadow);
+  user-select: none;
+}
+
+.kp-wish__illustration {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.kp-wish__emoji {
+  font-size: 46px;
+  line-height: 1;
+}
+
+.kp-wish__sparkle {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.kp-wish__redeemed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background-color: rgba(255, 255, 255, 0.63);
+}
+
+.kp-wish__redeemed-label {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-secondary);
+}
+
+.kp-wish__title {
+  display: -webkit-box;
+  margin-top: 8px;
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-primary);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.kp-wish__bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.kp-wish__cost {
+  display: flex;
+  align-items: baseline;
+}
+
+.kp-wish__cost-value {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--orange);
+}
+
+.kp-wish__cost-unit {
+  margin-left: 2px;
+  font-size: 10.5px;
+  color: var(--orange);
+}
+
+/* 小胶囊标签（Pills.SmallPill） */
+.kp-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background-color: var(--chip-bg);
+}
+
+.kp-pill.is-filled {
+  background-color: #c6e8ac;
+}
+
+.kp-pill__label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.kp-pill.is-filled .kp-pill__label {
+  color: var(--primary-text);
+}
+
+.kp-pill:active {
+  opacity: 0.8;
+}
+
+/* 悬浮“新增心愿”（FloatingAddButton：收起＝正圆，展开＝整行胶囊） */
+.kp-fab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  width: 360px;
+  height: 52px;
+  border-radius: 26px;
+  background-image: linear-gradient(to bottom, #d8f1ba, #b4e08c);
+  box-shadow: 0 8px 16px var(--soft-shadow);
+  transition: width 340ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    box-shadow 340ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.kp-fab:not(.is-expanded) {
+  width: 52px;
+  box-shadow: 0 10px 22px 1px rgba(107, 174, 72, 0.3);
+}
+
+.kp-fab:active {
+  opacity: 0.85;
+}
+
+.kp-fab__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 340ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    margin 340ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.kp-fab__icon.is-collapsed {
+  transform: scale(1.16);
+}
+
+.kp-fab__label {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 15.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--primary-text);
+  opacity: 0;
+  transition: max-width 340ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 140ms ease-out;
+}
+
+.kp-fab__label.is-visible {
+  max-width: 160px;
+  padding: 0 6px 0 0;
+  opacity: 1;
+  transition: max-width 340ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 340ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+/* ==========================================================================
+   7. 我的
+   ========================================================================== */
+
+/* ListView padding: EdgeInsets.fromLTRB(20, 22, 20, 0) */
+.kp-profile {
+  padding: 22px 20px 0;
+}
+
+.kp-profile__head {
+  display: flex;
+  align-items: center;
+}
+
+/* 圆形头像：奶油色渐变 + 主色描边 */
+.kp-profile__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 62px;
+  height: 62px;
+  border: 2px solid var(--primary);
+  border-radius: 50%;
+  background-image: linear-gradient(135deg, var(--cream), var(--cream-deep));
+}
+
+.kp-profile__avatar:active {
+  opacity: 0.85;
+}
+
+.kp-profile__avatar-emoji {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.kp-profile__info {
+  flex: 1;
+  min-width: 0;
+  margin-left: 14px;
+}
+
+.kp-profile__name {
+  display: block;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kp-profile__id {
+  display: flex;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.kp-profile__id:active {
+  opacity: 0.7;
+}
+
+.kp-profile__id-text {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.kp-profile__id .kp-icon {
+  margin-left: 6px;
+}
+
+.kp-profile__stats {
+  margin-top: 20px;
+}
+
+.kp-profile__stat-row {
+  display: flex;
+  align-items: center;
+  padding: 18px 0;
+}
+
+.kp-profile__stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.kp-profile__stat-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.kp-profile__stat-label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.kp-profile__stat-divider {
+  width: 1px;
+  height: 38px;
+  background-color: var(--divider);
+}
+
+.kp-profile__menu-card {
+  margin-top: 16px;
+}
+
+/* 入口行：图标底色 36×36 圆角 11，右侧 chevron */
+.kp-profile__menu {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 15px 16px;
+}
+
+.kp-profile__menu:active {
+  opacity: 0.75;
+}
+
+.kp-profile__menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+
+.kp-profile__menu-label {
+  flex: 1;
+  min-width: 0;
+  margin-left: 14px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Divider(indent: 66)：左侧缩进对齐到文字 */
+.kp-profile__menu-divider {
+  height: 1px;
+  margin-left: 66px;
+  background-color: var(--divider);
+}
+
+.kp-profile__reset {
+  display: flex;
+  justify-content: center;
+  margin-top: 22px;
+}
+
+.kp-profile__reset:active {
+  opacity: 0.6;
+}
+
+.kp-profile__reset-text {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* ListView padding bottom 28：导航栏之外再留一点 */
+.kp-profile__gap {
+  height: 28px;
+}
+
+/* ==========================================================================
+   8. 二级页顶部栏 / 积分记录 / 积分规则
+   ========================================================================== */
+
+/* 顶部栏：左右各 56 固定宽度，标题居中（PageHeader） */
+.kp-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 50px;
+}
+
+.kp-header__side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 56px;
+}
+
+.kp-header__side--right {
+  justify-content: flex-end;
+}
+
+.kp-header__back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-left: 6px;
+  border-radius: 50%;
+}
+
+.kp-header__back:active {
+  opacity: 0.6;
+}
+
+.kp-header__center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-header__title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* 固定一屏：顶部标题栏 + 筛选行 + 中间滚动列表 */
+.kp-record,
+.kp-rule {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.kp-record__filters {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+}
+
+.kp-record__chips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.kp-record__chip {
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.kp-record__count {
+  margin-left: 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.kp-record__gap {
+  height: 14px;
+}
+
+.kp-record__list,
+.kp-rule__list {
+  flex: 1;
+  height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+/* ListView padding = EdgeInsets.fromLTRB(20, 0, 20, 24) */
+.kp-record__list-content {
+  padding: 0 20px 24px;
+}
+
+.kp-record__day {
+  padding: 8px 0 10px;
+}
+
+.kp-record__day.is-first {
+  padding-top: 0;
+}
+
+.kp-record__day-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.kp-record__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-record__empty-emoji {
+  font-size: 40px;
+  line-height: 1.2;
+}
+
+.kp-record__empty-text {
+  margin-top: 10px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}
+
+/* 规则页：提示语 + 列表 + 底部按钮 */
+.kp-rule__hint {
+  display: flex;
+  padding: 4px 20px 12px;
+}
+
+.kp-rule__hint-text {
+  font-size: 11.5px;
+  color: var(--text-hint);
+}
+
+.kp-rule__list-content {
+  padding: 0 20px 12px;
+}
+
+.kp-rule__footer {
+  flex: none;
+  padding: 8px 20px 14px;
+}
+
+/* ==========================================================================
+   9. 筛选胶囊 / 快捷标签 / 列表项
+   ========================================================================== */
+
+/* SoftChip（记录页的“全部 / 表扬 / 兑换 / 调整”） */
+.kp-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background-color: var(--chip-bg);
+}
+
+.kp-chip__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.kp-chip.is-selected {
+  background-color: var(--primary);
+}
+
+.kp-chip.is-selected .kp-chip__label {
+  font-weight: 700;
+  color: var(--primary-text);
+}
+
+/* QuickTag（“记一笔”里的常用事由 / 快选额度） */
+.kp-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background-color: var(--chip-bg);
+}
+
+.kp-tag__label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.kp-tag.is-selected {
+  border-color: var(--primary-deep);
+  background-color: var(--primary-soft);
+}
+
+.kp-tag.is-selected .kp-tag__label {
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+/* 记录流水 / 积分规则共用的列表项排版（RecordTile / RuleTile） */
+.kp-tile {
+  border-radius: 16px;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+}
+
+.kp-tile.is-rule {
+  padding: 13px 14px;
+}
+
+.kp-tile__row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-tile__icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.kp-tile__body {
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+}
+
+.kp-tile__title {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kp-tile__subtitle {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kp-tile__amount {
+  margin-left: 8px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+/* ==========================================================================
+   10. 表单控件（FormFields / PointsStepper / SegmentedToggle）
+   ========================================================================== */
+
+.kp-field__label {
+  display: block;
+  padding: 4px 0 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.kp-field__input {
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  outline: none;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background-color: var(--chip-bg);
+  resize: none;
+}
+
+.kp-field__input::placeholder {
+  font-size: 13.5px;
+  color: var(--text-hint);
+}
+
+.kp-field__input:focus {
+  border-color: var(--primary);
+}
+
+.kp-picker {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.kp-picker__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 0 10px 10px 0;
+  border: 1.6px solid transparent;
+  border-radius: 14px;
+  background-color: var(--chip-bg);
+}
+
+.kp-picker__item:active {
+  opacity: 0.75;
+}
+
+.kp-picker__item.is-selected-soft {
+  border-color: var(--primary-deep);
+  background-color: var(--primary-soft);
+}
+
+.kp-picker__emoji {
+  font-size: 22px;
+}
+
+.kp-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-stepper__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background-color: var(--primary-soft);
+}
+
+.kp-stepper__button.is-disabled {
+  background-color: var(--chip-bg);
+}
+
+.kp-stepper__button:active {
+  opacity: 0.7;
+}
+
+.kp-stepper__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+}
+
+.kp-stepper__value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--primary-text);
+}
+
+.kp-stepper__suffix {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.kp-segment {
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 999px;
+  background-color: var(--chip-bg);
+}
+
+.kp-segment__item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  border-radius: 999px;
+}
+
+.kp-segment__item.is-selected {
+  background-color: var(--surface);
+  box-shadow: 0 4px 10px var(--shadow);
+}
+
+.kp-segment__label {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.kp-segment__item.is-selected .kp-segment__label {
+  font-weight: 700;
+}
+
+.kp-segment__item.is-selected .kp-segment__label--gain {
+  color: var(--point-gain);
+}
+
+.kp-segment__item.is-selected .kp-segment__label--spend {
+  color: var(--point-spend);
+}
+
+/* ==========================================================================
+   11. 弹窗内的小工具（间距 / 标签组 / 提示条 / 操作行 / 回收站）
+   ========================================================================== */
+
+.kp-sheet-gap-xs {
+  height: 6px;
+}
+
+.kp-sheet-gap-10 {
+  height: 10px;
+}
+
+.kp-sheet-gap-sm {
+  height: 12px;
+}
+
+.kp-sheet-gap-md {
+  height: 14px;
+}
+
+.kp-sheet-gap-lg {
+  height: 16px;
+}
+
+.kp-sheet-gap-xxl {
+  height: 18px;
+}
+
+.kp-sheet-tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 -4px -8px;
+}
+
+.kp-sheet-tags__item {
+  margin: 0 4px 8px;
+}
+
+.kp-sheet-tags--center {
+  justify-content: center;
+}
+
+.kp-wish-tip {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background-color: var(--primary-soft);
+}
+
+.kp-wish-tip__text {
+  font-size: 12.5px;
+  color: var(--primary-text);
+}
+
+.kp-sheet-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 15px 16px;
+  border-radius: 14px;
+  background-color: var(--primary-soft);
+}
+
+.kp-sheet-row:active {
+  opacity: 0.8;
+}
+
+.kp-sheet-row__label {
+  margin-left: 10px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+.kp-sheet-row.is-danger {
+  background-color: #fdf1e9;
+}
+
+.kp-sheet-row.is-danger .kp-sheet-row__label {
+  color: var(--point-spend);
+}
+
+.kp-trash__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kp-trash__row {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background-color: var(--primary-soft);
+}
+
+.kp-trash__head {
+  flex: 1;
+  min-width: 0;
+}
+
+.kp-trash__title {
+  display: block;
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kp-trash__meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.kp-trash__actions {
+  display: flex;
+  margin-left: 10px;
+}
+
+.kp-trash__chip {
+  padding: 8px 14px;
+  border-radius: 999px;
+  background-color: var(--surface);
+}
+
+.kp-trash__chip + .kp-trash__chip {
+  margin-left: 8px;
+}
+
+.kp-trash__chip:active {
+  opacity: 0.8;
+}
+
+.kp-trash__chip.is-danger {
+  background-color: #fdf1e9;
+}
+
+.kp-trash__chip-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+.kp-trash__chip.is-danger .kp-trash__chip-text {
+  color: var(--point-spend);
+}
+
+.kp-trash__empty {
+  padding: 24px 0;
+  text-align: center;
+}
+
+.kp-trash__empty-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   12. 底部弹窗（SheetFrame：遮罩 + 圆角白底 + 标题 + 底部主按钮）
+   ========================================================================== */
+
+.kp-sheet-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 900;
+  pointer-events: none;
+}
+
+.kp-sheet {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 220ms ease-out, visibility 220ms ease-out;
+}
+
+.kp-sheet.is-visible {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.kp-sheet__mask {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(51, 56, 47, 0.35);
+}
+
+.kp-sheet__panel {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  padding: 14px 20px 18px;
+  border-top-left-radius: 26px;
+  border-top-right-radius: 26px;
+  background-color: var(--surface);
+  transform: translateY(100%);
+  transition: transform 300ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.kp-sheet.is-visible .kp-sheet__panel {
+  transform: translateY(0);
+}
+
+.kp-sheet__handle {
+  flex: none;
+  width: 40px;
+  height: 4px;
+  margin: 0 auto 12px;
+  border-radius: 999px;
+  background-color: var(--divider);
+}
+
+.kp-sheet__header {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+}
+
+.kp-sheet__titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.kp-sheet__title {
+  display: block;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.kp-sheet__subtitle {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.kp-sheet__close {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-left: 8px;
+}
+
+.kp-sheet__close:active {
+  opacity: 0.6;
+}
+
+.kp-sheet__body {
+  margin-top: 10px;
+}
+
+.kp-sheet__scroll {
+  max-height: 537px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.kp-sheet__content {
+  padding-bottom: 2px;
+}
+
+.kp-sheet__action {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: 50px;
+  margin-top: 16px;
+  border-radius: 26px;
+  background-image: linear-gradient(to bottom, #d8f1ba, #b4e08c);
+}
+
+.kp-sheet__action:active {
+  opacity: 0.85;
+}
+
+.kp-sheet__action .kp-icon {
+  margin-right: 8px;
+}
+
+.kp-sheet__action-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary-text);
+}
+
+/* ==========================================================================
+   13. 轻提示 / 二次确认
+   ========================================================================== */
+
+/* 对应 utils/toast.ts 的 toast（SnackBar：floating + 深绿底 + 白字） */
+.kp-toast {
+  position: absolute;
+  bottom: 124px;
+  left: 50%;
+  z-index: 1200;
+  max-width: 340px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  text-align: center;
+  color: #fff;
+  background-color: var(--primary-text);
+  box-shadow: 0 10px 24px rgba(63, 107, 46, 0.3);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 12px);
+  transition: opacity 200ms ease-out, transform 200ms ease-out,
+    visibility 200ms ease-out;
+  pointer-events: none;
+}
+
+.kp-toast.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+/* 对应 utils/toast.ts 的 confirm */
+.kp-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 200ms ease-out, visibility 200ms ease-out;
+}
+
+.kp-confirm.is-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.kp-confirm__mask {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(51, 56, 47, 0.35);
+}
+
+.kp-confirm__panel {
+  position: relative;
+  width: 280px;
+  padding: 22px 20px 16px;
+  border-radius: 22px;
+  background-color: var(--surface);
+  box-shadow: 0 20px 40px rgba(50, 70, 40, 0.2);
+}
+
+.kp-confirm__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.kp-confirm__text {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.kp-confirm__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.kp-confirm__btn {
+  flex: 1;
+  height: 44px;
+  border-radius: 22px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background-color: var(--chip-bg);
+}
+
+.kp-confirm__btn.is-primary {
+  color: var(--primary-text);
+  background-image: linear-gradient(180deg, #d8f1ba, #b4e08c);
+}

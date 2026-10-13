@@ -2,6 +2,9 @@
 
 > 本目录是**可评审的设计事实源**，所有条目均以现有代码中的真实方法/调用点为依据，非推测。
 
+> **需求侧文档**（面向「做什么、为什么做、做到什么程度算完成」）见 [`../PRD.md`](../PRD.md) ——
+> 它整合本目录 `01`–`11` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
+
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | [`01-overview.md`](./01-overview.md) | 系统概览、架构与信任边界、**事务边界**、模块边界、数据模型总览 | ✅ 完成 |
@@ -15,6 +18,8 @@
 | [`09-c5-handoff.md`](./09-c5-handoff.md) | **阶段 C5 交接单**（`D9` 图标名 ↔ `IconData`）：**三端类型表与「为什么光有映射表不够」**、落地清单（文件级）、**新增闸门 `icons:check` 的 7 项检查**、**闸门 12/12 ＋ 用例 3/3 ＋ 3/3 证伪**、**两次「反例假绿」的自我纠正**、遗留（编辑不可改图标 / 名单仍手抄） | ✅ C5 已收口 |
 | [`10-d1b-handoff.md`](./10-d1b-handoff.md) | **阶段 D-a 交接单**（`D1b` `relation` 升枚举 `RelationKind`）：**三处手抄契约 ＋ Prisma 默认 `DROP+ADD` 会静默清列这个坑**、落地清单、**新增闸门 `relation:check` 的 5 项检查**、**证伪 15 例（含 3 控制例）**、**三条自我纠正**、遗留（`D3b` / 首启引导 / 闸门 ④ 目前"无字面量可查"） | ✅ D-a 已收口 |
 | [`11-d3b-handoff.md`](./11-d3b-handoff.md) | **阶段 D-b 交接单**（`D3b` `ChildMember.restrictions` 裸 `Json` 定形）：**为什么定形只能落在应用层（Prisma 表达不了 `Json` 内部形状）**、权威源 ↔ 两处手抄的三处对账、落地清单、**新增闸门 `restrictions:check` 的 6 项检查**、**证伪 17 例（14 反例：每例"红且只点名自己" ＋ 3 控制例）**、**`02` §3 去掉开放标记 `...` 的口径修正**、遗留（写入路径未开工 / 闸门此刻"无字面量可查"） | ✅ D-b 已收口 |
+| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
+| [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
 
@@ -201,6 +206,18 @@
    `kids_points_mp/src` 里 `restrictions` 命中**各 0 处**；另 32 处命中在 `kids_points_mp/node_modules/**` 第三方类型里），
    闸门是**防将来**的：别把绿灯读成"屏障三已验收"。
    **下一步**：`04` 的**首启引导**（仍是空白）／ `tools/**` 工具职责地图。
+13. **原型的「同源契约」尚未被闸门守着**（2026-10-14 与 PRD / 原型同批入库时**如实记录**）：
+   `prototype/README.md` §3 声称配色 / 字号 / 图标 / 派生文案 / 初始数据「**全部照抄仓库**」，
+   但 `prototype/verify.mjs` **只读 `prototype/` 自身**（`index.html` ＋ `app.js`），断言的是**写死的期望值**；
+   而 `tools/icon-names-check.mjs` 只对账 **Taro / Flutter / 后端三份**手抄名单 —— **原型是第四份，不在覆盖内**。
+   实测四组未对账面（只读探针 `tools/_scratch/e1-probe.mjs` 可复跑）：① 图标 `ICONS` 键集合
+   （原型 29 项 = `kids_points_mp/src/components/Icon/icons.ts` 29 项，**当前相等但无人守**）；
+   ② 6 个派生文案函数（原型 ↔ `kids_points_mp/src/data/types.ts`，行号 L508/541/546/627/658/671）；
+   ③ 色板 `vars.scss` ↔ `prototype/styles.css`（24 vs 23，同名值全等，差 4 条待逐条判定）；
+   ④ PRD §7 的 **25 动作** ↔ `contracts/permission-matrix.json`（PRD 自称"唯一事实源"，实为第二份手抄）。
+   **下一步**：新增 `tools/prototype-check.mjs`（fail-closed ＋ 可逐条证伪）并接进 `npm run ci`（**11 → 12 步**），
+   同时把 `prototype/verify.mjs` 纳管。本轮的下手包：`tools/_scratch/next-session-e1.md`（**临时物，不入库**）。
+   另注：`prototype/app.js` 是**严格模式 IIFE、零对外出口**，派生函数外部调不到 —— 做行为对账前需先加只读出口。
 
 ### 文档缺陷修正记录
 

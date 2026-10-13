@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>积分小管家 · 微信小程序高保真原型</title>
+  <!--
+    ==========================================================================
+    积分小管家 —— 微信小程序高保真原型（可直接双击打开，无需构建）
+    --------------------------------------------------------------------------
+    与仓库内 kids_points_mp（Taro 4 + React 小程序）**同源**：
+      · 色值 / 字号 / 间距全部取自 kids_points_mp/src/styles/vars.scss
+      · 图标矢量取自 kids_points_mp/src/components/Icon/icons.ts（同一份 24×24 路径）
+      · 文案派生规则取自 kids_points_mp/src/data/types.ts（limitTextOf / ruleDetail …）
+      · 初始数据取自 kids_points_mp/src/data/seed.ts
+    画布 400 × 866：**1 设计 px = 1 CSS px**，所以 CSS 里的数字就是设计稿数字
+    （Taro 侧 f2r(20) ＝ 本文件 20px，因为在 400 宽的设备上两者完全等价）。
+    ==========================================================================
+  -->
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ================= 左侧原型导航（评审工具，不属于小程序本体）================= -->
+  <aside class="proto-nav">
+    <header>
+      <h1 class="proto-nav__title">积分小管家</h1>
+      <p class="proto-nav__sub">微信小程序 · 高保真原型</p>
+      <p class="proto-nav__meta">画布 400 × 866　·　1 设计 px = 1 CSS px</p>
+    </header>
+
+    <div class="proto-nav__group">
+      <p class="proto-nav__label">页面</p>
+      <button class="proto-nav__item is-active" data-goto="home">首页</button>
+      <button class="proto-nav__item" data-goto="wishlist">心愿单</button>
+      <button class="proto-nav__item" data-goto="profile">我的</button>
+      <button class="proto-nav__item" data-goto="record">积分记录</button>
+      <button class="proto-nav__item" data-goto="rule">积分规则</button>
+    </div>
+
+    <div class="proto-nav__group">
+      <p class="proto-nav__label">底部弹窗</p>
+      <button class="proto-nav__item" data-goto-sheet="quick-note">记一笔</button>
+      <button class="proto-nav__item" data-goto-sheet="add-wish">新增心愿</button>
+      <button class="proto-nav__item" data-goto-sheet="rule-form-new">新增规则</button>
+      <button class="proto-nav__item" data-goto-sheet="rule-form-edit">编辑规则</button>
+      <button class="proto-nav__item" data-goto-sheet="rule-actions">规则操作菜单</button>
+      <button class="proto-nav__item" data-goto-sheet="trash">回收站</button>
+    </div>
+
+    <div class="proto-nav__group">
+      <p class="proto-nav__label">显示开关</p>
+      <label class="proto-nav__check">
+        <input type="checkbox" id="toggle-capsule" checked /> 微信胶囊按钮
+      </label>
+      <label class="proto-nav__check">
+        <input type="checkbox" id="toggle-leaves" checked /> 叶子装饰
+      </label>
+      <button class="proto-nav__reset" id="reset-state">重置原型状态</button>
+    </div>
+
+    <p class="proto-nav__hint">
+      点习惯卡打卡 · 长按卡片撤销 · 心愿卡“兑换”实时扣分 · 长按心愿卡删除
+    </p>
+  </aside>
+
+  <!-- ============================== 手机 ============================== -->
+  <main class="stage">
+    <div class="phone">
+      <div class="phone__screen">
+        <!-- 状态栏 -->
+        <div class="mp-status">
+          <span class="mp-status__time">9:41</span>
+          <span class="mp-status__right">
+            <svg class="mp-status__ico" viewBox="0 0 18 12" aria-hidden="true">
+              <rect x="0" y="8" width="3" height="4" rx="1" />
+              <rect x="5" y="6" width="3" height="6" rx="1" />
+              <rect x="10" y="3.5" width="3" height="8.5" rx="1" />
+              <rect x="15" y="1" width="3" height="11" rx="1" />
+            </svg>
+            <svg class="mp-status__ico" viewBox="0 0 16 12" aria-hidden="true">
+              <path d="M8 11.2 5.4 8.6a3.7 3.7 0 0 1 5.2 0z" />
+              <path d="M2.6 5.8a7.7 7.7 0 0 1 10.8 0l-1.4 1.4a5.8 5.8 0 0 0-8 0z" />
+            </svg>
+            <svg class="mp-status__ico" viewBox="0 0 26 12" aria-hidden="true">
+              <rect x="0.5" y="0.5" width="22" height="11" rx="3.2" class="mp-batt__body" />
+              <rect x="2.2" y="2.2" width="18" height="7.6" rx="2" />
+              <rect x="24" y="4" width="1.6" height="4" rx="0.8" />
+            </svg>
+          </span>
+        </div>
+        <!-- 微信胶囊按钮（navigationStyle: custom） -->
+        <div class="mp-capsule" id="mp-capsule">
+          <span class="mp-capsule__dots">•••</span>
+          <span class="mp-capsule__line"></span>
+          <span class="mp-capsule__circle"></span>
+        </div>
+        <!-- 叶子装饰（GradientPage 右下角，全屏固定） -->
+        <div class="kp-leaf" id="leaf-layer"></div>
+
+        <!-- ====================== 首页 ====================== -->
+        <section class="kp-screen is-active" data-screen="home" id="screen-home">
+          <div class="kp-home">
+            <span class="kp-home__caption">当前可用积分</span>
+            <div class="kp-home__points">
+              <span class="kp-home__points-text" id="home-points">124</span>
+            </div>
+            <div class="kp-home__jar"><span class="kp-jar"></span></div>
+
+            <div class="kp-section-title">
+              <span class="kp-section-title__text">今天的习惯</span>
+              <span class="kp-section-title__trailing">
+                <span class="kp-home__progress" id="home-progress">已完成 1/3</span>
+              </span>
+            </div>
+
+            <div id="home-habits"></div>
+
+            <div class="kp-home__button">
+              <button class="kp-soft-button" data-open-sheet="quick-note">
+                <span class="kp-icon" data-icon="editNote" data-size="19" data-color="#3f6b2e"></span>
+                <span class="kp-soft-button__label">记一笔</span>
+              </button>
+            </div>
+            <div class="kp-home__hint">
+              <span class="kp-home__hint-text">点习惯卡片打卡 · 长按可撤销</span>
+            </div>
+            <div class="kp-nav-space"></div>
+          </div>
+        </section>
+
+        <!-- ====================== 心愿单 ====================== -->
+        <section class="kp-screen" data-screen="wishlist" id="screen-wishlist">
+          <div class="kp-wishlist">
+            <div class="kp-wishlist__header">
+              <span class="kp-wishlist__title">甜的心愿单</span>
+              <span class="kp-icon" data-icon="pencil" data-size="18" data-color="#f6c64a"></span>
+              <div class="kp-wishlist__spacer"></div>
+              <span class="kp-wishlist__caption">当前可用积分</span>
+              <span class="kp-wishlist__points" id="wish-points">124</span>
+            </div>
+            <div class="kp-wishlist__scroll" id="wish-scroll">
+              <div class="kp-wishlist__content">
+                <div class="kp-wishlist__grid" id="wish-grid"></div>
+                <div class="kp-wishlist__tail"></div>
+              </div>
+            </div>
+            <div class="kp-wishlist__fab">
+              <button class="kp-fab is-expanded" id="wish-fab" data-open-sheet="add-wish">
+                <span class="kp-icon" data-icon="heartFill" data-size="19" data-color="#3f6b2e"></span>
+                <span class="kp-fab__label is-visible">新增心愿</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================== 我的 ====================== -->
+        <section class="kp-screen" data-screen="profile" id="screen-profile">
+          <div class="kp-profile">
+            <div class="kp-profile__head">
+              <div class="kp-profile__avatar" id="profile-avatar">
+                <span class="kp-profile__avatar-emoji">🧒</span>
+              </div>
+              <div class="kp-profile__info">
+                <span class="kp-profile__name" id="profile-name">萌新铲屎官的小可爱</span>
+                <div class="kp-profile__id" id="profile-id-row">
+                  <span class="kp-profile__id-text" id="profile-id">ID:38038532</span>
+                  <span class="kp-icon" data-icon="copy" data-size="13" data-color="#b6bdb0"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="kp-profile__stats">
+              <div class="kp-card is-border" style="border-radius: 20px; padding: 0 18px">
+                <div class="kp-profile__stat-row">
+                  <div class="kp-profile__stat">
+                    <span class="kp-profile__stat-value" id="profile-habits">324</span>
+                    <span class="kp-profile__stat-label">好习惯</span>
+                  </div>
+                  <div class="kp-profile__stat-divider"></div>
+                  <div class="kp-profile__stat">
+                    <span class="kp-profile__stat-value" id="profile-rewards">4</span>
+                    <span class="kp-profile__stat-label">奖励次数</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="kp-profile__menu-card">
+              <div class="kp-card is-border" style="border-radius: 20px; overflow: hidden">
+                <button class="kp-profile__menu" data-goto="record">
+                  <span class="kp-profile__menu-icon" style="background-color: #7fbf5522">
+                    <span class="kp-icon" data-icon="book" data-size="19" data-color="#7fbf55"></span>
+                  </span>
+                  <span class="kp-profile__menu-label">积分记录</span>
+                  <span class="kp-icon" data-icon="chevronRight" data-size="22" data-color="#b6bdb0"></span>
+                </button>
+                <div class="kp-profile__menu-divider"></div>
+                <button class="kp-profile__menu" data-goto="rule">
+                  <span class="kp-profile__menu-icon" style="background-color: #f6c64a22">
+                    <span class="kp-icon" data-icon="trophy" data-size="19" data-color="#f6c64a"></span>
+                  </span>
+                  <span class="kp-profile__menu-label">积分规则</span>
+                  <span class="kp-icon" data-icon="chevronRight" data-size="22" data-color="#b6bdb0"></span>
+                </button>
+                <div class="kp-profile__menu-divider"></div>
+                <button class="kp-profile__menu" data-open-sheet="trash">
+                  <span class="kp-profile__menu-icon" style="background-color: #e9834b22">
+                    <span class="kp-icon" data-icon="trash" data-size="19" data-color="#e9834b"></span>
+                  </span>
+                  <span class="kp-profile__menu-label" id="trash-label">回收站</span>
+                  <span class="kp-icon" data-icon="chevronRight" data-size="22" data-color="#b6bdb0"></span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 开发环境才有（对应 store.ts 的 ALLOW_DEMO_RESET） -->
+            <div class="kp-profile__reset" id="demo-reset">
+              <span class="kp-profile__reset-text">恢复演示数据</span>
+            </div>
+
+            <div class="kp-profile__gap"></div>
+            <div class="kp-nav-space"></div>
+          </div>
+        </section>
+
+        <!-- ====================== 积分记录 ====================== -->
+        <section class="kp-screen" data-screen="record" id="screen-record">
+          <div class="kp-record">
+            <div class="kp-header">
+              <div class="kp-header__side">
+                <button class="kp-header__back" data-goto="profile">
+                  <span class="kp-icon" data-icon="chevronLeft" data-size="20" data-color="#33382f"></span>
+                </button>
+              </div>
+              <div class="kp-header__center">
+                <span class="kp-header__title">积分记录</span>
+              </div>
+              <div class="kp-header__side kp-header__side--right"></div>
+            </div>
+            <div class="kp-record__filters">
+              <div class="kp-record__chips" id="record-chips"></div>
+              <span class="kp-record__count" id="record-count">共 0 条</span>
+            </div>
+            <div class="kp-record__gap"></div>
+            <div class="kp-record__list">
+              <div class="kp-record__list-content" id="record-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================== 积分规则 ====================== -->
+        <section class="kp-screen" data-screen="rule" id="screen-rule">
+          <div class="kp-rule">
+            <div class="kp-header">
+              <div class="kp-header__side">
+                <button class="kp-header__back" data-goto="profile">
+                  <span class="kp-icon" data-icon="chevronLeft" data-size="20" data-color="#33382f"></span>
+                </button>
+              </div>
+              <div class="kp-header__center">
+                <span class="kp-header__title">积分规则</span>
+              </div>
+              <div class="kp-header__side kp-header__side--right"></div>
+            </div>
+            <div class="kp-rule__hint">
+              <span class="kp-rule__hint-text">长按规则可编辑、加入今天的习惯，也可以移到回收站</span>
+            </div>
+            <div class="kp-rule__list">
+              <div class="kp-rule__list-content" id="rule-list"></div>
+            </div>
+            <div class="kp-rule__footer">
+              <button class="kp-soft-button" data-open-sheet="rule-form-new">
+                <span class="kp-icon" data-icon="book" data-size="19" data-color="#3f6b2e"></span>
+                <span class="kp-soft-button__label">新增规则</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================== 底部导航（首页 / 心愿单 / 我的）====================== -->
+        <nav class="kp-nav" id="bottom-nav">
+          <div class="kp-nav__row">
+            <button class="kp-nav__item is-active" data-goto="home">
+              <span class="kp-icon" data-nav-icon="home" data-size="23"></span>
+              <span class="kp-nav__label">首页</span>
+            </button>
+            <button class="kp-nav__item" data-goto="wishlist">
+              <span class="kp-icon" data-nav-icon="heart" data-size="23"></span>
+              <span class="kp-nav__label">心愿单</span>
+            </button>
+            <button class="kp-nav__item" data-goto="profile">
+              <span class="kp-icon" data-nav-icon="smile" data-size="23"></span>
+              <span class="kp-nav__label">我的</span>
+            </button>
+          </div>
+          <div class="mp-home-indicator"></div>
+        </nav>
+
+        <!-- ========================= 底部弹窗层 ========================= -->
+        <div class="kp-sheet-layer" id="sheet-layer"></div>
+        <!-- 轻提示（对应 utils/toast.ts 的 toast） -->
+        <div class="kp-toast" id="toast" role="status"></div>
+        <!-- 二次确认（对应 utils/toast.ts 的 confirm） -->
+        <div class="kp-confirm" id="confirm">
+          <div class="kp-confirm__mask" id="confirm-mask"></div>
+          <div class="kp-confirm__panel">
+            <p class="kp-confirm__title" id="confirm-title">删除</p>
+            <p class="kp-confirm__text" id="confirm-text"></p>
+            <div class="kp-confirm__actions">
+              <button class="kp-confirm__btn" id="confirm-cancel">取消</button>
+              <button class="kp-confirm__btn is-primary" id="confirm-ok">确定</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

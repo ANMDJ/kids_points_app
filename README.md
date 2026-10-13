@@ -2,6 +2,10 @@
 
 一个面向孩子的「习惯打卡 + 积分奖励」Flutter App，按设计稿 1:1 实现了 5 个页面：
 
+> 产品需求文档（PRD）：[`docs/PRD.md`](./docs/PRD.md)　·　可评审的设计事实源：[`docs/design/`](./docs/design/README.md)
+>
+> 微信小程序高保真原型（双击即开、可点可演示）：[`prototype/index.html`](./prototype/index.html)　·　说明见 [`prototype/README.md`](./prototype/README.md)
+
 | 设计稿页面 | 实现文件 | 主要交互 |
 | --- | --- | --- |
 | 首页（积分罐 + 今天的习惯） | `lib/screens/home_screen.dart` | 点习惯卡打卡加分、长按撤销、“记一笔”手动加减分 |
