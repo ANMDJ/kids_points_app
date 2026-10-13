@@ -133,13 +133,20 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
           childCannotUndoCheckIn?: boolean
           childCannotAddWish?: boolean
           requireApprovalForBonusOver?: number   // 超过 N 分需审批（Q15：默认 ±50）
-          ...
+          // ↑ 形状**封闭**：键名就是上面这三个（多一个即拒 —— 见下方的守卫说明）
         }
         作用：回答"这个家里对这件事有没有额外约定"
 ```
 
 **屏障三的方向性约束（重要）**：`restrictions` 只能把 `ALLOW` 收紧为 `REQUIRE_APPROVAL` 或 `DENY`，
 **永远不能把 `DENY` 放宽**。否则家长可绕过产品安全底线（如让孩子自己审批自己的申请）。
+
+**屏障三的形状（`D3b`，已定形 —— 阶段 D-b，2026-10-13）**：上面那三个键的**唯一权威**是
+`backend/src/contracts/member-restrictions.ts` 的 `RESTRICTION_KEYS` ＋ 运行时守卫
+`validateRestrictions()`（未知键、错类型、越界一律拒；prisma 侧仍是 `Json` 列 ——
+Prisma 无法表达 `Json` 的内部形状，所以定形落在应用层）。本节这个代码块与
+`schema.prisma` 里那行形状注释都是**手抄**，由 `npm run restrictions:check`
+（`tools/restrictions-check.mjs`）逐字比对：**改键名必须三处同改**。
 
 ```
 最终判定 = min(矩阵判定, 成员级限制)    // 按 严苛度 排序：DENY > REQUIRE_APPROVAL > ALLOW

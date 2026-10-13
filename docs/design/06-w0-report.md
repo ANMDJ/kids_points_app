@@ -130,7 +130,7 @@
 | **D1b** | `UserChildRelation.relation`：自由字符串 → 枚举 | ✅ **升级为 `RelationKind`**（本轮新立） | ✅ **已落地（阶段 D-a，2026-10-13）**：`enum RelationKind`（father / mother / grandparent / other）＋ 字段转型 ＋ 迁移 `20261013143300_relation_kind_enum`（**用 `USING` 保数据，不走 Prisma 默认的 DROP+ADD**）；守门人 `npm run relation:check`（5 项） |
 | **D2** | `goodHabitCount` / `rewardCount` 不落库 | ✅ **确认**（改按需 `COUNT`） | 已落地（`Child` 无此二列，L227 注释） |
 | **D3** | PIN 失败计数落在 `ChildMember`（人）而非设备 | ✅ **确认** | 已落地（`pinFailedCount` L265 / `pinLockedUntil` L266） |
-| **D3b** | `ChildMember.restrictions`：裸 `Json` → 定形校验 | ✅ **定形**（本轮新立） | ⏳ 阶段 D-b：类型 + 类型守卫 + 单测 |
+| **D3b** | `ChildMember.restrictions`：裸 `Json` → 定形校验 | ✅ **定形**（本轮新立） | ✅ **已落地（阶段 D-b，2026-10-13）**：形状收进 `backend/src/contracts/member-restrictions.ts`（`ChildMemberRestrictions` 类型 ＋ `validateRestrictions()` 运行时守卫：未知键 / 错类型 / 越界一律拒）＋ 离线自检 `backend/scripts/check-restrictions.ts`（`npm run restrictions:check`，A/B 两段）＋ 闸门 `tools/restrictions-check.mjs`（**6 项**，比对三处手抄键名）；**未加迁移、未改前端**（列仍是 `Json` —— Prisma 无法表达 `Json` 的内部形状） |
 | **D4** | `PointRecord.approvalRequestId` 不落库 | ✅ **确认（只存一边）** | 已落地（`executedRecordId` `@unique`）；`02` §5.2 待补勘误 |
 | **D5** | 不用 `@map`；`02` §8 示例 SQL 改带引号 camelCase | ✅ **确认** | 全 schema `@map` / `@@map` 出现 **0** 次；`02` §8 待补勘误 |
 | **D6** | `viewer` 角色 → `DENY`（fail-closed） | ✅ **确认（维持 DENY）**；暂不做只读分享 | 已落地（`permission-matrix.ts` L94）；`02` §2 待补说明 |

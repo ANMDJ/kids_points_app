@@ -126,8 +126,9 @@ ALTER TABLE "UserChildRelation"
 
 ## 5. 遗留（别把已修当已够）
 
-- **`D3b` 仍未落地**：`ChildMember.restrictions` 还是裸 `Json`（`schema.prisma` L284–L286），
-  → **阶段 D-b**：类型 ＋ 类型守卫 ＋ 单测（`06` §3.1 L133）。
+- ~~**`D3b` 仍未落地**~~ → ✅ **已由阶段 D-b 收口（2026-10-13，见 `11-d3b-handoff.md`）**：
+  `ChildMember.restrictions` 的定形落在**应用层**（类型 ＋ 运行时守卫 ＋ A/B 离线自检 ＋ 闸门 `restrictions:check`）。
+  （本条保留原文形态以便追溯 —— D-a 收口时它确实还是裸 `Json`：`schema.prisma` L284–L286。）
   **下一阶段的启动包**已放在 `tools/_scratch/next-session-d3b.md`（`.gitignore:40` 忽略、**不入库**）：
   里面预先查好了全部事实（`文件:行号`）、四个待定判断的建议答案、闸门期望输出基线，
   以及一段可直接粘贴进新会话的启动提示。**该文件是临时物** —— 若被清理，按本单 §5/§6 重建即可。
