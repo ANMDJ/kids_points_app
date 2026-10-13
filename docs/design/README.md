@@ -61,7 +61,7 @@
   收口闸门：`node tools/defect-status.mjs` **`ALL PASS`（18 条）**、`backend npm run ci` **8 步全绿**；**证伪 6 例**（造假必红、还原必绿）。
   一条**实测勘误**（写进 `07` §4.3 ③ / §5 第 9 条）：Flutter 取色回退成数组下标时，`flutter analyze` 与整包 `flutter test` **全绿**（
   配色表凑巧与枚举同序 → 行为等价），真正拦住它的是守门人一条 `A.lack` —— **断言名 ≠ 断言力**。
-- **C4（✅ 已收口 2026-10-13；交接单 [`08-c4-handoff.md`](./08-c4-handoff.md)）**：**C9**（软删除 ＋ 回收站）＋ **C10**（`updateRule` 规则可编辑 ＋ 版本表）＋ **C11**（追加式审计），双端同步，守门人三块 `unfixed → fixed`。
+- **C4（✅ 已收口 2026-10-13，提交 `f3f4e21`；交接单 [`08-c4-handoff.md`](./08-c4-handoff.md)）**：**C9**（软删除 ＋ 回收站）＋ **C10**（`updateRule` 规则可编辑 ＋ 版本表）＋ **C11**（追加式审计），双端同步，守门人三块 `unfixed → fixed`。
   已实测：Taro `tsc --noEmit` **EXIT=0**、`npm run build:weapp` **EXIT=0**、`run.js` **25/25 ALL PASS**（新增 C9 ×3 / C10 / C11）；
   `flutter analyze` **0 issue**、`flutter test` **38/38**（`app_test.dart` 37 ＋ `widget_test.dart` 1；本轮新增 6 条）；`node tools/defect-status.mjs` **18/18 ALL PASS**。
   - **本轮最重要的语义**：删除＝**改状态位**（原对象仍在、可恢复），90 天保留期是**纯函数**（89/90/91 天可测），
