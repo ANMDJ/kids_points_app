@@ -218,6 +218,11 @@
    **下一步**：新增 `tools/prototype-check.mjs`（fail-closed ＋ 可逐条证伪）并接进 `npm run ci`（**11 → 12 步**），
    同时把 `prototype/verify.mjs` 纳管。本轮的下手包：`tools/_scratch/next-session-e1.md`（**临时物，不入库**）。
    另注：`prototype/app.js` 是**严格模式 IIFE、零对外出口**，派生函数外部调不到 —— 做行为对账前需先加只读出口。
+   **⏸ 优先级：用户已明确「暂缓执行」（2026-10-14）** —— 理由：它**不是产品功能**、**不阻塞任何开发**
+   （已实测：`backend/package.json` / `tools/**` / `backend/scripts/**` 对 `prototype/` 的引用**为 0**，`npm run ci` 仍 11 步）。
+   **触发条件（满足任一条就应当捡起）**：① 有人**照着 `prototype/` 去实现小程序 UI**（W4/W5 前后）；
+   ② 改动 `kids_points_mp/src/components/Icon/icons.ts`、`src/styles/vars.scss`、`src/data/types.ts` 的
+   图标 / 色板 / 派生文案；③ 改动 `contracts/permission-matrix.json`。**在那之前不必做**。
 
 ### 文档缺陷修正记录
 
