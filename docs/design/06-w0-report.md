@@ -127,7 +127,7 @@
 | # | 决策点 | **你的裁定（2026-10-12）** | 落地状态 |
 |---|---|---|---|
 | **D1** | `User` / `UserChildRelation` 字段最小集 | ✅ **确认** | 已落地 |
-| **D1b** | `UserChildRelation.relation`：自由字符串 → 枚举 | ✅ **升级为 `RelationKind`**（本轮新立） | ⏳ 阶段 D-a：1 enum + 1 字段 + 迁移 |
+| **D1b** | `UserChildRelation.relation`：自由字符串 → 枚举 | ✅ **升级为 `RelationKind`**（本轮新立） | ✅ **已落地（阶段 D-a，2026-10-13）**：`enum RelationKind`（father / mother / grandparent / other）＋ 字段转型 ＋ 迁移 `20261013143300_relation_kind_enum`（**用 `USING` 保数据，不走 Prisma 默认的 DROP+ADD**）；守门人 `npm run relation:check`（5 项） |
 | **D2** | `goodHabitCount` / `rewardCount` 不落库 | ✅ **确认**（改按需 `COUNT`） | 已落地（`Child` 无此二列，L227 注释） |
 | **D3** | PIN 失败计数落在 `ChildMember`（人）而非设备 | ✅ **确认** | 已落地（`pinFailedCount` L265 / `pinLockedUntil` L266） |
 | **D3b** | `ChildMember.restrictions`：裸 `Json` → 定形校验 | ✅ **定形**（本轮新立） | ⏳ 阶段 D-b：类型 + 类型守卫 + 单测 |

@@ -47,6 +47,19 @@ enum UserStatus {
   deleted
 }
 
+/// 监护关系取值（06 §3.1 决策 **D1b**，阶段 D-a）：自由字符串 → 枚举。
+///
+/// ★ 这份取值要**手抄三处**（枚举本身、`UserChildRelation.relation` 的注释、
+///   迁移 SQL 的 `CREATE TYPE "RelationKind"`），与 D9 的图标名同一类漂移病：
+///   写错一处时三端编译器都不会说一句话。故由 `npm run relation:check`
+///   （`tools/relation-kind-check.mjs`）逐字比对 —— 改这里必须同时改那两处。
+enum RelationKind {
+  father
+  mother
+  grandparent
+  other
+}
+
 /// 02 §4.1：审批终态集合 = approved / rejected / withdrawn / invalidated / expired。
 enum ApprovalStatus {
   pending
@@ -190,8 +203,11 @@ model UserChildRelation {
   id        String   @id @default(cuid())
   userId    String
   childId   String
-  /// 关系描述：father / mother / grandparent / other
-  relation  String
+  /// 关系描述（06 §3.1 D1b）：原为自由字符串 —— 写错一个字母也不会被任何人拦下。
+  /// 关系取值：father / mother / grandparent / other
+  /// ★ 上面这行是**第三份手抄**（另两份：`enum RelationKind`、迁移 SQL 的 CREATE TYPE），
+  ///   `npm run relation:check` 逐字比对；改这里必须同时改那两处。
+  relation  RelationKind
   createdAt DateTime @default(now())
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
