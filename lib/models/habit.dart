@@ -38,6 +38,8 @@ bool isSameDay(DateTime time, [DateTime? other]) {
 /// **修 C9 / C10 追加**：`status` / `deletedAt`（软删除位）与 `ruleId`（“我是由哪条规则
 /// 派生的”派生链）。为了改规则时能**原地同步**（`id` 不变 —— 换 id 就等于伪造版本化），
 /// `title` / `points` / `condition` / `dailyLimit` 不再是 final。
+/// **修 D9 追加**：`icon` 由 `IconData` 改为**名字** `iconName`（与后端
+/// `Habit.icon String` 同构）—— 数据层不认字形，只认跨端名字。
 class Habit implements SoftDeletable {
   Habit({
     required this.id,
@@ -45,7 +47,7 @@ class Habit implements SoftDeletable {
     required this.points,
     required this.condition,
     required this.dailyLimit,
-    required this.icon,
+    required this.iconName,
     required this.color,
     this.ruleId,
     this.status = defaultStatus,
@@ -68,7 +70,12 @@ class Habit implements SoftDeletable {
   /// 每天可完成的次数上限（1–5 的整数，可运算、可校验）—— 修 A2
   int dailyLimit;
 
-  IconData icon;
+  /// 图标**名字**（如 `'book'`），不是 `IconData` —— 修 **D9**。
+  ///
+  /// 与后端 `Habit.icon String`、小程序 `icon: IconName` 同构；
+  /// 画到界面前才由 `iconDataFor(iconName)` 查表（`lib/theme/app_icons.dart`）。
+  /// 直接存 `IconData` 会让「接 API 不改 UI」变成空话 —— 服务端给的是名字。
+  String iconName;
   Color color;
 
   /// 由哪条规则派生（**规则 id**，不是标题）—— 修 C10
@@ -148,7 +155,8 @@ class HabitView {
   int get points => habit.points;
   String get condition => habit.condition;
   int get dailyLimit => habit.dailyLimit;
-  IconData get icon => habit.icon;
+  /// 图标**名字**（修 D9）—— 与 Taro 侧 `habitView().icon` 同名同义
+  String get iconName => habit.iconName;
   Color get color => habit.color;
 
   /// 由 `dailyLimit` 派生的频次串

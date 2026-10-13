@@ -136,7 +136,7 @@
 | **D6** | `viewer` 角色 → `DENY`（fail-closed） | ✅ **确认（维持 DENY）**；暂不做只读分享 | 已落地（`permission-matrix.ts` L94）；`02` §2 待补说明 |
 | **D7** | 应用角色与表所有者分离（I5 成立的前提） | ✅ **确认** | 已落地（双连接串 + `900_ledger_revoke.sql` + `verify-db.mjs`） |
 | **D8** | 唯一事实源位置 | ✅ **确认** | 已落地（`backend/src/contracts/` + 导出 `contracts/permission-matrix.json`） |
-| **D9** | 图标字段跨端类型不一致 → 新增 `iconName → IconData` 映射 | ✅ **确认** | ⏳ 阶段 C5：Taro 侧 28 个图标名全覆盖（18 条模板实际用到 15 个） |
+| **D9** | 图标字段跨端类型不一致 → 新增 `iconName → IconData` 映射 | ✅ **确认** | ✅ **已落地（阶段 C5，2026-10-13）**：名字成为唯一事实（Flutter `lib/theme/app_icons.dart` ／ Taro `components/Icon/icons.ts`），三份名单（**29** 个名字，含兜底 `unknown`）由 `npm run icons:check` 守着不漂移；台账同步把 D9 补进 `03` §0（18 条 → **19 条**） |
 | **D10** | 扣分模板的 `points` 符号 | ✅ **确认**（正值 + `direction='penalty'`，展示取负） | 已落地（`RuleTemplate` / `PointRule` 的 `direction` 字段） |
 
 ### 3.2 裁定过程中的一个错误（记录在案，防止同类复发）

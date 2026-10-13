@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/point_record.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_icons.dart';
 import 'app_card.dart';
 
 /// 积分记录的一条流水。
@@ -26,7 +27,7 @@ class RecordTile extends StatelessWidget {
                 color: record.color.withAlpha(32),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(record.icon, size: 20, color: record.color),
+              child: Icon(iconDataFor(record.iconName), size: 20, color: record.color),
             ),
             const SizedBox(width: 12),
             Expanded(

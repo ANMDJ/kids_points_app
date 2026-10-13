@@ -9,6 +9,7 @@ import '../models/rule_version.dart';
 import '../models/trash.dart';
 import '../models/wish.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_icons.dart';
 import 'seed_data.dart';
 
 /// release / profile 构建的判定 —— **编译期常量**（等价于 `!kDebugMode`）。
@@ -196,7 +197,8 @@ class AppStore extends ChangeNotifier {
       points: live.points,
       time: time,
       category: RecordCategory.praise,
-      icon: live.icon,
+      // 修 D9：流水只带**图标名字**（与规则/习惯同源），渲染时才查表
+      iconName: live.iconName,
       color: live.color,
       source: source,
       operatorRole: actor.role,
@@ -274,7 +276,7 @@ class AppStore extends ChangeNotifier {
       points: -target.points,
       time: time,
       category: RecordCategory.adjust,
-      icon: Icons.remove_rounded,
+      iconName: IconNames.minus,
       color: AppColors.pointSpend,
       source: RecordSource.correction,
       operatorRole: actor.role,
@@ -338,7 +340,7 @@ class AppStore extends ChangeNotifier {
       points: delta,
       time: time,
       category: RecordCategory.adjust,
-      icon: isGain ? Icons.add_rounded : Icons.remove_rounded,
+      iconName: isGain ? IconNames.plus : IconNames.minus,
       color: isGain ? AppColors.pointGain : AppColors.pointSpend,
       source: source,
       operatorRole: actor.role,
@@ -389,7 +391,7 @@ class AppStore extends ChangeNotifier {
       points: -wish.cost,
       time: time,
       category: RecordCategory.exchange,
-      icon: Icons.redeem_rounded,
+      iconName: IconNames.gift,
       color: AppColors.orange,
       source: source,
       operatorRole: actor.role,
@@ -461,17 +463,24 @@ class AppStore extends ChangeNotifier {
   /// **修 E15 / A2**：参数由 `detail` 自由串改为 `condition` ＋ `dailyLimit` 结构字段
   /// （展示串交给 [ruleDetail] 派生）；`dailyLimit` 越界时**拒绝**而不是夹到边界 ——
   /// 静默改写会让家长以为约定已按他的意思生效。
+  ///
+  /// **修 D9**：图标入参是**名字**（`iconName`），且必须落在白名单里 —— 越界同样
+  /// **拒绝**：落一个不存在的名字，界面只会画成「未知」占位，家长看不到自己选的那个图标
+  /// （静默兜底能保证不崩，但不该被当成「存进去了」）。
   String? addRule({
     required String title,
     required String condition,
     required int dailyLimit,
     required int points,
-    required IconData icon,
+    required String iconName,
     required Color color,
     ActorContext actor = const ActorContext(),
   }) {
     if (!isDailyLimitValid(dailyLimit)) {
       return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
+    }
+    if (!isKnownIconName(iconName)) {
+      return '图标「$iconName」不在可选列表里';
     }
     final PointRule rule = PointRule(
       id: _newId('rule'),
@@ -479,7 +488,7 @@ class AppStore extends ChangeNotifier {
       condition: condition.trim().isEmpty ? '家长约定' : condition.trim(),
       dailyLimit: dailyLimit,
       points: points,
-      icon: icon,
+      iconName: iconName,
       color: color,
       // 修 C10：新建即 version 1，并**同时**留下 version 1 的版本记录 ——
       // 于是 `currentVersion` 永远指向一条真实存在的版本（回放不留空档）。
@@ -546,7 +555,7 @@ class AppStore extends ChangeNotifier {
       points: rule.points,
       condition: rule.condition,
       dailyLimit: rule.dailyLimit,
-      icon: rule.icon,
+      iconName: rule.iconName,
       color: rule.color,
       // 修 C10：记住“我是由哪条规则派生的” —— 有了这条链，打卡写出的流水
       // 才能同时写清 (ruleId, ruleVersion)；改规则时也才知道该同步谁。
@@ -933,7 +942,7 @@ class AppStore extends ChangeNotifier {
       habit.condition = live.condition;
       habit.dailyLimit = live.dailyLimit;
       habit.points = live.points;
-      habit.icon = live.icon;
+      habit.iconName = live.iconName;
       habit.color = live.color;
     }
 

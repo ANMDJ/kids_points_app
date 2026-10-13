@@ -4,6 +4,17 @@
  * 既能跟随任意颜色，也不用引入任何图片资源。
  *
  * 坐标系统一为 24x24，和 Material Icons 一致。
+ *
+ * ★ **跨端契约（修 D9）**：本文件 `ICONS` 的**键集合**就是「图标名」的权威名单 ——
+ *   Flutter 侧 `lib/theme/app_icons.dart` 的 `appIcons` 键集合、后端
+ *   `backend/prisma/seed/templates.data.ts` 的 `ICON_NAMES` 必须与它**逐字相等**。
+ *   后端那份是**手抄**的（后端不能 import 小程序的 TS），所以三份由
+ *   `npm run icons:check`（`tools/icon-names-check.mjs`）逐个比对 —— 手抄会漂移，闸门就是为它准备的。
+ *   数据层只存名字（`icon: IconName`），画哪一笔由 [getIcon] 在渲染时决定。
+ *
+ * ★ **白名单外不许静默缺失**：[getIcon] 对未登记的名字返回 [FALLBACK_ICON_NAME] 的
+ *   图案（问号圈）—— 空白会被当成「这条本来就没图标」，比画个问号更撒谎。
+ *   写入口（`store.addRule`）另有 [isKnownIconName] 校验，越界直接**拒绝**。
  */
 export interface IconDef {
   /** SVG 里 <path> 的 d 属性，可多条 */
@@ -169,12 +180,43 @@ export const ICONS = {
       'M10.4 11v5.6',
       'M13.6 11v5.6'
     ]
+  },
+
+  /**
+   * 兜底占位（白名单之外的名字画它）—— 见 [FALLBACK_ICON_NAME]。
+   * 把它放进 ICONS 而不是另立一份，是为了让「三份名单相等」这条闸门一句话说得清：
+   * 否则兜底就成了第四处需要单独对齐的东西（Flutter 侧同理：`IconNames.unknown`）。
+   */
+  unknown: {
+    d: [
+      'M12 3.4a8.6 8.6 0 1 0 0 17.2 8.6 8.6 0 0 0 0-17.2z',
+      'M9.5 9.5a2.5 2.5 0 0 1 4.9.6c0 1.7-2.4 1.9-2.4 3.6',
+      'M12.1 17.1h.01'
+    ]
   }
 } as const satisfies Record<string, IconDef>
 
 export type IconName = keyof typeof ICONS
 
-/** 取出某个图标的绘制定义（统一成 IconDef，避免联合类型取可选字段报错）。 */
+/** 兜底图标名：未登记的名字一律画它（不空白、不崩溃）。 */
+export const FALLBACK_ICON_NAME: IconName = 'unknown'
+
+/**
+ * 取出某个图标的绘制定义（统一成 IconDef，避免联合类型取可选字段报错）。
+ *
+ * **未登记的名字走兜底**：入参类型是 [IconName]，编译期就挡得住写错的字面量；
+ * 挡不住的只有「运行时从服务端 / 断言里来的字符串」——
+ * 那类取值落到 [FALLBACK_ICON_NAME] 的图案，而不是画出空白。
+ */
 export function getIcon(name: IconName): IconDef {
-  return ICONS[name] as IconDef
+  const defs = ICONS as Record<string, IconDef | undefined>
+  return defs[name] ?? ICONS[FALLBACK_ICON_NAME]
+}
+
+/**
+ * 名字是否在白名单内 —— 写入口（`store.addRule`）用它**拒绝**非法取值，
+ * 与 Flutter 侧 `isKnownIconName()`（`lib/theme/app_icons.dart`）同一口径。
+ */
+export function isKnownIconName(name: string): name is IconName {
+  return Object.prototype.hasOwnProperty.call(ICONS, name)
 }

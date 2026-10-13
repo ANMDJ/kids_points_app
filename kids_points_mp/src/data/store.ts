@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useDidShow } from '@tarojs/taro'
 
 import { buildSeedData } from './seed'
+import { isKnownIconName } from '../components/Icon/icons'
 import type {
   ActorContext,
   AuditAction,
@@ -525,6 +526,10 @@ export class AppStore {
    * **修 E15 / A2**：参数由 `detail` 自由串改为 `condition` ＋ `dailyLimit` 结构字段
    * （展示串交给 [ruleDetail] 派生）；`dailyLimit` 越界时**拒绝**而不是夹到边界 ——
    * 静默改写会让家长以为约定已按他的意思生效。
+   *
+   * **修 D9**：`icon` 必须是白名单里的名字 —— 越界同样**拒绝**。落一个不存在的
+   * 名字，界面只会画成「未知」占位（渲染口兜底），家长看不到自己选的那枚图标；
+   * 兜底能保证不崩，但不该被当成「存进去了」。
    */
   addRule(
     title: string,
@@ -537,6 +542,10 @@ export class AppStore {
   ): string | null {
     if (!isDailyLimitValid(dailyLimit)) {
       return `每天次数只能是 ${dailyLimitMin}–${dailyLimitMax} 之间的整数`
+    }
+    // 修 D9：图标名白名单（与 Flutter 侧 `AppStore.addRule` 同一口径）
+    if (!isKnownIconName(icon)) {
+      return `图标「${icon}」不在可选列表里`
     }
     const rule: PointRule = {
       id: this.newId('rule'),

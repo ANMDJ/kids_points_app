@@ -58,6 +58,9 @@ const {
 const { buildSeedData } = require('./dist/data/seed.js')
 const { AppStore, demoResetAllowed } = require('./dist/data/store.js')
 const { withAlpha } = require('./dist/utils/color.js')
+// ── 阶段 C5：图标名字跨端契约（修 D9）──────────────────────────────────────
+// `icons.ts` 是 `store.ts` 的依赖，编译它时会被一并产出（同一次 tsc）。
+const { ICONS, FALLBACK_ICON_NAME, getIcon, isKnownIconName } = require('./dist/components/Icon/icons.js')
 
 let failed = 0
 function check(name, fn) {
@@ -887,6 +890,44 @@ check('C11 审计：每次变更同一笔留痕、只增不删、before/after �
   assert.strictEqual(store.auditLog.length, 7, '审计只增：7 次变更 = 7 条')
 })
 
+// ── 阶段 C5：修 D9（图标名跨端契约）─────────────────────────────────────────
+check('D9 图标名：数据层只存名字，写入口越界即拒（与 Flutter `AppStore.addRule` 同口径）', () => {
+  const store = seededStore()
+  const before = store.rules.length
+
+  // ① 预置规则里带的是**名字**，不是字形 —— 服务端只能存字符串，存字形根本落不进去
+  for (const rule of store.rules) {
+    assert.strictEqual(typeof rule.icon, 'string', '规则图标必须是字符串名字（不是字形 / 不是对象）')
+    assert.strictEqual(isKnownIconName(rule.icon), true, `规则 ${rule.id} 的图标名 ${rule.icon} 不在白名单里`)
+  }
+
+  // ② 越界名字被**拒绝**（而不是"悄悄落库、渲染时画个空白"）
+  const rejected = store.addRule('越界图标', '完成作业', 1, 1, 'not-a-name', '#FFB020')
+  assert.strictEqual(typeof rejected, 'string', '越界图标名必须被拒绝并给出文案')
+  assert.strictEqual(store.rules.length, before, '被拒绝的规则不得落库')
+
+  // ③ 查的是**自己的键**：原型链上的名字（toString / constructor）不算白名单成员
+  assert.strictEqual(isKnownIconName('book'), true, '合法名字应被接受')
+  assert.strictEqual(isKnownIconName('toString'), false, '原型链上的名字不是白名单成员')
+  assert.strictEqual(isKnownIconName(''), false, '空名字不是白名单成员')
+
+  // ④ 名字一路原样传到派生习惯（中途不许变形）
+  assert.strictEqual(store.addRule('白名单图标', '完成作业', 1, 1, 'spray', '#62C1B8'), null)
+  assert.strictEqual(store.addHabitFromRule(store.rules[0]), null)
+  const derived = store.habits[store.habits.length - 1]
+  assert.strictEqual(derived.icon, 'spray', '派生习惯必须原样带上规则的名字')
+})
+
+check('D9 渲染兜底：未登记的名字画「未知」占位，而不是空白', () => {
+  // 画空白会被当成「这条本来就没图标」，比画个问号更撒谎；崩掉更不行
+  assert.strictEqual(getIcon('not-a-name'), getIcon(FALLBACK_ICON_NAME), '未登记的名字必须落到兜底图案')
+  assert.strictEqual(getIcon('book'), ICONS.book, '登记过的名字取到自己的图案')
+  assert.strictEqual(isKnownIconName(FALLBACK_ICON_NAME), true, '兜底名字自己必须在白名单里（否则兜底也画不出来）')
+  const def = getIcon('not-a-name')
+  assert.strictEqual(Array.isArray(def.d) && def.d.length > 0, true, '兜底图案必须真有可画的 path')
+})
+
+console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exitCode = failed === 0 ? 0 : 1
 

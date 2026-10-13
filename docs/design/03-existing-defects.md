@@ -10,7 +10,7 @@
 > 这与 **D12** 属同一类失败：*文档说"没修"，代码说"修了"，没有人对账。*
 >
 > **对账方法**：逐条读代码 / `grep` 取证据锚点，**每条状态都附 `文件:行号`**，不凭记忆、不靠推测。
-> **可执行**：本表的 18 条状态由 `tools/defect-status.mjs` 逐条对代码复核（`npm run ci` 的一环
+> **可执行**：本表的 19 条状态由 `tools/defect-status.mjs` 逐条对代码复核（`npm run ci` 的一环
 > `npm run defects:check`），**声明与代码不符即红** —— 含「未修」其实已修（正是本表曾经失实的病）
 > 与「已修」被回退。证据**只取代码、注释不算**：否则注释里那句「原先 `xxx` 如何错」会让两侧同时被骗。
 > 该守卫已用 **7 份被篡改的台账副本**证明能变红（见 `docs/design/README.md`「CI 步骤」）。
@@ -23,7 +23,7 @@
 > ⚠️ 下方 A/B/C/D/E 各节里的"**修复**："段落是**当时的设计意图**，
 > 其"已落地 / 未落地"一律**以本表为准**。
 
-| 编号 | 缺陷 | 严重度 | **真实状态（C4 复核 2026-10-13）** | 证据锚点 |
+| 编号 | 缺陷 | 严重度 | **真实状态（C5 复核 2026-10-13）** | 证据锚点 |
 |---|---|---|---|---|
 | A1 | 负分规则被 `Math.abs()` 抹平 | 🔴 高 | ✅ **已修** | `store.ts:369` / `app_store.dart:345`：`rule.points < 0` → 拒绝并返回文案 |
 | A2 | `Habit` 无每日上限字段，频次是自由文本 | 🔴 高 | ✅ **已修** | 结构字段 `types.ts:46 dailyLimit: number` / `habit.dart:60`；展示串降级为派生 `types.ts:207 limitTextOf()` / `habit.dart:14`；seed 不再写 `limitText`（`seed.ts:36`、`seed_data.dart:47`）；`addRule` 越界即拒 `store.ts:419` / `app_store.dart:380` |
@@ -43,8 +43,18 @@
 | E17 | `doneText` / `limitText` 是被外部写入的展示文案 | 🟠 中 | ✅ **已修** | 派生 `types.ts:212 doneTextOf()` / `habit.dart:18`；唯一产出点 `types.ts:277 habitView()` / `habit.dart:134`；页面只消费 `store.habitViews`（`home/index.tsx:25`、`home_screen.dart:25`）；seed 不再写 `doneText` |
 | E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ✅ **已修** | 闸门＝**可测判据 + 编译期常量**：`store.ts:27 demoResetAllowed()` / `store.ts:38 ALLOW_DEMO_RESET`、`app_store.dart:22` / `app_store.dart:29`；首启空态：`store.ts:71 constructor(){ this.resetToEmpty() }`、`app_store.dart:41`；seed 只剩 `resetToSeed()` 一个显式入口（`store.ts:119`、`app_store.dart:96`） |
 | E19 | 小标题串接方式不统一 | 🟡 低 | ✅ **已修** | `types.ts:155` / `point_record.dart:52`：`recordSubtitle()` 派生 |
+| D9 | 图标字段跨端类型不一致（一端存字形、一端只能存名字） | 🟠 中 | ✅ **已修**（阶段 C5，**本轮补入本表**） | 名字是唯一事实：常量表 ＋ 映射表 `app_icons.dart:75`、兜底 `app_icons.dart:109`、查表 `iconDataFor()` `app_icons.dart:115`、白名单 `app_icons.dart:122`；数据层只存名字 `habit.dart:78` / `point_rule.dart:51` / `point_record.dart:108`（`lib/models`＋`lib/data` 里 `IconData` / `Icons.` 归零）；渲染各一处经 `iconDataFor(`（`rule_tile.dart` / `record_tile.dart` / `form_fields.dart`）；写入口两端同口径 `store.ts:547` / `app_store.dart addRule`；Taro 兜底 `icons.ts:202`＋`getIcon()`；三份手抄名单由闸门 `tools/icon-names-check.mjs`（`npm run icons:check`）守 → 见 §D9 |
 
-**合计：✅ 已修 18 · ❌ 未修 0（C9 / C10 / C11 于阶段 C4 收口）**
+**合计：✅ 已修 19 · ❌ 未修 0（C9 / C10 / C11 于阶段 C4 收口；D9 于阶段 C5 收口并「补入本表」）**
+
+> **为什么本表是 19 条而不是 18 条**：D9 此前**从未进过本表** —— 它只活在 `06` §3.1 的**决策登记**
+> （决策号 D9）与本文 §0.1 第 3 条里。也就是说「图标字段到底修没修」这件事，长期**没有任何守门人在看**。
+> C5 收口时把它补进 §0 表（**沿用决策号，不另立编号** —— 同一个东西不该有两个名字），
+> `tools/defect-status.mjs` 同批补上验证器。补录那一刻闸门立刻报红
+> （`FAIL D9 台账=（无此行）… 台账 §0 缺少 D9 —— fail-closed，不跳过`，`FAILED 1 项（共对账 19 条）`），
+> 加行后转绿 —— 与 C3 / C4 改口时被同一条闸门拦下，是同一套机制。
+> 本阶段的交接单（三端类型表、落地清单、7 项检查、证伪与自我纠正、遗留）见
+> [`09-c5-handoff.md`](./09-c5-handoff.md)。
 
 > 已无「半修」与「已改 9/10」两档：**C1 把 E18 与 D13 一起收口**（台账那两行改口的**那一刻就被守门人拦下过** ——
 > 见 §0.1 第 2 条；这正是阶段 A5 建这个守卫的目的）。
@@ -71,7 +81,7 @@
 |---|---|---|
 | 1 | **本表状态列长期失实**：8 条早已修好却标"待修" | ✅ 已重写（本表） |
 | 2 | **E18 是真实生产缺陷**；且第 10 条测试断言**把它固化成了"正确行为"** | ✅ 已修（阶段 C1：E18 第二半 + 该断言同批改） |
-| 3 | `01` §3 承诺"接 API 不改 UI"**过宽**（图标字段不成立，见 D9） | → 阶段 A4 收敛 |
+| 3 | `01` §3 承诺"接 API 不改 UI"**过宽**（图标字段不成立，见 D9） | ✅ 已收口（阶段 C5：`01` §3 已收敛为「不是零 UI 改动」并列出三处必然触碰点；D9 同时补入 §0 表） |
 | 4 | 本文档验收门写的 `node .tmp_test/run.js` **缺工作目录前提** | ✅ 已修（见文末"验收门"） |
 | 5 | `kids_points_mp/.gitignore` 的 `.tmp_test/` 整目录忽略会**吞掉 4 个手写脚本** | ✅ 已修（建仓时拆弹，见设计文档索引「Git 记录规范」） |
 | 6 | **本表状态列没有守门人** —— 失实了也没有任何东西会喊出来（与 D12 同源） | ✅ 已加 `node tools/defect-status.mjs`（阶段 A5，接入 `npm run ci`） |
@@ -85,8 +95,16 @@ C1 ✅ E18 第二半（构造函数不再无条件 reset ＋ 第 10 条断言改
 C2 ✅ E15 ＋ E17 ＋ A2 ＋ A3    （双端同步：结构字段化，展示串降级为派生）—— 已落地
 C3 ✅ E16                        （已落地：WishCoverStyle 稳定枚举替换数组下标）
 C4 ✅ C9 / C10 / C11             （软删除 ＋ 规则编辑 ＋ AuditLog）—— 已落地
-C5  D9                         （新增 iconName → IconData 映射）
+C5 ✅ D9                         （iconName ↔ IconData 映射 ＋ 跨端图标名闸门）—— 已落地（2026-10-13）
 ```
+
+> **C5 的两处「与提案不同」**（提案是建议，实现才是事实）：
+> ① 提案只写了「新增 `iconName → IconData` 映射」；实际落地时发现**光有映射不够** ——
+>    三端各有一份**手抄的图标名名单**（Taro `ICONS` / Flutter `appIcons` / 后端 `ICON_NAMES`），
+>    后端那份没法 import 小程序的 TS。手抄就会漂移，而漂移的表现是「某个图标在某一端悄悄变成占位」，
+>    三端的编译器都不会说一句话 → 于是同批加了闸门 `tools/icon-names-check.mjs`（7 项检查）。
+> ② **编辑规则时不再允许改图标**（`RuleVersion` 快照没有 icon 字段，允许改会导致版本回放对不上）；
+>    这是**刻意的能力缩减**，已写进 §D9「现状」。
 
 ---
 
@@ -392,6 +410,60 @@ title: `兑换：${this.shortTitle(wish.title)}`      // 超 10 字符 → slice
 
 ---
 
+## 跨端契约 · D9 图标字段跨端类型不一致 ✅ 已修（阶段 C5，2026-10-13）
+
+> **编号说明**：这一条的 **D9 是「决策号」**（`06` §3.1 裁定表里的决策 D9），**不是「D 类第 9 条」**。
+> 它此前**从未进过本台账** —— 只在 `06` §3.1 的决策登记与本文 §0.1 第 3 条里被提到，
+> 于是「图标字段到底修没修」长期没有守门人。**台账漏收一条已知缺陷，本身就是台账的漏洞**：
+> 一条没人对账的缺陷，与 E18 那类「文档说 A、代码是 B」是同一种病。C5 把它补进 §0 表。
+
+**位置**：`kids_points_mp/src/data/types.ts`（`icon: IconName`）、`lib/models/*.dart`（原 `icon: IconData`）、
+`backend/prisma/schema.prisma`（`PointRule.icon` / `RuleTemplate.icon` 存的是 `String`）
+
+**根因**：同一条数据在三端是**三种类型**，而中间没有任何东西翻译：
+
+| 端 | 原表示 | 事实 |
+|---|---|---|
+| 后端 / 库 | `String`（`'book'`） | 权威事实是**名字** |
+| Taro | `IconName`（字符串联合） | 名字直接查表渲染，本来是对的 |
+| Flutter | `IconData`（`Icons.menu_book_rounded`） | **存的是字形常量** —— 服务端给的名字根本落不进去 |
+
+**现实影响**：`01` §3 承诺「接 API 时不改 UI，只改方法体」—— 对图标字段**不成立**。
+服务端给 `"book"`，Flutter 侧要么新增「名字 → `IconData`」映射（**新增代码**），
+要么在每个用图标的地方改写成字面量比较。这正是 §0.1 第 3 条要收敛该承诺的原因。
+
+**修复（双端同步）**：
+
+- **数据层只存名字**：Flutter 侧 `Habit.iconName` / `PointRule.iconName` / `PointRecord.iconName`
+  （由 `icon: IconData` 改名而来），与后端 `String`、Taro `IconName` **同构**。
+  两端数据层出现 `IconData` / `Icons.` 即视为**回退**（守门人用 `countIs(..., 0)` 钉住）。
+- **名字的唯一事实**：`lib/theme/app_icons.dart` 一处给出常量表 `IconNames`、映射表 `appIcons`、
+  查表 `iconDataFor()`、兜底 `fallbackIcon`、白名单 `isKnownIconName()`；Taro 对位的是 `icons.ts`。
+- **渲染时才换算**：`rule_tile` / `record_tile` / `form_fields` **各恰好一处** `iconDataFor(名字)`；
+  Taro 只经 `Icon/index.tsx` 的 `getIcon()` 出口（不许直接读 `ICONS[`）。
+- **白名单外不许静默缺失**：`iconDataFor()` / `getIcon()` 落到 `unknown`（问号圈）占位。
+  画空白会被当成「这条本来就没图标」，比画个问号更撒谎；`unknown` **就在白名单里**
+  （不另立第四份名单 —— 于是「三份名单相等」这句话仍然只有一句）。
+- **写入口设防**：两端 `addRule` 都查白名单，越界**拒绝并给出文案**（与 `dailyLimit` 越界同款），
+  而不是落库后画成占位。Taro 的判定必须查**自己的键**（`hasOwnProperty`），
+  `'toString'` 这类原型链名字不算白名单成员。
+
+**三份手抄名单**：小程序 `ICONS` 键集合、Flutter `appIcons` 键集合、后端 `ICON_NAMES`
+必须**逐字相等**（当前 **29** 个名字；后端不能 import 小程序的 TS，只能手抄）。
+守门人 `tools/icon-names-check.mjs`（`npm run icons:check`，已接进 `npm run ci`）做 7 项检查：
+① 三份集合相等且各自无重复 ② Flutter 常量名 = 字面量、映射表键集合 = 常量集合 ③ 数据层不得存字形
+④ 调用处不得写死名字 ⑤ 渲染点各只一处 ⑥ 两端选择器清单同名同序 ⑦ 逃生口在位且被接上。
+
+**一处刻意的能力缩减（诚实记录）**：**编辑规则时不再允许改图标**。
+`RuleVersion` 快照里没有 icon 字段（后端契约只有 `title` / `condition` / `dailyLimit` / `points`），
+允许改图标就会出现「版本回放时图标对不上」。要么给后端加契约字段（schema 变更），
+要么把图标当作规则的**稳定属性**。C5 选择后者：**新建时可选、编辑时只读**；要改它，先加后端字段。
+
+**回归用例**：`run.js` 两条（写入口白名单 ＋ 渲染兜底）、`app_test.dart` 三条（契约自洽 ＋ 渲染兜底 ＋ 写入口），
+外加闸门 7 项。全部**能在修复前失败**（逐例证伪见文末「验收门」的 C5 两条）。
+
+---
+
 ## D 类 · 测试基础设施失效
 
 ### D12 测试器花括号嵌套错位 → **CI 假通过** ✅ 已修
@@ -602,7 +674,7 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
   （`run.js` 内部按自身 `__dirname` 定位 `dist/`，与工作目录无关；但写全路径更不易误用）
 - **本表可被机器复核**：`node tools/defect-status.mjs`（`npm run ci` 的一环 `npm run defects:check`）必须 `ALL PASS`；
   且**篡改任意一条状态后必须变红**（7 份副本已验证）—— 否则它自己就是下一处假绿
-- 上述 18 条缺陷全部有对应的**新回归用例**（每轮修复后能复现修复前失败）
+- 上述缺陷（**原 18 条 ＋ C5 补入的 D9 ＝ 19 条**）全部有对应的**新回归用例**（每轮修复后能复现修复前失败）
 - 双端行为一致（同一用例在 Taro / Flutter 两侧结论相同）
 - **反回退粒度（C2 起）**：结构字段化的四条不只是「新符号在不在」，还含**反回退断言** —— `*.checked =` 写入数必须为 0、seed 不得再出现 `limitText:` / `doneText:`、`rule.detail.split` 归零、两端必须排除 `reversedIds`、首页必须消费 `habitViews`。只断言「新符号存在」是不够的：旧写法完全可以与它并存 —— 那正是 A2 / A3 / E15 / E17 当初「看着像修了」却还活着的原因。
 - **C2 闸门实测（2026-10-12）**：Taro `tsc --noEmit` 0 错、现编 `run.js` 19/19 ALL PASS、`flutter analyze` 0 issue、`flutter test` 29/29、`backend npm run ci` ALL PASS（18 条对账）。
@@ -620,5 +692,47 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
   ⑤ Flutter `List<Wish> get wishes => activeOnly(_wishList)` 去掉 `activeOnly`（少一处过滤）→ **C9 红**；
   ⑥ `updateRule` 里偷偷 `live.id = newId('rule')`（假装版本化）→ **C10 红**。
   （本轮的自测脚本是 `tools/_scratch/` 下的一次性文件，**未入库**；六例的注入点与期望条目如上，可照此复跑。）
+- **C5 闸门实测（2026-10-13）**：Taro `npx tsc --noEmit` 0 错、现编产物 ＋ `node .tmp_test/run.js` **27/27 `ALL PASS`**（新增 D9 ×2）；
+  `flutter analyze` `No issues found!`、`flutter test` **41/41**（`app_test.dart` 40 ＋ `widget_test.dart` 1；本轮新增 3 条）；
+  `node tools/icon-names-check.mjs` **`ALL PASS`（7/7，三份名单各 29 个名字）**；
+  `node tools/defect-status.mjs` **`ALL PASS`（19/19 —— D9 补入台账）**；`cd backend && npm run ci` **`CI_EXIT=0`**（9 步，新增 `icons:check`）。
+- **C5 反回退粒度**：D9 验证器不只查新符号，还含**反向断言** —— `lib/models` ＋ `lib/data` 里 `IconData` 命中数必须 **0**、
+  三个渲染点 `iconDataFor(` 各**恰好 1 次**、Taro 白名单判定必须是 `hasOwnProperty.call(ICONS, name)`
+  （退化成 `name in ICONS` 即红）、后端 `ICON_NAMES` 必须含 `'unknown'`（否则三份名单不再相等）、
+  两条 Taro 用例 ＋ 三条 Flutter 用例必须还在（删用例 = 修复失去保护）。
+- **C5 闸门「加行即被拦」实录**：把 D9 补进 §0 表的**同一刻**，`defect-status.mjs` 立刻报
+  `FAIL D9 台账=（无此行）… 台账 §0 缺少 D9 —— fail-closed，不跳过` / `FAILED 1 项（共对账 19 条）`；
+  补上验证器后转绿。**这不是事故，正是 fail-closed 的设计目的**（与 C3 / C4 改口时被同一条闸门拦下同理）。
+- **C5 证伪自测（2026-10-13；层级：闸门 12/12 ＋ Taro 用例 3/3 ＋ Flutter 用例 3/3）**：
+  ① **闸门自身 12 例**（`tools/_scratch/c5-tamper.mjs`）：把**副本**指进闸门（`KP_ICON_*` 环境变量）后逐条注入反例，
+     每例都必须**红且点名对应检查** —— 后端名单删 `unknown`（①）、Flutter 映射表删一项（②）、数据层塞回 `IconData`（③）、
+     调用处写死 `iconDataFor('book')`（④）、渲染点回退成 `Icon(Icons.book, …)`（⑤）、选择器删一枚（⑥）、
+     兜底改成硬编码字形 ／ Taro `getIcon` 去掉兜底分支 ／ 两端 `addRule` 删掉白名单校验（⑦ ×4）；
+     另加两例 **fail-closed 探针**（Taro `ICONS` 改名、后端名单整块改名 → 必须红，不许静默放过）。
+     控制例本身也是断言的一部分：**副本与原文件逐字节相同**，且**未注入时必须 ALL PASS**。
+     > 这一版脚本首跑就抓到**自己的**一个漏洞：副本曾分成「专项检查读的那份」与「扫全 lib 读的那份」，
+     > 于是「改了 A、闸门看的是 B」会让某一例**假绿**（第 ⑤ 例）。改成**每个真文件只有一份副本**后才复现出红 ——
+     > 与本项目其它教训同源：**测试基础设施自己的 bug 最会伪装成"通过"**。
+  ② **Taro 两条新用例 3/3**（`tools/_scratch/c5-taro-falsify.mjs`）：把「C5 之前的样子」注入**编译产物** `dist/`（不动源码）——
+     `getIcon` 兜底拿掉 ／ 白名单判定退化成 `name in ICONS` ／ `store.addRule` 删校验 → 各自点名 `FAIL D9 …`，
+     还原后 sha256 一致且回绿。
+  ③ **Flutter 三条新用例 3/3**（`tools/_scratch/c5-flutter-falsify.mjs`）：`flutter test` 跑的是**真源码**，
+     所以每例都先备份 ＋ 事后 **sha256 字节级还原**（原件副本留在 `tools/_scratch/c5bak/`）。
+- **C5 的三次自我纠正（都发生在自测脚本里，不是产品代码里）**：
+  ① **闸门脚本自己的假绿**：副本曾分成「专项检查读的那份」与「扫全 `lib` 读的那份」，
+     于是「改了 A、闸门看的是 B」让第 ⑤ 例**红了也白红**（报告里是"红了但没点名"，实为假绿）；
+     改成**每个真文件只有一份副本**后才复现。
+  ② **反例的假绿**：`fallbackIcon` 的第一版注入写成 `Icons.help_outline_rounded` ——
+     那**正是**映射表里 `unknown` 的值，行为完全等价，测试当然不红。**红不了的不是用例，是我的反例**；
+     换成 `Icons.home` 后立刻点名 `白名单兜底`。
+  ③ **实验残留物自己制造的红**：Flutter 证伪脚本把真源码备份成 `tools/_scratch/c5bak/app_store.dart`，
+     而 `flutter analyze` 会分析包目录下**所有** `.dart` —— 副本里的相对 import 全部悬空，
+     于是 `0 issue` 变成 **`303 issues found`**（`EXIT=1`）。
+     备份改名成 `*.dart.bak` 后复跑：`No issues found!`。
+     **教训**：还原能不能算数，要由"重跑全部闸门"来签字 —— 一次实验的残留物足以让结论失效
+     （与 README 里「还原后必须重跑」那条同源）。
+- **C5 遗留（别把已修当已够）**：① **编辑规则仍不能改图标**（见 §D9「刻意的能力缩减」）——
+  要支持得先给 `RuleVersion` 契约加 icon 字段；② 三份名单仍是**手抄**，只是现在**漂移会被闸门抓住**；
+  真正的一劳永逸是让后端从契约文件生成 `ICON_NAMES`（未做，因为跨包跨工具链引入成本更高）。
 
 

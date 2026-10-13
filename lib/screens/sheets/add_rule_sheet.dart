@@ -58,7 +58,8 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
   late bool isGain = (widget.rule?.points ?? 1) >= 0;
   late int amount = widget.rule == null ? 2 : widget.rule!.points.abs();
   late int dailyLimit = widget.rule?.dailyLimit ?? 1;
-  late int iconIndex = _iconIndexOf(widget.rule);
+  /// 选中的图标下标（修 D9：图标只在新建时选择，编辑态不显示选择器）
+  int iconIndex = 0;
   @override
   void dispose() {
     titleController.dispose();
@@ -120,7 +121,8 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
               condition: conditionController.text,
               dailyLimit: dailyLimit,
               points: isGain ? amount : -amount,
-              icon: option.icon,
+              // 修 D9：传的是**图标名字**（白名单校验在 store 里，越界即拒）
+              iconName: option.name,
               color: option.color,
             );
             if (message != null) {
@@ -177,13 +179,20 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
                 max: 999,
                 onChanged: (int value) => setSheetState(() => amount = value),
               ),
-              const SizedBox(height: 14),
-              const FieldLabel('选择图标'),
-              IconPicker(
-                selectedIndex: iconIndex,
-                onSelected: (int index) =>
-                    setSheetState(() => iconIndex = index),
-              ),
+              // 修 D9：图标只在**新建**时选择 —— 编辑态不再显示这个「选了也不生效」的选择器。
+              // 原因：图标是创建时写入的字段，而 `updateRule` 的版本快照（`RuleVersion`）
+              // 里没有图标字段 —— 允许「改了但不入版本」会让「第 N 版规则长什么样」缺一块
+              // （C10 的语义要求版本快照完整）。要让编辑也能改图标，得先把 iconName 纳入
+              // 版本快照（契约扩展），本轮不做，见 `docs/design/03` §D9 现状。
+              if (widget.rule == null) ...<Widget>[
+                const SizedBox(height: 14),
+                const FieldLabel('选择图标'),
+                IconPicker(
+                  selectedIndex: iconIndex,
+                  onSelected: (int index) =>
+                      setSheetState(() => iconIndex = index),
+                ),
+              ],
             ],
           ),
         );
@@ -262,15 +271,7 @@ Future<void> showRuleActionsSheet(
   );
 }
 
-/// 编辑态要回填图标选择器的**下标**（表单存的是下标，不是 icon 本身）。
-int _iconIndexOf(PointRule? rule) {
-  if (rule == null) return 0;
-  final int index = ruleIconOptions.indexWhere(
-    (IconOption option) => option.icon == rule.icon,
-  );
-  return index < 0 ? 0 : index;
-}
-
+/// 操作菜单里的一行（图标 + 文案）。
 class _ActionRow extends StatelessWidget {
   const _ActionRow({
     required this.icon,

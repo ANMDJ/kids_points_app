@@ -76,7 +76,7 @@ class PointRecord {
     required this.points,
     required this.time,
     required this.category,
-    required this.icon,
+    required this.iconName,
     required this.color,
     required this.source,
     required this.operatorRole,
@@ -102,7 +102,10 @@ class PointRecord {
 
   final DateTime time;
   final RecordCategory category;
-  final IconData icon;
+
+  /// 图标**名字**（如 `'book'`）—— 修 **D9**：与后端 `PointRecord.icon String`、
+  /// 小程序 `icon: IconName` 同构；渲染前由 `iconDataFor(iconName)` 查表。
+  final String iconName;
   final Color color;
 
   // ───────────────────────── 账本可追溯性（A4 / B6 / B7 / B8）

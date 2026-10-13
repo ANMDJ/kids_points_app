@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../theme/app_icons.dart';
 
 /// 表单小节标题。
 class FieldLabel extends StatelessWidget {
@@ -75,22 +76,26 @@ class SoftTextField extends StatelessWidget {
 
 /// 一个可选的图标 + 配色。
 class IconOption {
-  const IconOption(this.icon, this.color);
+  const IconOption(this.name, this.color);
 
-  final IconData icon;
+  /// 图标**名字**（跨端契约里的名字，不是 `IconData`）—— 修 D9
+  final String name;
   final Color color;
 }
 
 /// 规则可选图标（也是新习惯的默认图标来源）。
+///
+/// 名字与配色**必须**与小程序侧 `FormFields/index.tsx` 的 `ruleIconOptions`
+/// 逐一对应（同名、同序、同色）—— 名字集合由 `npm run icons:check` 钉死。
 const List<IconOption> ruleIconOptions = <IconOption>[
-  IconOption(Icons.menu_book_rounded, AppColors.starYellow),
-  IconOption(Icons.luggage_rounded, AppColors.pointSpend),
-  IconOption(Icons.assignment_rounded, AppColors.primaryDeep),
-  IconOption(Icons.auto_stories_rounded, Color(0xFF7BB0E8)),
-  IconOption(Icons.brush_rounded, Color(0xFFE58FB0)),
-  IconOption(Icons.music_note_rounded, Color(0xFF9B8BE8)),
-  IconOption(Icons.sports_basketball_rounded, AppColors.orange),
-  IconOption(Icons.cleaning_services_rounded, Color(0xFF62C1B8)),
+  IconOption(IconNames.book, AppColors.starYellow),
+  IconOption(IconNames.backpack, AppColors.pointSpend),
+  IconOption(IconNames.clipboard, AppColors.primaryDeep),
+  IconOption(IconNames.stories, Color(0xFF7BB0E8)),
+  IconOption(IconNames.palette, Color(0xFFE58FB0)),
+  IconOption(IconNames.music, Color(0xFF9B8BE8)),
+  IconOption(IconNames.basketball, AppColors.orange),
+  IconOption(IconNames.spray, Color(0xFF62C1B8)),
 ];
 
 /// 图标选择器。
@@ -126,7 +131,7 @@ class IconPicker extends StatelessWidget {
                 width: 1.6,
               ),
             ),
-            child: Icon(option.icon, size: 21, color: option.color),
+            child: Icon(iconDataFor(option.name), size: 21, color: option.color),
           ),
         );
       }),

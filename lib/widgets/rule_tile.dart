@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/point_rule.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_icons.dart';
 import 'app_card.dart';
 
 /// 积分规则列表项：图标 + 名称/细则 + 分值，长按可编辑（加入习惯 / 删除）。
@@ -34,7 +35,7 @@ class RuleTile extends StatelessWidget {
                 color: rule.color.withAlpha(34),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(rule.icon, size: 20, color: rule.color),
+              child: Icon(iconDataFor(rule.iconName), size: 20, color: rule.color),
             ),
             const SizedBox(width: 12),
             Expanded(

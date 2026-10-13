@@ -12,7 +12,9 @@ import 'package:kids_points_app/models/trash.dart';
 import 'package:kids_points_app/models/wish.dart';
 import 'package:kids_points_app/screens/wishlist_screen.dart';
 import 'package:kids_points_app/theme/app_colors.dart';
+import 'package:kids_points_app/theme/app_icons.dart';
 import 'package:kids_points_app/widgets/floating_add_button.dart';
+import 'package:kids_points_app/widgets/form_fields.dart';
 import 'package:kids_points_app/widgets/wish_card.dart';
 
 void main() {
@@ -169,7 +171,7 @@ void main() {
           condition: '认真练习不断开',
           dailyLimit: 2,
           points: 3,
-          icon: Icons.music_note_rounded,
+          iconName: IconNames.music,
           color: Colors.amber,
         ),
         isNull,
@@ -250,7 +252,7 @@ void main() {
         condition: '不可以打人',
         dailyLimit: 1,
         points: -3,
-        icon: Icons.warning_amber_rounded,
+        iconName: IconNames.close,
         color: Colors.red,
       );
       final int before = store.habits.length;
@@ -410,7 +412,7 @@ void main() {
         condition: '连续 3 天',
         dailyLimit: 1,
         points: 4,
-        icon: Icons.music_note_rounded,
+        iconName: IconNames.music,
         color: Colors.amber,
       );
       expect(store.rules.first.condition, '连续 3 天', reason: '条件不被 split 切碎');
@@ -426,7 +428,7 @@ void main() {
             condition: '条件',
             dailyLimit: bad,
             points: 1,
-            icon: Icons.star_rounded,
+            iconName: IconNames.star,
             color: Colors.amber,
           ),
           isNotNull,
@@ -920,6 +922,104 @@ void main() {
       expect(store.auditLog.first.targetType, AuditTargetType.member);
 
       expect(store.auditLog.length, 7, reason: '审计只增：7 次变更 = 7 条');
+    });
+  });
+
+  // ───────────────────────── 阶段 C5：图标名 → IconData 映射（修 D9）
+  group('图标名映射（修 D9）', () {
+    test('图标名是跨端契约：演示数据与可选图标全部落在白名单里', () {
+      final AppStore store = seededStore();
+
+      // ① 数据层存的是**名字**（不是 IconData），且每个名字都查得到表 ——
+      //    否则界面画出来的是「未知」占位，而不是家长当初选的那枚图标。
+      for (final Habit habit in store.habits) {
+        expect(
+          isKnownIconName(habit.iconName),
+          isTrue,
+          reason: '习惯「${habit.title}」的图标名 ${habit.iconName} 不在白名单里',
+        );
+      }
+      for (final PointRule rule in store.rules) {
+        expect(
+          isKnownIconName(rule.iconName),
+          isTrue,
+          reason: '规则「${rule.title}」的图标名 ${rule.iconName} 不在白名单里',
+        );
+      }
+      for (final PointRecord record in store.records) {
+        expect(
+          isKnownIconName(record.iconName),
+          isTrue,
+          reason: '流水「${record.title}」的图标名 ${record.iconName} 不在白名单里',
+        );
+      }
+
+      // ② 表单给家长选的那几枚，必须都能画出真图标（不得拿占位充数）、且互不重名重形
+      expect(
+        ruleIconOptions.map((IconOption option) => option.name).toSet().length,
+        ruleIconOptions.length,
+        reason: '可选图标的名字不得重复',
+      );
+      expect(
+        ruleIconOptions
+            .map((IconOption option) => iconDataFor(option.name))
+            .toSet()
+            .length,
+        ruleIconOptions.length,
+        reason: '可选图标的字形不得重复（映射表里复制粘贴就会重）',
+      );
+      for (final IconOption option in ruleIconOptions) {
+        expect(isKnownIconName(option.name), isTrue, reason: '可选图标 ${option.name} 不在白名单里');
+        expect(
+          iconDataFor(option.name),
+          isNot(fallbackIcon),
+          reason: '可选图标 ${option.name} 必须映到真图标，不能是占位',
+        );
+      }
+    });
+
+    test('白名单兜底：未登记的名字落到「未知」占位，不崩也不空白', () {
+      expect(isKnownIconName(IconNames.book), isTrue);
+      expect(isKnownIconName('flower-not-registered'), isFalse);
+      expect(iconDataFor(IconNames.book), isNot(fallbackIcon));
+      expect(iconDataFor('flower-not-registered'), fallbackIcon);
+      expect(iconDataFor(''), fallbackIcon, reason: '空名字也要兜底 —— 服务端没给值时不该崩');
+      expect(
+        iconDataFor(IconNames.unknown),
+        fallbackIcon,
+        reason: '兜底由映射表派生：它就是白名单里的 unknown，不是第二份真相',
+      );
+    });
+
+    test('写入口拒绝白名单之外的图标名（与 dailyLimit 越界同款）', () {
+      final AppStore store = seededStore();
+      expect(
+        store.addRule(
+          title: '不存在的图标',
+          condition: '条件',
+          dailyLimit: 1,
+          points: 1,
+          iconName: 'flower-not-registered',
+          color: Colors.amber,
+        ),
+        isNotNull,
+        reason: '越界必须**拒绝并说明原因** —— 静默落库只会让界面画成占位，家长以为存进去了',
+      );
+      expect(store.rules.length, 4, reason: '被拒绝时不写规则');
+
+      expect(
+        store.addRule(
+          title: '积木整理',
+          condition: '玩具归位',
+          dailyLimit: 1,
+          points: 1,
+          iconName: IconNames.gift,
+          color: Colors.amber,
+        ),
+        isNull,
+      );
+      expect(store.rules.first.iconName, IconNames.gift, reason: '白名单里的名字原样落库，不经过任何字形换算');
+      expect(iconDataFor(store.rules.first.iconName), iconDataFor(IconNames.gift));
     });
   });
 }

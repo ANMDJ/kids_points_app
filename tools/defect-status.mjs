@@ -49,6 +49,13 @@ const F_TRASH = `${FL}/models/trash.dart`
 const F_AUDIT = `${FL}/models/audit.dart`
 const F_RULE_VERSION = `${FL}/models/rule_version.dart`
 const F_CARD = `${FL}/widgets/wish_card.dart`
+// ── 阶段 C5（修 D9）：图标名字跨端契约 ────────────────────────────────────
+const F_ICONS = `${FL}/theme/app_icons.dart`
+const F_RULE_TILE = `${FL}/widgets/rule_tile.dart`
+const F_RECORD_TILE = `${FL}/widgets/record_tile.dart`
+const T_ICONS = 'kids_points_mp/src/components/Icon/icons.ts'
+const T_TEMPLATES = 'backend/prisma/seed/templates.data.ts'
+const C5_GATE = 'tools/icon-names-check.mjs'
 const D12_FIXTURE = 'backend/scripts/__fixtures__/d12-misnested-runner.js'
 
 const DOC = process.env.DEFECT_DOC_PATH
@@ -160,7 +167,10 @@ function checkD12() {
   return problems
 }
 
-// ── 18 条缺陷的代码验证器（与 `03` §0 表一一对应）──────────────────────────
+// ── 19 条缺陷的代码验证器（与 `03` §0 表一一对应）──────────────────────────
+// C5 说明：原 18 条里没有 D9（图标字段跨端类型不一致）—— 它此前只活在 `06` §3.1 的
+// **决策**登记里，台账从未收它，于是「到底修没修」无人在意。C5 把它补进台账，本文件
+// 随之多一个验证器：**台账加行而验证器不加，本工具会 fail-closed 报红**（这是设计使然）。
 const DEFECTS = [
   { id: 'A1', status: 'fixed', what: '负分规则被 Math.abs() 抹平', assertions: () => [
     A.has(T_STORE, /rule\.points < 0/, '缺少「负分规则 → 拒绝」判定'),
@@ -412,6 +422,41 @@ const DEFECTS = [
   { id: 'E19', status: 'fixed', what: '小标题串接方式不统一', assertions: () => [
     A.has(T_TYPES, /export function recordSubtitle/, '缺少 recordSubtitle()'),
     A.has(F_RECORD, /String recordSubtitle\(/, '缺少 recordSubtitle()'),
+  ] },
+  // 这一条**不是**原 18 条之一：它此前只活在 `06` §3.1 的决策登记（决策 D9）与 `03` §0.1
+  // 第 3 条里，从未进过本表 —— 于是「图标字段到底修没修」没有守门人。C5 补入。
+  // 编号沿用决策号 D9（不另立一套编号，避免同一个东西两个名字）。
+  { id: 'D9', status: 'fixed', what: '图标字段跨端类型不一致（一端存字形、一端只能存名字）', assertions: () => [
+    // ① 名字是唯一事实：常量表 ＋ 映射表 ＋ 兜底 ＋ 白名单判定，四件都在同一份文件里派生
+    A.has(F_ICONS, /class IconNames \{/, 'Flutter 缺少图标名常量表'),
+    A.has(F_ICONS, /const Map<String, IconData> appIcons =/, 'Flutter 缺少「名字 → IconData」映射表'),
+    A.has(F_ICONS, /IconData get fallbackIcon => appIcons\[IconNames\.unknown\]!/, '兜底不再派生自映射表（第二份真相）'),
+    A.has(F_ICONS, /bool isKnownIconName\(String name\) => appIcons\.containsKey\(name\);/, '缺少白名单判定（写入口就没得校验）'),
+    // ② 数据层只准存名字：出现 IconData / Icons. 即红；模型必须持有 iconName
+    A.countIs(F_HABIT, /\bIconData\b/g, 0, '习惯模型又存回字形（回退 —— 服务端给的名字落不进去）'),
+    A.countIs(F_RULE, /\bIconData\b/g, 0, '规则模型又存回字形（回退）'),
+    A.countIs(F_RECORD, /\bIconData\b/g, 0, '流水模型又存回字形（回退）'),
+    A.countIs(F_STORE, /\bIconData\b/g, 0, '数据层又存回字形（回退）'),
+    A.has(F_RULE, /\bString iconName;/, '规则模型缺 iconName 字段'),
+    A.has(F_RECORD, /final String iconName;/, '流水模型缺 iconName 字段'),
+    // ③ 写入口设防：两端 addRule 都必须查白名单（越界拒绝，而不是静默落库画空白）
+    A.has(F_STORE, /isKnownIconName\(iconName\)/, 'Flutter addRule 写入口不设防'),
+    A.has(T_STORE, /isKnownIconName\(icon\)/, 'Taro store.addRule 写入口不设防'),
+    // ④ 渲染口走映射表、各只一处：写死字形就等于绕过映射（正是 D9 的病）
+    A.countIs(F_RULE_TILE, /iconDataFor\(/g, 1, '规则卡片必须经 iconDataFor 画图标（且只此一处）'),
+    A.countIs(F_RECORD_TILE, /iconDataFor\(/g, 1, '流水卡片必须经 iconDataFor 画图标（且只此一处）'),
+    // ⑤ Taro 侧同名同款：兜底常量在名单内、getIcon 有兜底分支、白名单判定不许退化成原型链查法
+    A.has(T_ICONS, /export const FALLBACK_ICON_NAME: IconName = 'unknown'/, 'Taro 缺少兜底常量'),
+    A.has(T_ICONS, /return defs\[name\] \?\? ICONS\[FALLBACK_ICON_NAME\]/, 'Taro getIcon 没有兜底分支（未登记的名字会画成空白）'),
+    A.has(T_ICONS, /Object\.prototype\.hasOwnProperty\.call\(ICONS, name\)/, 'Taro 白名单判定不是「查自己的键」'),
+    // ⑥ 三份手抄名单（Taro / Flutter / 后端）没有共同导入路径 —— 只能靠闸门守
+    A.has(T_TEMPLATES, /'unknown'/, '后端 ICON_NAMES 缺兜底名（三份名单不再相等）'),
+    A.has(C5_GATE, /三份名单集合相等/, '缺少跨端图标名闸门 tools/icon-names-check.mjs'),
+    // ⑦ 回归用例在位：删掉用例 = 修复失去保护
+    A.has(T_RUNNER, /D9 渲染兜底：未登记的名字画/, 'run.js 缺少渲染兜底回归用例'),
+    A.has(T_RUNNER, /越界图标名必须被拒绝/, 'run.js 缺少写入口白名单回归用例'),
+    A.has(F_TESTS, /白名单兜底：未登记的名字落到「未知」占位/, 'app_test.dart 缺少渲染兜底回归用例'),
+    A.has(F_TESTS, /写入口拒绝白名单之外的图标名/, 'app_test.dart 缺少写入口白名单回归用例'),
   ] },
 ]
 

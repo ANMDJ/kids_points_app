@@ -14,6 +14,8 @@ import 'trash.dart';
 /// **修 C9 / C10 追加**：`currentVersion`（版本号，改规则时 +1）、
 /// `status` / `deletedAt`（软删除位）。为了让 `updateRule` 能**原地**改规则
 /// （`id` 保持不变，历史流水才能继续指得到它），结构字段不再是 final。
+/// **修 D9 追加**：`icon` 由 `IconData` 改为**名字** `iconName`（与后端
+/// `PointRule.icon String` 同构）。
 class PointRule implements SoftDeletable {
   PointRule({
     required this.id,
@@ -21,7 +23,7 @@ class PointRule implements SoftDeletable {
     required this.condition,
     required this.dailyLimit,
     required this.points,
-    required this.icon,
+    required this.iconName,
     required this.color,
     this.currentVersion = 1,
     this.status = defaultStatus,
@@ -43,7 +45,10 @@ class PointRule implements SoftDeletable {
   /// 分值，可为负数（扣分规则）
   int points;
 
-  IconData icon;
+  /// 图标**名字**（如 `'book'`）—— 修 **D9**：与后端 `PointRule.icon String`、
+  /// 小程序 `icon: IconName` 同构；渲染前由 `iconDataFor(iconName)` 查表。
+  /// 写入时受白名单约束（`AppStore.addRule` 调 `isKnownIconName`，越界即拒）。
+  String iconName;
   Color color;
 
   /// 当前版本号：新建为 1，每次改规则 **+1** —— 修 C10

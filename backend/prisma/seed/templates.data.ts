@@ -14,6 +14,9 @@
  * ★ 图标名必须来自 kids_points_mp/src/components/Icon/icons.ts 的 ICONS 键集合，
  *   配色必须来自既有主题色板。写错名字在编译期不报错，只会在渲染时静默缺失。
  *   本文件的 `validateTemplates()` 会拦住这类错误。
+ *   **修 D9**：下面这份名单是**手抄**的（后端不能 import 小程序的 TS），所以它必须与
+ *   `ICONS` 的键集合、Flutter 侧 `lib/theme/app_icons.dart` 的 `appIcons` 键集合**逐字相等** ——
+ *   由 `npm run icons:check`（`tools/icon-names-check.mjs`）比对：手抄漂移就红。
  */
 
 export const ICON_NAMES = [
@@ -44,7 +47,10 @@ export const ICON_NAMES = [
   'copy',
   'close',
   'listCheck',
-  'trash'
+  'trash',
+  // 修 D9：兜底占位（白名单之外的名字画它）—— 与 icons.ts / app_icons.dart 的 `unknown` 同名。
+  // 放进白名单而不是另立一份，是为了让「三份名单相等」这条闸门一句话说得清。
+  'unknown'
 ] as const
 
 /** 既有主题色板（lib/theme/app_colors.dart + kids_points_mp/src/data/seed.ts 实际取值） */

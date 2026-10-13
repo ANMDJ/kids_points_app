@@ -38,11 +38,11 @@ export default function AddRuleSheet({
   const [dailyLimit, setDailyLimit] = useState(rule ? rule.dailyLimit : 1)
   const [isGain, setIsGain] = useState(rule ? rule.points >= 0 : true)
   const [amount, setAmount] = useState(rule ? Math.abs(rule.points) : 2)
-  const [iconIndex, setIconIndex] = useState(() => {
-    if (!rule) return 0
-    const index = ruleIconOptions.findIndex((option) => option.icon === rule.icon)
-    return index < 0 ? 0 : index
-  })
+  // 修 D9：图标只在**新建**时选择 —— 编辑态不再显示这个「选了也不生效」的选择器。
+  // 原因：图标是创建时写入的字段，而 `updateRule` 的版本快照（RuleVersion）里没有图标字段
+  // —— 允许「改了但不入版本」会让「第 N 版规则长什么样」缺一块（C10 的语义要求快照完整）。
+  // 要让编辑也能改图标，得先把 icon 纳入版本快照（契约扩展），本轮不做，见 docs/design/03 §D9 现状。
+  const [iconIndex, setIconIndex] = useState(0)
   const handleSubmit = () => {
     const trimmed = title.trim()
     if (trimmed === '') {
@@ -136,8 +136,13 @@ export default function AddRuleSheet({
       <View className='kp-sheet-gap-md' />
       <PointsStepper value={amount} min={1} max={999} onChanged={setAmount} />
       <View className='kp-sheet-gap-md' />
-      <FieldLabel text='选择图标' />
-      <IconPicker selectedIndex={iconIndex} onSelected={setIconIndex} />
+      {/* 修 D9：图标只在新建时选择（编辑态的选择器「选了也不生效」，已移除） */}
+      {rule ? null : (
+        <>
+          <FieldLabel text='选择图标' />
+          <IconPicker selectedIndex={iconIndex} onSelected={setIconIndex} />
+        </>
+      )}
     </SheetFrame>
   )
 }
