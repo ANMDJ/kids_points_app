@@ -5,14 +5,18 @@ import '../../data/app_store.dart';
 import '../../models/habit.dart';
 
 import '../../models/point_rule.dart';
+import '../../models/rule_version.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/form_fields.dart';
 import '../../widgets/points_stepper.dart';
 import '../../widgets/segmented_toggle.dart';
 import '../../widgets/sheet_frame.dart';
 
-/// “新增规则”：约定做到什么、得几分（也可约定扣分）。
-Future<void> showAddRuleSheet(BuildContext context) async {
+/// “新增 / 编辑规则”：约定做到什么、得几分（也可约定扣分）。
+///
+/// 传了 [rule] 即为**编辑态**（同一张表单，修 C10）；不传则是新增。
+/// 编辑态下 `id` 不变、`currentVersion` 由 store 递增 —— 界面不做版本运算。
+Future<void> showAddRuleSheet(BuildContext context, {PointRule? rule}) async {
   final AppStore store = AppScope.of(context);
   final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
   await showModalBottomSheet<void>(
@@ -20,18 +24,20 @@ Future<void> showAddRuleSheet(BuildContext context) async {
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (BuildContext sheetContext) {
-      return AddRuleSheet(store: store, messenger: messenger);
+      return AddRuleSheet(store: store, messenger: messenger, rule: rule);
     },
   );
 }
 
 class AddRuleSheet extends StatefulWidget {
   final AppStore store;
+  final PointRule? rule;
   final ScaffoldMessengerState messenger;
 
   const AddRuleSheet({
     required this.store,
     required this.messenger,
+    this.rule,
   });
 
   @override
@@ -41,13 +47,18 @@ class AddRuleSheet extends StatefulWidget {
 }
 
 class _AddRuleSheetState extends State<AddRuleSheet> {
-  final TextEditingController titleController = TextEditingController();
+  // 编辑态回填：`late` 让初始化推迟到 `widget` 可用之后（State 构造时还没有 widget）。
+  late final TextEditingController titleController = TextEditingController(
+    text: widget.rule?.title ?? '',
+  );
   // 修 E15：表单收集的是**结构字段**（条件 + 每日次数），不再是「细则」自由串
-  final TextEditingController conditionController = TextEditingController();
-  bool isGain = true;
-  int amount = 2;
-  int dailyLimit = 1;
-  int iconIndex = 0;
+  late final TextEditingController conditionController = TextEditingController(
+    text: widget.rule?.condition ?? '',
+  );
+  late bool isGain = (widget.rule?.points ?? 1) >= 0;
+  late int amount = widget.rule == null ? 2 : widget.rule!.points.abs();
+  late int dailyLimit = widget.rule?.dailyLimit ?? 1;
+  late int iconIndex = _iconIndexOf(widget.rule);
   @override
   void dispose() {
     titleController.dispose();
@@ -60,7 +71,7 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
     return StatefulBuilder(
       builder: (BuildContext sheetContext, StateSetter setSheetState) {
         return SheetFrame(
-          title: '新增规则',
+          title: widget.rule == null ? '新增规则' : '编辑规则',
           subtitle: '规则会出现在积分规则页，也可以加入今天的习惯',
           actionLabel: '保存规则',
           actionIcon: Icons.check_rounded,
@@ -69,6 +80,37 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
             if (title.isEmpty) {
               widget.messenger.showSnackBar(
                 const SnackBar(content: Text('规则名称不能为空哦')),
+              );
+              return;
+            }
+            if (widget.rule != null) {
+              final PointRule rule = widget.rule!;
+              // 修 C10（§3.3）：改动后若“今天已打卡数 ≥ 新上限”，**必须**告知家长
+              // 今天不能再打卡了 —— 否则改完规则孩子打不了卡，却不知原因。
+              // 文案由纯函数 ruleChangeNotice 派生（写在界面里的文案测不到）。
+              final String? notice = ruleChangeNotice(
+                childName: widget.store.profile.name,
+                checkedCountToday: widget.store.checkedCountTodayOfRule(rule),
+                newDailyLimit: dailyLimit,
+              );
+              final String? message = widget.store.updateRule(
+                rule,
+                title: title,
+                condition: conditionController.text,
+                dailyLimit: dailyLimit,
+                points: isGain ? amount : -amount,
+              );
+              if (message != null) {
+                widget.messenger.showSnackBar(SnackBar(content: Text(message)));
+                return;
+              }
+              Navigator.of(sheetContext).pop();
+              widget.messenger.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    notice ?? '已更新规则：$title（第 ${rule.currentVersion + 1} 版）',
+                  ),
+                ),
               );
               return;
             }
@@ -150,8 +192,13 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
   }
 }
 
-/// 长按规则：加入今天的习惯 / 删除规则。
-Future<void> showRuleActionsSheet(BuildContext context, PointRule rule) async {
+/// 长按规则：编辑规则 / 加入今天的习惯 / 移到回收站。
+Future<void> showRuleActionsSheet(
+  BuildContext context,
+  PointRule rule, {
+  /// 点“编辑这条规则”：由页面负责收起本菜单并打开编辑态表单（修 C10）
+  VoidCallback? onEdit,
+}) async {
   final AppStore store = AppScope.of(context);
   final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
@@ -165,6 +212,15 @@ Future<void> showRuleActionsSheet(BuildContext context, PointRule rule) async {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
+            _ActionRow(
+              icon: Icons.edit_rounded,
+              label: '编辑这条规则（当前第 ${rule.currentVersion} 版）',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                if (onEdit != null) onEdit();
+              },
+            ),
+            const SizedBox(height: 10),
             _ActionRow(
               icon: Icons.playlist_add_check_rounded,
               label: '加入今天的习惯',
@@ -185,12 +241,18 @@ Future<void> showRuleActionsSheet(BuildContext context, PointRule rule) async {
             const SizedBox(height: 10),
             _ActionRow(
               icon: Icons.delete_outline_rounded,
-              label: '删除这条规则',
+              label: '移到回收站',
               danger: true,
               onTap: () {
+                // 修 C9：删除只改状态位（软删），规则留在数据里 90 天可恢复 ——
+                // 历史流水的回指（ruleId / ruleVersion）因此不会指向空。
                 store.removeRule(rule);
                 Navigator.of(sheetContext).pop();
-                messenger.showSnackBar(const SnackBar(content: Text('规则已删除')));
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('已移到回收站，90 天内可在「我的 · 回收站」恢复'),
+                  ),
+                );
               },
             ),
           ],
@@ -198,6 +260,15 @@ Future<void> showRuleActionsSheet(BuildContext context, PointRule rule) async {
       );
     },
   );
+}
+
+/// 编辑态要回填图标选择器的**下标**（表单存的是下标，不是 icon 本身）。
+int _iconIndexOf(PointRule? rule) {
+  if (rule == null) return 0;
+  final int index = ruleIconOptions.indexWhere(
+    (IconOption option) => option.icon == rule.icon,
+  );
+  return index < 0 ? 0 : index;
 }
 
 class _ActionRow extends StatelessWidget {

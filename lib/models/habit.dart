@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'point_record.dart';
+import 'trash.dart';
 
 /// 每日次数上限的允许区间 —— 与后端模板校验（`backend/prisma/seed/templates.data.ts`）同口径。
 const int dailyLimitMin = 1;
@@ -34,7 +35,10 @@ bool isSameDay(DateTime time, [DateTime? other]) {
 /// 现在只保留结构字段 `condition` ＋ `dailyLimit`（与 `backend/prisma/schema.prisma`
 /// 的 `Habit.condition` / `Habit.dailyLimit` 同构）；
 /// 展示串与“是否已完成”一律由 [habitView] 从**当天流水**派生。
-class Habit {
+/// **修 C9 / C10 追加**：`status` / `deletedAt`（软删除位）与 `ruleId`（“我是由哪条规则
+/// 派生的”派生链）。为了改规则时能**原地同步**（`id` 不变 —— 换 id 就等于伪造版本化），
+/// `title` / `points` / `condition` / `dailyLimit` 不再是 final。
+class Habit implements SoftDeletable {
   Habit({
     required this.id,
     required this.title,
@@ -43,24 +47,56 @@ class Habit {
     required this.dailyLimit,
     required this.icon,
     required this.color,
+    this.ruleId,
+    this.status = defaultStatus,
+    this.deletedAt,
   });
 
+  @override
   final String id;
 
   /// 习惯名称，例如“番茄钟写作业”
-  final String title;
+  @override
+  String title;
 
   /// 完成一次获得的积分
-  final int points;
+  int points;
 
   /// 达成条件，例如“专注 25 分钟”
-  final String condition;
+  String condition;
 
   /// 每天可完成的次数上限（1–5 的整数，可运算、可校验）—— 修 A2
-  final int dailyLimit;
+  int dailyLimit;
 
-  final IconData icon;
-  final Color color;
+  IconData icon;
+  Color color;
+
+  /// 由哪条规则派生（**规则 id**，不是标题）—— 修 C10
+  ///
+  /// 按标题匹配是 E15 那类病：规则改个名，派生链就断。手工新建的习惯写 null。
+  final String? ruleId;
+
+  /// `active` 才出现在“今天的习惯”里；`deleted` 进回收站 —— 修 C9
+  @override
+  RecordStatus status;
+
+  /// 进入回收站的时间（`active` 时为 null）—— 修 C9
+  @override
+  DateTime? deletedAt;
+
+  /// 审计快照的**结构字段**（由 `auditSnapshotOf` 深拷贝）—— 修 C11
+  @override
+  @override
+  Map<String, Object?> snapshot() => <String, Object?>{
+        'id': id,
+        'title': title,
+        'points': points,
+        'condition': condition,
+        'dailyLimit': dailyLimit,
+        'ruleId': ruleId,
+        'status': status.name,
+        'deletedAt': deletedAt,
+      };
 }
 
 /// 今天这个习惯已经完成几次 —— 修 A3。

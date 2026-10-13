@@ -33,9 +33,9 @@
 | B6 | 扣分静默截断，**账本不平** | 🔴 高 | ✅ **已修** | `store.ts:244` / `app_store.dart:213`：返回"积分不足…最多可扣 N 分"，不再 `clamp` |
 | B7 | `undoCheckIn` 物理删除流水 | 🔴 高 | ✅ **已修** | `store.ts:213`：`reversesRecordId: target.id`（写冲正记录，原记录保留） |
 | B8 | 兑换标题被 `shortTitle` 永久截断 | 🟠 中 | ✅ **已修** | `store.ts:294` / `app_store.dart:265`：完整标题快照 |
-| C9 | 全部删除为物理删除，无软删除/回收站 | 🟠 中 | ❌ **未修** | 前端无 `deletedAt` / `softDelete`（后端 `Habit`/`Wish`/`PointRule` 已备字段） |
-| C10 | 规则无法编辑（无 `updateRule`） | 🔴 高 | ❌ **未修** | 前端无 `updateRule`（后端 `PointRule.currentVersion` 已备） |
-| C11 | 无 `AuditLog`，变更不可追溯 | 🟠 中 | ❌ **未修** | 前端无任何 audit 引用（后端 `AuditLog` 表已建） |
+| C9 | 全部删除为物理删除，无软删除/回收站 | 🟠 中 | ✅ **已修** | 软删位 `status` / `deletedAt`（契约 `types.ts:199 SoftDeletable` / `trash.dart:15`）；**唯一**过滤器 `types.ts:229 activeOnly()` ＋ `trash.dart:55`（排除 `deleted` 全仓库只有这一处）；三类公开列表一律走它（`store.ts:99-108` / `app_store.dart:71-75`）；保留 90 天纯函数 `types.ts:215 isTrashExpired()` / `trash.dart:45`；回收站 `trashItems` / `restoreTrash` / `purgeTrash` / `purgeExpiredTrash`；删除不再物理移除 → 见 §C9 现状 |
+| C10 | 规则无法编辑（无 `updateRule`） | 🔴 高 | ✅ **已修** | `updateRule` **四步一笔**（归档版本 → 改本体 → 同步派生习惯 → 写审计，只 persist 一次）`store.ts:847` / `app_store.dart:872`；版本表 `RuleVersion`（`types.ts:291` / `rule_version.dart:11`，新建即 v1、只增不删）；流水钉住当时版本 `store.ts:259` / `app_store.dart:207`；影响提示纯函数 `types.ts:315 ruleChangeNotice()` / `rule_version.dart:54` → 见 §C10 现状 |
+| C11 | 无 `AuditLog`，变更不可追溯 | 🟠 中 | ✅ **已修** | 追加式审计 `auditLog`（`store.ts:85` unshift / `app_store.dart:58` insert(0)，永不 UPDATE / 删除）；`before` / `after` 经 `auditSnapshotOf()` **深拷贝**（`types.ts:429` / `audit.dart:109`）；动作白名单 `type AuditAction`（`types.ts:367`）/ `enum AuditAction`（`audit.dart:13`）；5 类可达动作与业务写入**同一笔** → 见 §C11 现状 |
 | D12 | 测试器花括号嵌套错位 → **CI 假通过** | 🔴 高 | ✅ **已修** | `honesty:probe` 4/4；夹具 `__fixtures__/d12-misnested-runner.js` 证明**能失败** |
 | D13 | 测试断言把缺陷固化为"正确行为" | 🔴 高 | ✅ **已修（10/10）** | 1–9 条已改写；**第 10 条已随 C1 改写**：`run.js:409` / `test/app_test.dart:290` 断言「首启为空态」，演示数据降级为**显式夹具**（`run.js:58`、`test/app_test.dart:19`）→ 见 §E18 现状 |
 | E15 | `detail` 自由字符串，靠 `split(' · ')` 反解析 | 🟠 中 | ✅ **已修** | `PointRule` 只留 `condition` + `dailyLimit`（`types.ts:121`）；展示串派生 `types.ts:293 ruleDetail()` / `point_rule.dart:45`；规则→习惯直取结构字段 `store.ts:461` / `app_store.dart:424`；两端 `rule.detail.split` 归零 → 语义变更见 §0.2 ① |
@@ -44,7 +44,7 @@
 | E18 | `resetToSeed` 生产可达 + 首启即假数据 | 🔴 高 | ✅ **已修** | 闸门＝**可测判据 + 编译期常量**：`store.ts:27 demoResetAllowed()` / `store.ts:38 ALLOW_DEMO_RESET`、`app_store.dart:22` / `app_store.dart:29`；首启空态：`store.ts:71 constructor(){ this.resetToEmpty() }`、`app_store.dart:41`；seed 只剩 `resetToSeed()` 一个显式入口（`store.ts:119`、`app_store.dart:96`） |
 | E19 | 小标题串接方式不统一 | 🟡 低 | ✅ **已修** | `types.ts:155` / `point_record.dart:52`：`recordSubtitle()` 派生 |
 
-**合计：✅ 已修 15 · ❌ 未修 3（C9 / C10 / C11）**
+**合计：✅ 已修 18 · ❌ 未修 0（C9 / C10 / C11 于阶段 C4 收口）**
 
 > 已无「半修」与「已改 9/10」两档：**C1 把 E18 与 D13 一起收口**（台账那两行改口的**那一刻就被守门人拦下过** ——
 > 见 §0.1 第 2 条；这正是阶段 A5 建这个守卫的目的）。
@@ -58,6 +58,12 @@
 > [`07-c3-handoff.md`](./07-c3-handoff.md)。此刻运行 `node tools/defect-status.mjs` **预期报 `FAILED 1 项`**
 > （`E16 台账=❌ 未修，代码只符合「✅ 已修」`）：这是**闸门在正常工作**（抓「改了代码没改台账」），不是修复被回退。
 > **2026-10-12 阶段 C3**：E16 改口的同一刻又被同一条闸门拦下 —— backend 的 `defects:check` 报 `FAILED 1 项`（台账「未修」vs 代码「已修」）。
+
+> **2026-10-13 阶段 C4**：C9 / C10 / C11 改口的**同一刻又被这条闸门拦下**（`FAILED 3 项`：
+> 台账「❌ 未修」vs 代码只符合「✅ 已修」）—— 与 C2 / C3 是同一条抓法。
+> 这一轮还暴露了守门人**自己的一处过期断言**：A2 钉的是 `final int dailyLimit;`，而 C10 要求
+> 改规则时**原地同步**派生习惯（换 id 等于伪造版本化），`dailyLimit` 必须可写 —— 断言随之改为
+> 「结构字段存在且可写」。**旧断言不是"错的"，是被新语义作废的**：这正是守门人必须与台账同批改的原因。
 
 ### 0.1 本次对账暴露的 6 处问题（本条目的由来）
 
@@ -78,7 +84,7 @@ D12 ✅ → A1 ✅ → A5 ✅ → A4 ✅ → B6 ✅ → B7 ✅ → B8 ✅ → E1
 C1 ✅ E18 第二半（构造函数不再无条件 reset ＋ 第 10 条断言改写）—— 已落地
 C2 ✅ E15 ＋ E17 ＋ A2 ＋ A3    （双端同步：结构字段化，展示串降级为派生）—— 已落地
 C3 ✅ E16                        （已落地：WishCoverStyle 稳定枚举替换数组下标）
-C4  C9 / C10 / C11             （软删除 ＋ 规则编辑 ＋ AuditLog）
+C4 ✅ C9 / C10 / C11             （软删除 ＋ 规则编辑 ＋ AuditLog）—— 已落地
 C5  D9                         （新增 iconName → IconData 映射）
 ```
 
@@ -315,7 +321,7 @@ title: `兑换：${this.shortTitle(wish.title)}`      // 超 10 字符 → slice
 
 ## C 类 · 软删除与审计
 
-### C9 全部删除为物理删除，无回收站
+### C9 全部删除为物理删除，无回收站 ✅ 已修（阶段 C4）
 
 | 端 | 位置 |
 |---|---|
@@ -328,9 +334,19 @@ title: `兑换：${this.shortTitle(wish.title)}`      // 超 10 字符 → slice
 **修复**：统一 `status`（`active|deleted`）+ `deletedAt` 软删除；列表查询经全局过滤器排除 `deleted`；
 回收站保留 **90 天**（Q12 结论）。**流水永不删除**（见 `02`）。
 
+**现状（2026-10-13 阶段 C4 已落地）**：
+
+- **软删契约只有一份**：Taro `types.ts` 的 `interface SoftDeletable { status, deletedAt, snapshot() }`／Flutter `models/trash.dart` 的 `abstract class SoftDeletable`；三类配置（`Habit` / `Wish` / `PointRule`）实现它。
+- **过滤器只有一处**（`docs/design/08` §3.6）：`activeOnly()`（`types.ts:229` / `trash.dart:55`）与 `trashOnly()`（`types.ts:234` / `trash.dart:59`）。两个公开列表 getter 一律经 `activeOnly` 出口（`store.ts` 的 `get habits/wishes/rules`、`app_store.dart` 的 `List<Habit> get habits => activeOnly(_habitList)` 等）—— **页面拿到的永远是"活着的"**，调用方不需要、也不允许再过滤一遍。
+- **删除＝改状态位**：`removeWish` / `removeRule` / `removeHabit` 一律走 `softDelete()`（`store.ts:695` / `app_store.dart:692`）：置 `deleted` ＋ `deletedAt = now` ＋ 写审计。**原对象仍在**（`wish.status === 'deleted'`，不是被 filter 掉），`Habit` 也**第一次有了删除方法**（原先只能 `resetToSeed` 清空）。
+- **保留期是纯函数**：`isTrashExpired(deletedAt, now)`（满 **90** 天即算过期，`>=`；`now` 由调用方传入）＋ `trashRetentionText()`（「还能恢复 90 天 / 1 天 / 已过保留期」）。**判定与动作分离**：`trashItems(now)` 只判定 `expired`，真删要 UI 显式调 `purgeExpiredTrash(now)` —— **不做任何自动清理**（过期不等于必须删）。
+- **回收站**：`trashItems(now)` 三类汇总成一个列表（带 `kind` / `kindLabel` / `deletedAt` / `expired`，按删除时间倒序）、`restoreTrash(kind, id)`（＋ `restoreRule/Wish/Habit` 便捷包装）、`purgeTrash(kind, id)`（只接受 `deleted` 的条目 —— 绕过回收站的物理删不存在）、`purgeExpiredTrash(now)`。入口在**「我的」页**（两端同一处），入口上显示待处理条数；Flutter 为 `TrashSheet`（底部弹层），Taro 为 `TrashSheet.tsx`。
+- **版本表不跟着删**：软删只降低可见性 —— 否则历史流水的 `(ruleId, ruleVersion)` 指向空。
+- **回归用例**：`run.js` 的 `C9 软删：三类配置同待遇` / `C9 回收站 90 天边界`（89 / 90 / 91 天）/ `C9 唯一过滤器`；`app_test.dart` 的同名三组（含「写完就改原对象」之外的 `activeOnly` / `trashOnly` 口径断言）。**反回退**：守门人 C9 钉住 `softDelete` 三个调用点与 `activeOnly` 六个读法 —— 谁回退成物理删除谁就红。
+
 ---
 
-### C10 规则无法编辑
+### C10 规则无法编辑 ✅ 已修（阶段 C4）
 
 `store.ts` / `app_store.dart` 只有 `addRule` / `removeRule`，**没有 `updateRule`**。
 
@@ -342,15 +358,37 @@ title: `兑换：${this.shortTitle(wish.title)}`      // 超 10 字符 → slice
 
 **修复**：新增 `updateRule` + `PointRuleVersion` 版本表（见 `02` §规则版本化）。
 
+**现状（2026-10-13 阶段 C4 已落地）**：
+
+- **`updateRule` 是"四步一笔"**（`02` §5.3）：① 归档新版本（装的**是新值**）→ ② 原地更新规则本体（**`id` 不变**）→ ③ 同步由它派生的首页习惯 → ④ 写一条 `point_rule.update` 审计；四件事在**一次调用里**做完、**只 `persist()` 一次**。分成两次调用会留下"改了但没记"的窗口 —— 那正是 C10 ＋ C11 要一起防的东西。
+  - 顺序不能反：先改 `PointRule` 再补版本，中间那一瞬 `currentVersion` 会指向一条**不存在**的版本记录（回放即见空档）。
+  - 因此 Flutter 侧 `Habit` 的 `title` / `points` / `condition` / `dailyLimit` **不再是 final**（改规则要原地同步，换 id 就等于伪造版本化）—— 这也是守门人 A2 那条 `final int dailyLimit;` 断言被同批改掉的原因，见 §0 开头的 C4 说明。
+- **版本表只增不删、永久保留**：`RuleVersion`（`types.ts:291` / `rule_version.dart:11`）。新建规则即写 `version: 1`，于是 `currentVersion` **永远指向一条真实存在的版本**。演示数据同样补 4 条 `version: 1`（`seed.ts` / `seed_data.dart` 的 `ruleVersions`）。
+- **历史不可回溯、未来从新规**：已发生流水的 `points` / `ruleVersion` **一字不动**（流水在写入时就钉住当时的版本号：`ruleVersion: currentRuleVersion(live.ruleId)`）；今日额度**按新规重算** —— 习惯是规则的派生视图，`checkedCountTodayOfRule(rule)` 按 `ruleId` 口径现算，不另存一份。
+- **影响提示是纯函数**：`ruleChangeNotice({childName, checkedCountToday, newDailyLimit})`（`types.ts:315` / `rule_version.dart:54`）—— 已打卡数 ≥ 新上限时返回"改动后…今天不能再打卡了"，否则 `null`。**写进组件的文案测不到**（E17 的老病），所以它在 model 层并被两端测试钉死。
+- **拒绝而非静默改写**：无改动 → 「没有改动，规则保持原样」；`dailyLimit` 越界 → 「每天次数只能是 1–5 之间的整数」；已进回收站 → 「…在回收站里，先恢复再改」。三种拒绝都**不产生新版本、不写审计**。
+- **入口**：规则页长按/点按规则 → 操作菜单（**编辑这条规则（当前第 N 版）** / 加入今天的习惯 / 移到回收站）。编辑走**同一张表单**（`AddRuleSheet` 编辑态回填），新建与编辑共用一份校验。
+- **回归用例**：`run.js` 的 `C10 updateRule：id 不变、版本 +1 且连续、历史流水一字不改、今日额度按新规`；`app_test.dart` 的同名用例 ＋ `规则编辑的守卫与审计`（三种拒绝）。**反回退**：守门人钉住 `live.id =` 写入数为 0 与 `ruleVersion: currentRuleVersion(` 的存在。
+
 ---
 
-### C11 无 `AuditLog`
+### C11 无 `AuditLog` ✅ 已修（阶段 C4）
 
 全部代码库中**没有任何变更审计机制**。谁在什么时候把"每天最多 2 次"改成"每天最多 1 次"
 完全无法追溯。
 
 **修复**：`AuditLog` 追加式表（`before`/`after` JSON 快照），白名单模型（规则/心愿/习惯/成员/同意），
 与业务写入**同一事务**；DB 层对该表 `REVOKE UPDATE, DELETE`。
+
+**现状（2026-10-13 阶段 C4 已落地）**：
+
+- **追加式**：`auditLog` 只 `unshift` / `insert(0)`（新→旧），**永不 UPDATE、永不删除**（`store.ts` 的 `private audit()` / `app_store.dart` 的 `void _audit(...)`）。审计记录的是"这台设备上发生过的变更"—— 演示数据载入时审计**清空**（预置数据不是变更，否则回收站/审计页会出现一堆没人做过的操作）。
+- **同一笔操作里留痕**：`checkIn` / `undoCheckIn` / `addQuickNote` / `redeem` / `remove*` / `restore*` / `purge*` / `updateRule` / `renameChild` 都是"改数据 ＋ 写审计 ＋ 只 persist 一次"。**没有事后补记** —— 那会留下"改了但没记"的窗口。
+- **before / after 是深拷贝**：一律由 `auditSnapshotOf()`（`types.ts:429` / `audit.dart:109`）产出。存引用的话，写完之后原对象一改，"变更前后"会同时指向那批已变形的值 —— 审计就成了摆设（`08` §6 把这列为**测试全绿也抓不到**的失败形态：只断言 `auditLog.length == 1` 会全绿放行；抓法是"写完审计再改原对象，再读审计，内容必须不变"）。**这条断言两端都有**（`run.js` / `app_test.dart` 的「真快照」段）。
+- **动作白名单是枚举 / 联合类型**（拼写漂移编译期就红）：`type AuditAction`（`types.ts:367`）/ `enum AuditAction`（`audit.dart:13`）＋ `AuditTargetType`。本轮**可达**的是 5 类：`wish.*`、`point_rule.*`、`habit.*`、`point_record.*`（check_in / undo_check_in / quick_note / redeem）、`member.rename`。
+- **诚实说明**：**成员增删 / 角色切换 / 家长同意（consent）本轮未实现**（前端没有对应入口），因此 `AuditAction` 里**也没有**伪造取值 —— 不假装覆盖（后端白名单更宽，见 `02` §5 与 `backend/prisma/schema.prisma`）。
+- **与回收站共用一套动作**：删除 / 恢复 / 彻底删除都写审计（`point_rule.purge` 的 `after` 为 `null`，末态留在 `before` 里）。
+- **回归用例**：`run.js` 的 `C11 审计：每次变更同一笔留痕、只增不删、before/after 是真快照`（含 `auditLog.length === 7` 的累计断言）；`app_test.dart` 同名用例。**反回退**：守门人钉住 `auditLog.unshift(` / `auditLog.insert(` 与「审计流水不得被 splice/pop/shift/sort 改写」。
 
 ---
 
@@ -557,7 +595,7 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
 | D12 ✅ 已修，安全网就绪 | ✅ 一致。且 `honesty:probe` 已用夹具 `d12-misnested-runner.js` 证明它**能失败** |
 | D13 断言改写 ← 必须与缺陷修复同批，否则测试会「正确地失败」 | ✅ **10/10 已收口**（C1）：第 10 条（首启 124 分 / 324 好习惯）与 **E18** 同批改写为「首启空态 ＋ seed 显式夹具」 |
 | A1 → A5 → A4 → B6 → B7 → B8 → **E18** → E19 → E16（双端同步，纯前端可控） | ✅ A1 / A5 / A4 / B6 / B7 / B8 / E19 已落地；✅ **E18 已收口**（C1：守卫 ＋ 首启空态，构造函数不再无条件 `reset()`）；✅ **E16 已收口**（C3：稳定枚举 ＋ 补空档/哈希；两端 `wishes.length % 4` 归零） |
-| E15/E17 → A2/A3 → C9/C10/C11（依赖 W0 schema 变更，与后端一并落地） | ✅ **E15 / E17 / A2 / A3 已收口**（C2，双端同步：`condition` / `dailyLimit` 升为结构字段，`checked` / `limitText` / `doneText` / `detail` 全部降级为派生）；❌ **C9 / C10 / C11 仍未动**（下一阶段 C4）。但 **W0 schema 已就绪**（`deletedAt` / `status` / `PointRule.currentVersion` / `AuditLog` 表）→ **已不构成阻塞**，只剩前端改造 |
+| E15/E17 → A2/A3 → C9/C10/C11（依赖 W0 schema 变更，与后端一并落地） | ✅ **E15 / E17 / A2 / A3 已收口**（C2，双端同步：`condition` / `dailyLimit` 升为结构字段，`checked` / `limitText` / `doneText` / `detail` 全部降级为派生）；✅ **C9 / C10 / C11 已收口**（C4：软删除 ＋ 回收站、规则可编辑 ＋ 版本表、追加式审计）。W0 schema（`deletedAt` / `status` / `PointRule.currentVersion` / `AuditLog` 表）在 C4 前就已就绪，未构成阻塞 |
 
 **验收门（W0 exit）**：
 - **从仓库根**执行 `node kids_points_mp/.tmp_test/run.js` 与 `flutter test`，**均能真实失败**（诚实性探针通过）
@@ -573,5 +611,14 @@ doneText  = `今日已完成 ${checkedCountToday} 次`
   ③ Taro store 塞回 `rule.detail.split(' · ')` → **E15 红**；④ Flutter store 塞回 `habit.checked = true` → **A3 红**；
   ⑤ 台账副本把 E15 改回「❌ 未修」→ **E15 红**；⑥ 删掉守门人里的 E17 验证器 → **E17 红**（「台账有、验证器没有」fail-closed）。
   还原全部走**内存快照 ＋ sha256 比对**（不用 `git checkout`：工作区有未提交改动，`git checkout` 会连真改动一起丢掉）。
+
+- **C4 闸门实测（2026-10-13）**：Taro `npx tsc --noEmit` 0 错、`npm run build:weapp` `EXIT=0`、现编 `run.js` **25/25 ALL PASS**（新增 C9 ×3 / C10 / C11 五条）；`flutter analyze` 0 issue、`flutter test` **38/38**（`app_test.dart` 37 ＋ `widget_test.dart` 1；本轮新增 6 条）；`node tools/defect-status.mjs` **18/18 ALL PASS**；`cd backend && npm run ci` **`CI_EXIT=0`**（8 步全绿）。
+- **C4 反回退粒度**：C9 / C10 / C11 的验证器不只查新符号，还含**反向断言** —— `live.id =` 写入数必须为 0、审计流水不得出现 `splice/pop/shift/sort/reverse`、`softDelete` 的三个调用点（心愿 / 规则 / 习惯）一个都不能少、`activeOnly` 六个读法（两端各三个公开列表）必须全部在位。
+- **C4 证伪自测（2026-10-13，6/6 全部变红且点名对条目）**：每例都是「注入反例 → 红 → **sha256 字节级还原** → 回绿」——
+  ① 台账副本把 `C9` 改回 `❌ 未修` → **C9 红**；② 台账副本把 `C11` 改回 `❌ 未修` → **C11 红**；
+  ③ Taro `removeWish` 回退成 `wishList.splice(...)` 物理删 → **C9 红**；④ Taro 审计 `unshift` 改成 `push`（不再是追加式）→ **C11 红**；
+  ⑤ Flutter `List<Wish> get wishes => activeOnly(_wishList)` 去掉 `activeOnly`（少一处过滤）→ **C9 红**；
+  ⑥ `updateRule` 里偷偷 `live.id = newId('rule')`（假装版本化）→ **C10 红**。
+  （本轮的自测脚本是 `tools/_scratch/` 下的一次性文件，**未入库**；六例的注入点与期望条目如上，可照此复跑。）
 
 

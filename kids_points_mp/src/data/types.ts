@@ -46,6 +46,21 @@ export interface Habit {
   dailyLimit: number
   icon: IconName
   color: string
+
+  /**
+   * 派生来源：这条习惯由哪条规则生成（`null` = 手工新建的习惯）—— 修 C10。
+   *
+   * 有了这条链，打卡写流水时才能把 `(ruleId, ruleVersion)` 一并钉上，
+   * 改规则时也才知道该同步哪个习惯。**按 id 匹配**，绝不按标题
+   * （按标题匹配是 E15 那类病：规则改个名就断链）。
+   */
+  ruleId: string | null
+
+  // ──────────────────────────────────────────── 软删除（修 C9）
+  /** `active` 才出现在列表里；`deleted` 进回收站，90 天内可恢复 */
+  status: RecordStatus
+  /** 进入回收站的时间（`status === 'active'` 时为 null） */
+  deletedAt: number | null
 }
 
 /**
@@ -101,6 +116,12 @@ export interface Wish {
   coverStyle: WishCoverStyle
   /** 是否已兑换 */
   redeemed: boolean
+
+  // ──────────────────────────────────────────── 软删除（修 C9）
+  /** `active` 才出现在列表里；`deleted` 进回收站，90 天内可恢复 */
+  status: RecordStatus
+  /** 进入回收站的时间（`status === 'active'` 时为 null） */
+  deletedAt: number | null
 }
 
 /**
@@ -134,6 +155,13 @@ export interface PointRecord {
   habitId: string | null
   /** 回指的积分规则 id（W0 起配合 ruleVersion 定位 PointRuleVersion） */
   ruleId: string | null
+  /**
+   * 写入当时那条规则的**版本号**（不在规则体系里时为 null）—— 修 C10。
+   *
+   * 没有它，`ruleId` 指向的是**已经变形的规则**：`+1` 的流水在规则被改成
+   * `+3` 之后无法解释（`02` §5.4）。改规则时这一列**一字不改**。
+   */
+  ruleVersion: number | null
   /** 回指的心愿 id（心愿删除后仍能解释这笔扣分）—— 修 B8 */
   wishId: string | null
   /** 冲正：指向被冲正的记录 id —— 修 B7 */
@@ -146,6 +174,260 @@ export interface PointRecord {
 export interface ActorContext {
   role: MemberRole
   userId?: string
+}
+
+// ============================================================== 软删除（修 C9）
+
+/**
+ * 配置项（规则 / 习惯 / 心愿）的统一软删状态位 —— 与后端 `enum RecordStatus`
+ * （`backend/prisma/schema.prisma`）一一对应。
+ *
+ * **修 C9**：原先删除一律是**物理删除**（`rules.filter((item) => item !== rule)`）——
+ * 误删不可恢复；被删主体从数据里消失后，历史流水的回指（`ruleId` / `wishId`）
+ * 指向空，"这 +1 分按什么规则给的"再也无法回答。
+ * 现在删除**只改状态位**：主体留在数据里（只是从列表消失），回收站保留 90 天可恢复。
+ */
+export type RecordStatus = 'active' | 'deleted'
+
+/** 回收站保留天数（Q12 结论：90 天）—— 修 C9。 */
+export const trashRetentionDays = 90
+
+/** 一天的毫秒数（本文件内部使用）。 */
+const msPerDay = 86400000
+
+/** 具备软删字段的配置项（规则 / 习惯 / 心愿）。 */
+export interface SoftDeletable {
+  id: string
+  title: string
+  status: RecordStatus
+  deletedAt: number | null
+}
+
+/**
+ * 回收站里这条是否**已过期**（过了保留期，判定为可清理）—— 修 C9。
+ *
+ * 刻意写成**纯函数**（`now` 由调用方传入）：89 / 90 / 91 天的边界因此可以
+ * 被确定性地测试。**是否真的物理清理由 UI 决定**（`AppStore.purgeExpiredTrash`），
+ * 本函数只负责判定 —— 见 docs/design/08 §3.5。
+ *
+ * 口径：自 `deletedAt` 起**满 90 天**即算过期（`>=`）—— 第 89 天仍可恢复。
+ */
+export function isTrashExpired(
+  deletedAt: number | null,
+  now: number = Date.now()
+): boolean {
+  if (deletedAt === null) return false
+  return now - deletedAt >= trashRetentionDays * msPerDay
+}
+
+/**
+ * 列表的**唯一**过滤器：只留 `status === 'active'` 的项 —— 修 C9。
+ *
+ * 硬约束（docs/design/08 §3.6）：排除 `deleted` 的写法**只能有这一处**。
+ * 两端各写一遍 `item.status === 'active'` 迟早漂移 —— 那正是 E15 / E17 教过的。
+ */
+export function activeOnly<T extends { status: RecordStatus }>(items: T[]): T[] {
+  return items.filter((item) => item.status === 'active')
+}
+
+/** 回收站视图的**唯一**过滤器：只留 `status === 'deleted'` 的项 —— 修 C9。 */
+export function trashOnly<T extends { status: RecordStatus }>(items: T[]): T[] {
+  return items.filter((item) => item.status === 'deleted')
+}
+
+/** 回收站条目类型。 */
+export type TrashKind = 'point_rule' | 'wish' | 'habit'
+
+/** 回收站条目的展示模型（三类配置汇总成一个列表）。 */
+export interface TrashItem {
+  kind: TrashKind
+  id: string
+  title: string
+  deletedAt: number
+  /** 已过 90 天保留期 → 可被清理（判定见 isTrashExpired） */
+  expired: boolean
+}
+
+/** 回收站条目类型的展示文案。 */
+export function trashKindLabelOf(kind: TrashKind): string {
+  switch (kind) {
+    case 'point_rule':
+      return '规则'
+    case 'wish':
+      return '心愿'
+    case 'habit':
+      return '习惯'
+  }
+}
+
+/**
+ * 回收站条目的“还能恢复几天” —— 由 `deletedAt` 派生的**唯一**展示串（C9）。
+ *
+ * 与 [isTrashExpired] 同一口径（自 `deletedAt` 起满 90 天过期）：
+ * 第 0 天删除 → 还能恢复 90 天；第 89 天 → 还能恢复 1 天；第 90 天起 → 已过保留期。
+ * 刻意写成**纯函数**：天数边界可被确定性测试，页面里不出现第二处除法。
+ */
+export function trashRetentionText(
+  deletedAt: number,
+  now: number = Date.now()
+): string {
+  const days = Math.floor((now - deletedAt) / msPerDay)
+  const left = trashRetentionDays - days
+  if (left <= 0) return "已过保留期"
+  return `还能恢复 ${left} 天`
+}
+
+// ============================================================ 规则版本（修 C10）
+
+/**
+ * 规则版本 —— **只增不删，永久保留**（`02` §5.3 / §5.6）。
+ *
+ * **修 C10**：原先只有 `addRule` / `removeRule`，家长想改分值只能"删了重建" →
+ * `id` 变化 → 历史断裂（且因无 `ruleId`，连断裂都看不出来）。
+ *
+ * 规则被软删时**版本不跟着删**：否则历史流水的 `(ruleId, ruleVersion)` 指向空，
+ * "这分按什么规则给的"永远无法回答。
+ */
+export interface RuleVersion {
+  id: string
+  ruleId: string
+  version: number
+  title: string
+  condition: string
+  dailyLimit: number
+  points: number
+  changedByRole: MemberRole
+  changedAt: number
+  changeNote: string
+}
+
+/**
+ * 改规则对"今天已打卡"的影响提示（`02` §5.5）—— **验收标准，不是可选项**。
+ *
+ * 语义：**历史不可回溯、未来从新规** —— 已发生的流水不动（值 / 含义都不变）；
+ * 今日剩余额度**按新规重算**；已得的分不补差、不追扣。
+ * 若今日已打卡数 ≥ 新上限，家长**必须**被告知"今天不能再打卡了"，
+ * 否则必然产生投诉（改完规则孩子打不了卡，却不知原因）。
+ *
+ * 刻意做成**纯函数**并钉死断言：写在 JSX / Widget 里的文案**无法被测试** ——
+ * 那正是 E17 的老病（展示串被外部写入、必然与真实状态脱节）。不需要提示时返回 null。
+ */
+export function ruleChangeNotice(input: {
+  childName: string
+  checkedCountToday: number
+  newDailyLimit: number
+}): string | null {
+  if (input.checkedCountToday < input.newDailyLimit) return null
+  const name = input.childName.trim() === '' ? '孩子' : input.childName.trim()
+  const limit = limitTextOf(input.newDailyLimit)
+  return `改动后，${name}今天已完成 ${input.checkedCountToday} 次，按新规则「${limit}」，今天不能再打卡了。`
+}
+
+/**
+ * 今天某条规则已经产生几次表扬流水 —— 修 C10（配合 §5.5 的额度重算）。
+ *
+ * 与 `checkedCountToday` **同一口径**（同一天 / 表扬类 / 非冲正 / 排除已被冲正的原记录），
+ * 只是按 `ruleId` 而不是 `habitId` 匹配 —— 规则可以不在"今天的习惯"里，
+ * 但已发生的流水仍然回指着它。
+ */
+export function checkedCountTodayByRule(
+  records: PointRecord[],
+  ruleId: string,
+  now: number = Date.now()
+): number {
+  const reversedIds = new Set(
+    records
+      .filter((record) => record.reversesRecordId !== null)
+      .map((record) => record.reversesRecordId)
+  )
+  return records.filter(
+    (record) =>
+      record.ruleId === ruleId &&
+      record.category === 'praise' &&
+      record.source !== 'correction' &&
+      !reversedIds.has(record.id) &&
+      isSameDay(record.time, now)
+  ).length
+}
+
+// ================================================================ 审计（修 C11）
+
+/**
+ * 审计动作 —— **联合类型**（编译期穷尽），修 C11。
+ *
+ * 刻意**不用** `action: string`：字符串里的拼写漂移（`point_rule.updte`）不会报错，
+ * 只会在几个月后"查不到那次改动"时才被发现 —— 与 E16 用枚举取代下标同理。
+ *
+ * 白名单（`02` §5 与 `backend/prisma/schema.prisma` 的 `AuditAction`）共五类：
+ * 规则 / 心愿 / 习惯 / 成员 / 同意。本轮前端只有前四类的部分动作可达：
+ *   - `member.rename` —— 成员改名（"我的"页可达）；
+ *   - ❌ **成员增删 / 角色切换 / 家长同意（consent）**：前端没有对应入口，
+ *     **未实现**，故**不在**本联合类型里 —— 不假装覆盖（见 docs/design/03 §C11）。
+ */
+export type AuditAction =
+  | 'point_rule.create'
+  | 'point_rule.update'
+  | 'point_rule.delete'
+  | 'point_rule.restore'
+  | 'point_rule.purge'
+  | 'wish.create'
+  | 'wish.delete'
+  | 'wish.restore'
+  | 'wish.purge'
+  | 'habit.create'
+  | 'habit.delete'
+  | 'habit.restore'
+  | 'habit.purge'
+  | 'point_record.check_in'
+  | 'point_record.undo_check_in'
+  | 'point_record.quick_note'
+  | 'point_record.redeem'
+  | 'member.rename'
+
+/** 审计对象类型（与 `AuditAction` 的前缀一一对应）。 */
+export type AuditTargetType =
+  | 'point_rule'
+  | 'wish'
+  | 'habit'
+  | 'point_record'
+  | 'member'
+
+/** 审计里的变更快照（`before` / `after`）。 */
+export interface AuditSnapshot {
+  [key: string]: unknown
+}
+
+/**
+ * 一条审计记录 —— **追加式**（只增不删、永不 UPDATE），修 C11。
+ *
+ * 与后端 `AuditLog`（`backend/prisma/schema.prisma`）同构：
+ * `action` / `targetType` / `targetId` / `before` / `after`（JSON 快照）/
+ * `actorRole` / `createdAt`（此处为 `time`）。
+ */
+export interface AuditEntry {
+  id: string
+  action: AuditAction
+  targetType: AuditTargetType
+  targetId: string
+  /** **变更前**快照；新增类动作（create）为 null */
+  before: AuditSnapshot | null
+  /** **变更后**快照；删除类动作保留末态 */
+  after: AuditSnapshot | null
+  actorRole: MemberRole
+  time: number
+}
+
+/**
+ * 生成**真快照** —— 深拷贝。
+ *
+ * 若只存对象引用，写入审计之后原对象一改，"变更前后"会同时指向那个已变形的对象，
+ * 审计就成了摆设（这正是 C11 要防的"看起来在做安全"）。
+ * 08 §6 把这一条列为**测试全绿也抓不到**的失败形态之一：
+ * 断言 `auditCount === 1` 会全绿，快照其实是活的 ——
+ * 抓法是"写完审计再改原对象，再读审计，内容必须不变"。
+ */
+export function auditSnapshotOf(item: object): AuditSnapshot {
+  return JSON.parse(JSON.stringify(item)) as AuditSnapshot
 }
 
 
@@ -170,6 +452,17 @@ export interface PointRule {
   points: number
   icon: IconName
   color: string
+
+  // ───────────────────────────────────── 软删除 + 版本化（修 C9 / C10）
+  /**
+   * 规则版本号：新建时为 1，每次 `AppStore.updateRule` **+1**（`02` §5.3）。
+   * 历史流水按 `(ruleId, ruleVersion)` 定位当时的真相。
+   */
+  currentVersion: number
+  /** `active` 才出现在规则列表里；`deleted` 进回收站，90 天内可恢复 */
+  status: RecordStatus
+  /** 进入回收站的时间（`status === 'active'` 时为 null） */
+  deletedAt: number | null
 }
 
 /** 孩子档案，对应“我的”页顶部信息与战绩。 */
@@ -333,6 +626,28 @@ export function habitView(
 /** 规则的展示串 —— 修 E15：由结构字段拼出，不再存在自由的 `detail` 字符串。 */
 export function ruleDetail(rule: PointRule): string {
   return `${rule.condition} · ${limitTextOf(rule.dailyLimit)}`
+}
+
+
+/** 规则版本的展示串 —— 由同一套结构字段派生（与 ruleDetail 同口径）。 */
+export function ruleVersionDetail(version: RuleVersion): string {
+  return `${version.condition} · ${limitTextOf(version.dailyLimit)}`
+}
+
+/**
+ * 规则最新一版的版本号（含"还没改过"的初始版）。
+ * 给 UI 用的唯一读法 —— 别在页面里手写 `Math.max(...)`。
+ */
+export function latestRuleVersion(
+  versions: RuleVersion[],
+  ruleId: string
+): RuleVersion | null {
+  let latest: RuleVersion | null = null
+  for (const version of versions) {
+    if (version.ruleId !== ruleId) continue
+    if (!latest || version.version > latest.version) latest = version
+  }
+  return latest
 }
 
 

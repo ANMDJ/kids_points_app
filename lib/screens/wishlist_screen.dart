@@ -208,8 +208,8 @@ class _WishlistScreenState extends State<WishlistScreen> {
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          title: const Text('删除心愿'),
-          content: Text('确定要删除“${wish.title}”吗？'),
+          title: const Text('移到回收站'),
+          content: Text('确定要把“${wish.title}”移到回收站吗？90 天内可恢复。'),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -217,15 +217,19 @@ class _WishlistScreenState extends State<WishlistScreen> {
             ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('删除'),
+              child: const Text('移到回收站'),
             ),
           ],
         );
       },
     );
     if (confirmed == true) {
+      // 修 C9：删除是**软删**（移到回收站，90 天内可恢复），不是物理删除 ——
+      // 历史流水的回指（wishId）因此不会指向空。
       store.removeWish(wish);
-      messenger.showSnackBar(const SnackBar(content: Text('心愿已删除')));
+      messenger.showSnackBar(
+        const SnackBar(content: Text('已移到回收站，90 天内可在「我的 · 回收站」恢复')),
+      );
     }
   }
 }

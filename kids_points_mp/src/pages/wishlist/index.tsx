@@ -101,15 +101,17 @@ export default function Wishlist() {
   }
 
   const handleRemove = async (wish: Wish) => {
+    // 修 C9：删除是**软删**（移到回收站，90 天内可恢复），不是物理删除 ——
+    // 这样已发生的兑换流水仍能找到它回指的心愿（wishId 不指向空）。
     const ok = await confirm(
-      `确定要删除“${wish.title}”吗？`,
+      `确定要把“${wish.title}”移到回收站吗？90 天内可恢复。`,
       '删除心愿',
-      '删除',
+      '移到回收站',
       '取消'
     )
     if (!ok) return
     store.removeWish(wish)
-    toast('心愿已删除')
+    toast('已移到回收站，90 天内可在「我的 · 回收站」恢复')
   }
 
   return (

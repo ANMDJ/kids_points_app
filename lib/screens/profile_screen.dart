@@ -8,6 +8,7 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
+import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
 class ProfileScreen extends StatelessWidget {
@@ -16,6 +17,8 @@ class ProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final AppStore store = AppScope.of(context);
+    // 修 C9：回收站入口固定在“我的”页（两端同一处）—— 入口上直接显示待处理条数。
+    final int trashCount = store.trashItems().length;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
     return Scaffold(
@@ -131,6 +134,19 @@ class ProfileScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.delete_outline_rounded,
+                    color: AppColors.pointSpend,
+                    label: trashCount > 0 ? '回收站（$trashCount）' : '回收站',
+                    onTap: () => showTrashSheet(context),
+                  ),
+
                 ],
               ),
             ),

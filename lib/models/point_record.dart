@@ -83,6 +83,7 @@ class PointRecord {
     this.note = '',
     this.habitId,
     this.ruleId,
+    this.ruleVersion,
     this.wishId,
     this.reversesRecordId,
     required this.balanceAfter,
@@ -120,6 +121,12 @@ class PointRecord {
   /// 回指的积分规则 id（W0 起配合 ruleVersion 定位 PointRuleVersion）
   final String? ruleId;
 
+  /// 写入这条流水时，规则处于**第几版** —— 修 C10。
+  ///
+  /// 历史不可回溯：改规则**不会**改这里（也不会改 `points`），
+  /// 于是“这 +1 分当时按什么规则给的”永远答得出来。
+  final int? ruleVersion;
+
   /// 回指的心愿 id（心愿删除后仍能解释这笔扣分）—— 修 B8
   final String? wishId;
 
@@ -135,4 +142,22 @@ class PointRecord {
 
   /// HH:mm
   String get timeText => _clockText(time);
+
+  /// 审计快照的**结构字段**（由 `auditSnapshotOf` 深拷贝）—— 修 C11
+  Map<String, Object?> snapshot() => <String, Object?>{
+        'id': id,
+        'title': title,
+        'points': points,
+        'time': time,
+        'category': category.name,
+        'source': source.name,
+        'operatorRole': operatorRole?.name,
+        'note': note,
+        'habitId': habitId,
+        'ruleId': ruleId,
+        'ruleVersion': ruleVersion,
+        'wishId': wishId,
+        'reversesRecordId': reversesRecordId,
+        'balanceAfter': balanceAfter,
+      };
 }

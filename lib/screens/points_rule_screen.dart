@@ -18,6 +18,16 @@ class PointsRuleScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final AppStore store = AppScope.of(context);
     final double bottomInset = MediaQuery.of(context).padding.bottom;
+
+    // 长按 / 点按规则：打开操作菜单（编辑 / 加入今天的习惯 / 移到回收站）。
+    // 「编辑」走的是**同一张表单**（修 C10）—— 编辑态由 AddRuleSheet 自己认得出来。
+    void openRuleActions(PointRule rule) {
+      showRuleActionsSheet(
+        context,
+        rule,
+        onEdit: () => showAddRuleSheet(context, rule: rule),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
@@ -32,7 +42,7 @@ class PointsRuleScreen extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  '长按规则可加入今天的习惯，也可以删除',
+                  '长按规则可编辑、加入今天的习惯，也可以移到回收站',
                   style: TextStyle(
                     fontSize: 11.5,
                     color: AppColors.textHint,
@@ -57,9 +67,9 @@ class PointsRuleScreen extends StatelessWidget {
                           .map(
                             (PointRule rule) => RuleTile(
                               rule: rule,
-                              onTap: () => showRuleActionsSheet(context, rule),
+                              onTap: () => openRuleActions(rule),
                               onLongPress: () =>
-                                  showRuleActionsSheet(context, rule),
+                                  openRuleActions(rule),
                             ),
                           )
                           .toList(),

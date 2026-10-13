@@ -45,7 +45,15 @@ const {
   // ── 阶段 C3：心愿配色改为稳定枚举（修 E16）──
   pickCoverStyle,
   wishCoverStyles,
-  wishCoverHash
+  wishCoverHash,
+  // ── 阶段 C4：软删除/回收站（C9）＋ 规则版本（C10）＋ 审计（C11）──
+  activeOnly,
+  trashOnly,
+  isTrashExpired,
+  trashRetentionText,
+  trashKindLabelOf,
+  ruleChangeNotice,
+  checkedCountTodayByRule
 } = require('./dist/data/types.js')
 const { buildSeedData } = require('./dist/data/seed.js')
 const { AppStore, demoResetAllowed } = require('./dist/data/store.js')
@@ -636,6 +644,247 @@ check('E18 生产构建不可达：判据语义 + 真实生产模块双证', () 
   assert.strictEqual(guarded.resetToSeed(), false, '生产构建必须拒绝恢复演示数据')
   assert.strictEqual(guarded.profile.name, '小明', '被拒绝时不得清空真实数据')
   assert.strictEqual(guarded.points, 5, '被拒绝时余额不得被改成 124')
+})
+
+// ── 阶段 C4：软删除/回收站（修 C9）＋ 规则可编辑（修 C10）＋ 审计（修 C11）──
+// 与 Flutter `test/app_test.dart` 的同名用例一一对应 —— 两端行为必须一致。
+
+check('C9 软删：三类配置同待遇 —— 列表里消失、回收站找得到、原对象仍在、可恢复', () => {
+  const store = seededStore()
+  const recordsBefore = store.records.length
+  const rule = store.rules[0]
+  const wish = store.wishes[0]
+  const habit = store.habits[0]
+
+  store.removeRule(rule)
+  store.removeWish(wish)
+  store.removeHabit(habit)
+
+  // ① 列表里消失（软删若漏掉 activeOnly 这一层，本条立刻红 —— 08 §6 第 ② 种失败形态）
+  assert.strictEqual(store.rules.length, 3)
+  assert.strictEqual(store.wishes.length, 3)
+  assert.strictEqual(store.habits.length, 2)
+  // ⑤ 配置的删除不牵动账本：流水条数一字不变
+  assert.strictEqual(store.records.length, recordsBefore)
+
+  // ② 回收站里找得到（三类汇总成一个列表，条目带类型文案与保留期判定）
+  const rows = store.trashItems()
+  assert.strictEqual(rows.length, 3)
+  assert.deepStrictEqual(rows.map((row) => row.kind).sort(), ['habit', 'point_rule', 'wish'])
+  assert.strictEqual(rows.every((row) => row.expired === false), true)
+  assert.strictEqual(rows.find((row) => row.id === wish.id).title, wish.title)
+  assert.strictEqual(trashKindLabelOf('point_rule'), '规则')
+
+  // ③ 原对象**仍在**（不是被 filter 掉）：只改状态位，物理数据一律保留
+  assert.strictEqual(rule.status, 'deleted')
+  assert.strictEqual(wish.status, 'deleted')
+  assert.strictEqual(habit.status, 'deleted')
+  assert.strictEqual(typeof wish.deletedAt, 'number')
+  // 删除只降低可见性：版本表不跟着删（否则历史流水的 (ruleId, ruleVersion) 指向空）
+  assert.strictEqual(store.ruleVersions.filter((item) => item.ruleId === rule.id).length, 1)
+
+  // 恢复：回到列表、状态复位、回收站清空
+  assert.strictEqual(store.restoreRule(rule), true)
+  assert.strictEqual(store.restoreWish(wish), true)
+  assert.strictEqual(store.restoreHabit(habit), true)
+  assert.strictEqual(store.rules.length, 4)
+  assert.strictEqual(store.wishes.length, 4)
+  assert.strictEqual(store.habits.length, 3)
+  assert.strictEqual(wish.deletedAt, null)
+  assert.strictEqual(rule.status, 'active')
+  assert.strictEqual(store.trashItems().length, 0)
+  assert.strictEqual(store.records.length, recordsBefore)
+})
+
+check('C9 回收站 90 天边界：第 89 天仍可恢复，满 90 天判定过期（真删由 UI 决定）', () => {
+  const day = 86400000
+  const now = Date.now()
+  assert.strictEqual(isTrashExpired(null, now), false, '没进回收站谈不上过期')
+  assert.strictEqual(isTrashExpired(now - 89 * day, now), false, '第 89 天必须仍可恢复')
+  assert.strictEqual(isTrashExpired(now - 90 * day, now), true, '满 90 天即算过期（>=）')
+  assert.strictEqual(isTrashExpired(now - 91 * day, now), true)
+  assert.strictEqual(trashRetentionText(now, now), '还能恢复 90 天')
+  assert.strictEqual(trashRetentionText(now - 89 * day, now), '还能恢复 1 天')
+  assert.strictEqual(trashRetentionText(now - 90 * day, now), '已过保留期')
+
+  // 过期只是**判定**：没调用 purgeExpiredTrash 之前一条都不许少（过期不等于必须删）
+  const store = seededStore()
+  store.removeRule(store.rules[0])
+  const later = now + 91 * day
+  assert.strictEqual(store.trashItems(later)[0].expired, true)
+  assert.strictEqual(store.rules.length, 3, '判定过期不等于已经删除')
+
+  assert.strictEqual(store.purgeExpiredTrash(later), 1)
+  assert.strictEqual(store.rules.length, 3)
+  assert.strictEqual(store.trashItems(later).length, 0)
+  assert.strictEqual(store.auditLog[0].action, 'point_rule.purge')
+  assert.strictEqual(store.auditLog[0].after, null, '彻底删除后的 after 为空（末态留在 before 里）')
+  // 回收站只管配置：流水仍然一字不动
+  assert.strictEqual(store.records.length, 4)
+})
+
+check('C9 唯一过滤器：activeOnly / trashOnly 是列表口径的单一来源', () => {
+  const store = seededStore()
+  const wish = store.wishes[0]
+  assert.strictEqual(activeOnly(store.wishes).length, store.wishes.length)
+  assert.strictEqual(trashOnly(store.wishes).length, 0)
+  store.removeWish(wish)
+  // 公开的 `wishes` 只发 active 的：调用方**不需要**再过滤一遍（写法只有一处）
+  assert.strictEqual(activeOnly(store.wishes).length, 3)
+  assert.strictEqual(trashOnly(store.wishes).length, 0)
+  // 过滤器本身按状态位判定，回收站与它同口径
+  assert.strictEqual(activeOnly([wish]).length, 0)
+  assert.strictEqual(trashOnly([wish]).length, 1)
+  assert.strictEqual(store.trashItems().length, trashOnly([wish]).length)
+})
+
+check('C10 updateRule：id 不变、版本 +1 且连续、历史流水一字不改、今日额度按新规', () => {
+  const store = seededStore()
+  const rule = store.rules.find((item) => item.id === 'rule-1') // 番茄钟 +1 / 每天最多 2 次
+  const habit = store.habits.find((item) => item.ruleId === rule.id)
+  const versionsBefore = store.ruleVersions.length
+  const idBefore = rule.id
+
+  // 先造一笔历史：改规则之后它必须**一字不动**
+  assert.strictEqual(store.checkIn(habit), null)
+  const historyCount = store.records.length
+  const historyPoints = store.records[0].points
+  const historyVersion = store.records[0].ruleVersion
+  assert.strictEqual(historyPoints, 1)
+  assert.strictEqual(historyVersion, 1, '流水要钉住当时的规则版本')
+
+  // ① id 不变 ② currentVersion +1 ③ 版本表追加一条（装的是**新值**）
+  assert.strictEqual(store.updateRule(rule, {
+    title: '番茄钟写作业',
+    condition: '专注 25 分钟',
+    dailyLimit: 1,
+    points: 3,
+    changeNote: '1 分太少了'
+  }), null)
+  assert.strictEqual(rule.id, idBefore)
+  assert.strictEqual(rule.currentVersion, 2)
+  assert.strictEqual(rule.points, 3)
+  assert.strictEqual(rule.dailyLimit, 1)
+  assert.strictEqual(store.ruleVersions.length, versionsBefore + 1)
+  const latest = store.ruleVersions[store.ruleVersions.length - 1]
+  assert.strictEqual(latest.version, 2)
+  assert.strictEqual(latest.points, 3)
+  assert.strictEqual(latest.changeNote, '1 分太少了')
+  assert.deepStrictEqual(
+    store.ruleVersions.filter((item) => item.ruleId === rule.id).map((item) => item.version),
+    [1, 2],
+    '版本号必须连续、每条都真实存在（回放不留空档）'
+  )
+
+  // ④ 历史不可回溯：已发生流水的值与含义都不动
+  assert.strictEqual(store.records.length, historyCount)
+  assert.strictEqual(store.records[0].points, historyPoints)
+  assert.strictEqual(store.records[0].ruleVersion, historyVersion)
+
+  // ⑤ 派生习惯跟着新规走 → 今日额度按新规重算（已打卡 2 次 ≥ 新上限 1 次）
+  assert.strictEqual(habit.points, 3)
+  assert.strictEqual(habit.dailyLimit, 1)
+  assert.strictEqual(store.checkIn(habit), 
+    '“番茄钟写作业”今天已经完成 2 次啦，明天继续加油～'
+  )
+  assert.strictEqual(store.checkedCountTodayOfRule(rule), 2, '额度按 ruleId 口径现算，不另存一份')
+
+  // ⑥ §3.3 的影响提示**必须**出现（纯函数、可测，不许写在 JSX 里）
+  assert.strictEqual(
+    ruleChangeNotice({ childName: store.profile.name, checkedCountToday: 2, newDailyLimit: 1 }),
+    '改动后，萌新铲屎官的小可爱今天已完成 2 次，按新规则「每天 1 次」，今天不能再打卡了。'
+  )
+  assert.strictEqual(
+    ruleChangeNotice({ childName: '小满', checkedCountToday: 0, newDailyLimit: 1 }),
+    null,
+    '没到上限就不该打扰家长'
+  )
+
+  // 审计：一次改动 = 一条 point_rule.update，before / after 是改前改后的真快照
+  assert.strictEqual(store.auditLog[0].action, 'point_rule.update')
+  assert.strictEqual(store.auditLog[0].before.points, 1)
+  assert.strictEqual(store.auditLog[0].after.points, 3)
+
+  // 无改动 / 越界 / 已进回收站：都不许产生新版本，也不许写审计
+  const auditBefore = store.auditLog.length
+  assert.strictEqual(store.updateRule(rule, {
+    title: rule.title, condition: rule.condition, dailyLimit: rule.dailyLimit, points: rule.points
+  }), '没有改动，规则保持原样')
+  assert.strictEqual(store.ruleVersions.length, versionsBefore + 1, '无改动不得产生新版本')
+  assert.strictEqual(
+    store.updateRule(rule, { title: rule.title, condition: rule.condition, dailyLimit: 9, points: 3 }).includes(
+      '之间的整数'
+    ),
+    true
+  )
+  store.removeRule(rule)
+  assert.strictEqual(
+    store.updateRule(rule, { title: rule.title, condition: rule.condition, dailyLimit: 1, points: 3 }).includes(
+      '在回收站里'
+    ),
+    true,
+    '回收站里的规则必须先恢复再改，不许隔着回收站改'
+  )
+  assert.strictEqual(store.ruleVersions.length, versionsBefore + 1)
+  assert.strictEqual(store.auditLog.length, auditBefore + 1, '只多出 removeRule 那一条')
+})
+
+check('C11 审计：每次变更同一笔留痕、只增不删、before/after 是真快照', () => {
+  const store = seededStore()
+  assert.deepStrictEqual(store.auditLog, [], '审计只记这台设备上发生过的变更，预置数据不算')
+
+  const wish = store.wishes[0]
+  const title = wish.title
+  store.removeWish(wish, { role: 'child' })
+
+  // ① 变更与留痕在**同一笔操作**里（不是事后补记）
+  assert.strictEqual(store.auditLog.length, 1)
+  const entry = store.auditLog[0]
+  assert.strictEqual(entry.action, 'wish.delete')
+  assert.strictEqual(entry.targetType, 'wish')
+  assert.strictEqual(entry.targetId, wish.id)
+  assert.strictEqual(entry.actorRole, 'child', '谁操作的就记谁 —— 与流水 A4 同一口径')
+  assert.strictEqual(typeof entry.time, 'number')
+  assert.strictEqual(entry.before.status, 'active')
+  assert.strictEqual(entry.after.status, 'deleted')
+
+  // ② 真快照：写完审计再改原对象，审计内容**不得跟着变**
+  //    （只断言 auditLog.length === 1 的用例会全绿放行 —— 08 §6）
+  const deletedAt = wish.deletedAt
+  wish.title = '改过的标题'
+  wish.deletedAt = null
+  assert.strictEqual(entry.before.title, title)
+  assert.strictEqual(entry.after.title, title)
+  assert.strictEqual(entry.after.deletedAt, deletedAt, '快照必须停在当时那一刻')
+  wish.title = title
+  wish.deletedAt = deletedAt
+
+  // ③ 只增不删：恢复再删一次，审计**累加**（每次变更都有痕，谁也没抹掉）
+  assert.strictEqual(store.restoreWish(wish), true)
+  store.removeWish(wish)
+  assert.deepStrictEqual(
+    store.auditLog.slice(0, 3).map((row) => row.action),
+    ['wish.delete', 'wish.restore', 'wish.delete']
+  )
+  assert.strictEqual(store.auditLog.length, 3)
+
+  // 新建类：before 为空、after 是末态；打卡 / 记一笔记的是流水本身；改名记成员类
+  store.addWish('新心愿', 10, '🎁')
+  assert.strictEqual(store.auditLog[0].action, 'wish.create')
+  assert.strictEqual(store.auditLog[0].before, null)
+  assert.strictEqual(store.auditLog[0].after.title, '新心愿')
+  assert.strictEqual(store.checkIn(store.habits[0]), null)
+  assert.strictEqual(store.auditLog[0].action, 'point_record.check_in')
+  assert.strictEqual(store.auditLog[0].targetType, 'point_record')
+  assert.strictEqual(store.addQuickNote(2, '额外奖励'), null)
+  assert.strictEqual(store.auditLog[0].action, 'point_record.quick_note')
+  store.renameChild('小明')
+  assert.strictEqual(store.auditLog[0].action, 'member.rename')
+  assert.strictEqual(store.auditLog[0].before.name !== store.auditLog[0].after.name, true)
+  // 成员增删 / 角色切换 / 家长同意在本轮**未实现**（前端没有入口）—— 不假装覆盖
+  assert.strictEqual(store.auditLog[0].targetType, 'member')
+
+  assert.strictEqual(store.auditLog.length, 7, '审计只增：7 次变更 = 7 条')
 })
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)

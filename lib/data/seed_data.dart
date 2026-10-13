@@ -4,6 +4,7 @@ import '../models/child_profile.dart';
 import '../models/habit.dart';
 import '../models/point_record.dart';
 import '../models/point_rule.dart';
+import '../models/rule_version.dart';
 import '../models/wish.dart';
 import '../theme/app_colors.dart';
 
@@ -16,6 +17,7 @@ class SeedBundle {
     required this.wishes,
     required this.records,
     required this.rules,
+    required this.ruleVersions,
   });
 
   final int points;
@@ -24,6 +26,9 @@ class SeedBundle {
   final List<Wish> wishes;
   final List<PointRecord> records;
   final List<PointRule> rules;
+
+  /// 规则版本账本（**只增不删，永久保留**）—— 修 C10
+  final List<RuleVersion> ruleVersions;
 }
 
 SeedBundle buildSeedData() {
@@ -47,6 +52,7 @@ SeedBundle buildSeedData() {
       dailyLimit: 2,
       icon: Icons.menu_book_rounded,
       color: AppColors.primaryDeep,
+      ruleId: 'rule-1',
     ),
     Habit(
       id: 'habit-backpack',
@@ -56,6 +62,7 @@ SeedBundle buildSeedData() {
       dailyLimit: 1,
       icon: Icons.luggage_rounded,
       color: AppColors.orange,
+      ruleId: 'rule-2',
     ),
     Habit(
       id: 'habit-reading',
@@ -65,6 +72,7 @@ SeedBundle buildSeedData() {
       dailyLimit: 1,
       icon: Icons.auto_stories_rounded,
       color: const Color(0xFF7BB0E8),
+      ruleId: 'rule-4',
     ),
   ];
 
@@ -116,6 +124,7 @@ SeedBundle buildSeedData() {
       operatorRole: MemberRole.child,
       habitId: 'habit-pomodoro',
       ruleId: 'rule-1',
+      ruleVersion: 1,
       balanceAfter: 124,
     ),
     PointRecord(
@@ -134,6 +143,7 @@ SeedBundle buildSeedData() {
       operatorRole: MemberRole.child,
       habitId: 'habit-backpack',
       ruleId: 'rule-2',
+      ruleVersion: 1,
       balanceAfter: 123,
     ),
     PointRecord(
@@ -151,6 +161,7 @@ SeedBundle buildSeedData() {
       source: RecordSource.guardian,
       operatorRole: MemberRole.guardian,
       ruleId: 'rule-3',
+      ruleVersion: 1,
       balanceAfter: 121,
     ),
     PointRecord(
@@ -187,6 +198,7 @@ SeedBundle buildSeedData() {
       points: 1,
       icon: Icons.menu_book_rounded,
       color: AppColors.starYellow,
+      currentVersion: 1,
     ),
     PointRule(
       id: 'rule-2',
@@ -196,6 +208,7 @@ SeedBundle buildSeedData() {
       points: 2,
       icon: Icons.luggage_rounded,
       color: AppColors.pointSpend,
+      currentVersion: 1,
     ),
     PointRule(
       id: 'rule-3',
@@ -205,6 +218,7 @@ SeedBundle buildSeedData() {
       points: 5,
       icon: Icons.assignment_rounded,
       color: AppColors.primaryDeep,
+      currentVersion: 1,
     ),
     PointRule(
       id: 'rule-4',
@@ -214,8 +228,30 @@ SeedBundle buildSeedData() {
       points: 2,
       icon: Icons.auto_stories_rounded,
       color: AppColors.primaryDeep,
+      currentVersion: 1,
     ),
   ];
+
+  // 修 C10：每条规则都补一条 `version: 1` 的版本记录 —— 与 AppStore.addRule 的写法一致
+  // （`currentVersion` 必须永远指向一条**真实存在**的版本，回放不留空档）。
+  // 时间取「前天 9:00」：演示数据里没有版本变更，也就不会与今天的流水抢时序。
+  final DateTime ruleVersionAt = DateTime(now.year, now.month, now.day - 2, 9, 0);
+  final List<RuleVersion> ruleVersions = rules
+      .map(
+        (PointRule rule) => RuleVersion(
+          id: 'rv-${rule.id}-1',
+          ruleId: rule.id,
+          version: 1,
+          title: rule.title,
+          condition: rule.condition,
+          dailyLimit: rule.dailyLimit,
+          points: rule.points,
+          changedByRole: MemberRole.guardian,
+          changedAt: ruleVersionAt,
+          changeNote: '初始版本',
+        ),
+      )
+      .toList();
 
   return SeedBundle(
     points: 124,
@@ -229,5 +265,6 @@ SeedBundle buildSeedData() {
     wishes: wishes,
     records: records,
     rules: rules,
+    ruleVersions: ruleVersions,
   );
 }

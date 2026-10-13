@@ -79,3 +79,81 @@
 .kp-sheet-row.is-danger .kp-sheet-row__label {
   color: $point-spend;
 }
+
+// ───────────────────────────────────────────────── 回收站（修 C9）
+// 条目 + 恢复 / 彻底删除两条路径；「还能恢复几天」由 trashRetentionText 派生，不在这里算
+.kp-trash__list {
+  display: flex;
+  flex-direction: column;
+  gap: f2r(10);
+}
+
+.kp-trash__row {
+  display: flex;
+  align-items: center;
+  padding: f2r(14) f2r(16);
+  border-radius: f2r(14);
+  background-color: $primary-soft;
+}
+
+.kp-trash__head {
+  flex: 1;
+  min-width: 0;
+}
+
+.kp-trash__title {
+  display: block;
+  font-size: f2r(14.5);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-trash__meta {
+  display: block;
+  margin-top: f2r(4);
+  font-size: f2r(12);
+  color: $text-secondary;
+}
+
+.kp-trash__actions {
+  display: flex;
+  margin-left: f2r(10);
+}
+
+.kp-trash__chip {
+  padding: f2r(8) f2r(14);
+  border-radius: f2r(999);
+  background-color: $surface;
+}
+
+.kp-trash__chip + .kp-trash__chip {
+  margin-left: f2r(8);
+}
+
+.kp-trash__chip:active {
+  opacity: 0.8;
+}
+
+.kp-trash__chip.is-danger {
+  background-color: #fdf1e9;
+}
+
+.kp-trash__chip-text {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-trash__chip.is-danger .kp-trash__chip-text {
+  color: $point-spend;
+}
+
+.kp-trash__empty {
+  padding: f2r(24) 0;
+  text-align: center;
+}
+
+.kp-trash__empty-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}

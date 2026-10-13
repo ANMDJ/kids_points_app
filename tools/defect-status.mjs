@@ -45,6 +45,9 @@ const F_HOME = `${FL}/screens/home_screen.dart`
 const F_RULE_SHEET = `${FL}/screens/sheets/add_rule_sheet.dart`
 const T_CARD = 'kids_points_mp/src/components/WishCard/index.tsx'
 const F_WISH = `${FL}/models/wish.dart`
+const F_TRASH = `${FL}/models/trash.dart`
+const F_AUDIT = `${FL}/models/audit.dart`
+const F_RULE_VERSION = `${FL}/models/rule_version.dart`
 const F_CARD = `${FL}/widgets/wish_card.dart`
 const D12_FIXTURE = 'backend/scripts/__fixtures__/d12-misnested-runner.js'
 
@@ -168,7 +171,7 @@ const DEFECTS = [
   ] },
   { id: 'A2', status: 'fixed', what: 'Habit 曾无每日上限字段（频次是自由文本）', assertions: () => [
     A.has(T_TYPES, /dailyLimit: number/, '缺少每日上限结构字段'),
-    A.has(F_HABIT, /final int dailyLimit;/, '缺少每日上限结构字段'),
+    A.has(F_HABIT, /^\s{2}int dailyLimit;/m, '缺少每日上限结构字段'),
     A.has(T_TYPES, /export function limitTextOf\(/, '频次未降级为派生函数'),
     A.has(F_HABIT, /String limitTextOf\(int dailyLimit\)/, '频次未降级为派生函数'),
     A.lack(T_SEED, /limitText:/, 'seed 仍在手写频次展示串（回退）'),
@@ -219,18 +222,95 @@ const DEFECTS = [
     A.has(T_STORE, /title: `兑换：\$\{wish\.title\}`/, '兑换标题不是完整快照'),
     A.has(F_STORE, /title: '兑换：\$\{wish\.title\}'/, '兑换标题不是完整快照'),
   ] },
-  { id: 'C9', status: 'unfixed', what: '全部物理删除，无软删除/回收站', assertions: () => [
-    A.lack(T_STORE, /deletedAt|softDelete/, '已出现软删除痕迹 → 缺陷可能已修，台账应更新'),
-    A.lack(F_STORE, /deletedAt|softDelete/, '已出现软删除痕迹'),
+  { id: 'C9', status: 'fixed', what: '全部物理删除，无软删除/回收站', assertions: () => [
+    // ① 软删契约 ＋ 唯一过滤器（两端同源：排除 deleted 只能有一处实现）
+    A.has(T_TYPES, /export interface SoftDeletable/, '缺少软删除契约 SoftDeletable'),
+    A.has(T_TYPES, /export function activeOnly</, '缺少列表的唯一过滤器 activeOnly()'),
+    A.has(T_TYPES, /export function trashOnly</, '缺少回收站过滤器 trashOnly()'),
+    A.has(F_TRASH, /List<T> activeOnly<T extends SoftDeletable>/, '缺少列表的唯一过滤器 activeOnly()'),
+    A.has(F_TRASH, /List<T> trashOnly<T extends SoftDeletable>/, '缺少回收站过滤器 trashOnly()'),
+    // ② 90 天保留期是**纯函数**：89 / 90 / 91 天边界因此可被确定性测试
+    A.has(T_TYPES, /export function isTrashExpired\(/, '缺少过期判定纯函数 isTrashExpired()'),
+    A.has(F_TRASH, /bool isTrashExpired\(/, '缺少过期判定纯函数 isTrashExpired()'),
+    A.has(T_TYPES, /export function trashRetentionText\(/, '缺少保留期展示串纯函数 trashRetentionText()'),
+    A.has(F_TRASH, /String trashRetentionText\(/, '缺少保留期展示串纯函数 trashRetentionText()'),
+    // ③ 列表读法唯一：公开列表必须走 activeOnly（页面不得自己过滤一遍）
+    A.has(T_STORE, /get habits\(\): Habit\[\] \{\s*return activeOnly\(this\.habitList\)/, '公开习惯列表未走 activeOnly'),
+    A.has(T_STORE, /get wishes\(\): Wish\[\] \{\s*return activeOnly\(this\.wishList\)/, '公开心愿列表未走 activeOnly'),
+    A.has(T_STORE, /get rules\(\): PointRule\[\] \{\s*return activeOnly\(this\.ruleList\)/, '公开规则列表未走 activeOnly'),
+    A.has(F_STORE, /List<Habit> get habits => activeOnly\(_habitList\)/, '公开习惯列表未走 activeOnly'),
+    A.has(F_STORE, /List<Wish> get wishes => activeOnly\(_wishList\)/, '公开心愿列表未走 activeOnly'),
+    A.has(F_STORE, /List<PointRule> get rules => activeOnly\(_ruleList\)/, '公开规则列表未走 activeOnly'),
+    // ④ 删除只改状态位 —— 三类配置逐个钉住（谁回退成物理删除，谁就红）
+    A.has(T_STORE, /private softDelete\(item: SoftDeletable, kind: TrashKind, actor: ActorContext\)/, '缺少软删除实现'),
+    A.has(T_STORE, /this\.softDelete\(live, 'wish', actor\)/, 'removeWish 未走软删'),
+    A.has(T_STORE, /this\.softDelete\(live, 'point_rule', actor\)/, 'removeRule 未走软删'),
+    A.has(T_STORE, /this\.softDelete\(live, 'habit', actor\)/, 'removeHabit 未走软删'),
+    A.has(F_STORE, /bool _softDelete\(SoftDeletable item, TrashKind kind, ActorContext actor\)/, '缺少软删除实现'),
+    A.has(F_STORE, /_softDelete\(live, TrashKind\.wish, actor\)/, 'removeWish 未走软删'),
+    A.has(F_STORE, /_softDelete\(live, TrashKind\.pointRule, actor\)/, 'removeRule 未走软删'),
+    A.has(F_STORE, /_softDelete\(live, TrashKind\.habit, actor\)/, 'removeHabit 未走软删'),
+    // ⑤ 回收站三件套；「过期」只是判定，真删必须显式调用（不做自动清理）
+    A.has(T_STORE, /trashItems\(/, '缺少回收站列表 trashItems()'),
+    A.has(T_STORE, /restoreTrash\(/, '缺少恢复 restoreTrash()'),
+    A.has(T_STORE, /purgeTrash\(/, '缺少彻底删除 purgeTrash()'),
+    A.has(T_STORE, /purgeExpiredTrash\(/, '缺少「清理已过期」purgeExpiredTrash()'),
+    A.has(F_STORE, /List<TrashItem> trashItems\(/, '缺少回收站列表 trashItems()'),
+    A.has(F_STORE, /bool restoreTrash\(/, '缺少恢复 restoreTrash()'),
+    A.has(F_STORE, /bool purgeTrash\(/, '缺少彻底删除 purgeTrash()'),
+    A.has(F_STORE, /int purgeExpiredTrash\(/, '缺少「清理已过期」purgeExpiredTrash()'),
+    // ⑥ 回归用例（两端同名，含 89 / 90 / 91 天边界与「原对象仍在」）
+    A.has(T_RUNNER, /C9 软删：三类配置同待遇/, 'run.js 缺少 C9 软删用例'),
+    A.has(T_RUNNER, /C9 回收站 90 天边界/, 'run.js 缺少 90 天边界用例'),
+    A.has(T_RUNNER, /C9 唯一过滤器/, 'run.js 缺少唯一过滤器用例'),
+    A.has(F_TESTS, /三类配置同待遇：列表里消失、回收站找得到、原对象仍在、可恢复/, 'app_test.dart 缺少 C9 软删用例'),
+    A.has(F_TESTS, /90 天边界：第 89 天仍可恢复，满 90 天判定过期/, 'app_test.dart 缺少 90 天边界用例'),
+    A.has(F_TESTS, /唯一过滤器：activeOnly \/ trashOnly 是列表口径的单一来源/, 'app_test.dart 缺少唯一过滤器用例'),
   ] },
-  { id: 'C10', status: 'unfixed', what: '规则无法编辑（无 updateRule）', assertions: () => [
-    A.lack(T_STORE, /updateRule/, '已出现 updateRule → 缺陷可能已修，台账应更新'),
-    A.lack(F_STORE, /updateRule/, '已出现 updateRule'),
+  { id: 'C10', status: 'fixed', what: '规则无法编辑（无 updateRule）', assertions: () => [
+    A.has(T_STORE, /updateRule\(/, '缺少 updateRule'),
+    A.has(F_STORE, /String\? updateRule\(/, '缺少 updateRule'),
+    // 版本表：只增不删、永久保留；新建即 v1，改一次 +1（回放不留空档）
+    A.has(T_TYPES, /export interface RuleVersion/, '缺少规则版本表结构'),
+    A.has(F_RULE_VERSION, /class RuleVersion/, '缺少规则版本表结构'),
+    A.has(T_STORE, /currentVersion: 1,/, '新建规则未落 currentVersion: 1'),
+    A.has(F_STORE, /currentVersion: 1,/, '新建规则未落 currentVersion: 1'),
+    A.has(T_STORE, /const version = live\.currentVersion \+ 1/, 'updateRule 未把版本号 +1'),
+    A.has(F_STORE, /final int version = live\.currentVersion \+ 1;/, 'updateRule 未把版本号 +1'),
+    // 反回退：改价不等于换对象 —— 谁再改规则 id，历史就断
+    A.lack(T_STORE, /live\.id\s*=/, '又在改规则 id（历史断裂，回退）'),
+    A.lack(F_STORE, /live\.id\s*=/, '又在改规则 id（历史断裂，回退）'),
+    // 流水钉住**当时**的版本：没有它，“这 +1 分按什么规则给的”无解
+    A.has(T_STORE, /ruleVersion: this\.currentRuleVersion\(/, '流水未钉住当时的规则版本'),
+    A.has(F_STORE, /ruleVersion: _currentRuleVersion\(/, '流水未钉住当时的规则版本'),
+    // §3.3 影响提示必须是**纯函数**（写在组件里的文案测不到 —— E17 的老病）
+    A.has(T_TYPES, /export function ruleChangeNotice\(/, '缺少影响提示纯函数 ruleChangeNotice()'),
+    A.has(F_RULE_VERSION, /String\? ruleChangeNotice\(/, '缺少影响提示纯函数 ruleChangeNotice()'),
+    A.has(T_RULE_SHEET, /ruleChangeNotice\(/, '新增/编辑表单未使用 ruleChangeNotice()'),
+    A.has(F_RULE_SHEET, /ruleChangeNotice\(/, '新增/编辑表单未使用 ruleChangeNotice()'),
+    // 回归用例（两端同名）
+    A.has(T_RUNNER, /C10 updateRule：id 不变、版本 \+1 且连续/, 'run.js 缺少 C10 用例'),
+    A.has(F_TESTS, /updateRule：id 不变、版本 \+1 且连续/, 'app_test.dart 缺少 C10 用例'),
+    A.has(F_TESTS, /在回收站里/, 'app_test.dart 缺少「回收站里的规则先恢复再改」用例'),
   ] },
-  { id: 'C11', status: 'unfixed', what: '无 AuditLog，变更不可追溯', assertions: () => [
-    A.lack(T_STORE, /auditLog|AuditLog/, '已出现审计痕迹 → 缺陷可能已修，台账应更新'),
-    A.lack(T_TYPES, /auditLog|AuditLog/, '已出现审计痕迹'),
-    A.lack(F_STORE, /auditLog|AuditLog/, '已出现审计痕迹'),
+  { id: 'C11', status: 'fixed', what: '无 AuditLog，变更不可追溯', assertions: () => [
+    // 动作白名单是**枚举 / 联合类型**（拼写漂移在编译期就红）
+    A.has(T_TYPES, /export type AuditAction =/, '缺少审计动作白名单'),
+    A.has(T_TYPES, /export type AuditTargetType =/, '缺少审计对象类型'),
+    A.has(F_AUDIT, /enum AuditAction \{/, '缺少审计动作白名单'),
+    A.has(F_AUDIT, /enum AuditTargetType \{/, '缺少审计对象类型'),
+    // 真快照：before / after 必须**深拷贝**（存引用 = 审计跟着原对象一起变形）
+    A.has(T_TYPES, /export function auditSnapshotOf\(/, '缺少真快照构造 auditSnapshotOf()'),
+    A.has(F_AUDIT, /AuditSnapshot auditSnapshotOf\(/, '缺少真快照构造 auditSnapshotOf()'),
+    // 追加式：只 unshift / insert(0)，永不 UPDATE、永不删除
+    A.has(T_STORE, /this\.auditLog\.unshift\(/, '审计未走追加式写入'),
+    A.has(F_STORE, /auditLog\.insert\(/, '审计未走追加式写入'),
+    A.lack(T_STORE, /auditLog\.(splice|pop|shift|sort|reverse)\(/, '又在改写审计流水（追加式被破坏，回退）'),
+    A.lack(F_STORE, /auditLog\.(remove|removeAt|sort|reverse|insertAll)\(/, '又在改写审计流水（追加式被破坏，回退）'),
+    // 回归用例（真快照的抓法：写完审计再改原对象，审计内容必须不变）
+    A.has(T_RUNNER, /C11 审计：每次变更同一笔留痕/, 'run.js 缺少 C11 用例'),
+    A.has(F_TESTS, /审计：每次变更同一笔留痕、只增不删、before \/ after 是真快照/, 'app_test.dart 缺少 C11 用例'),
+    A.has(F_TESTS, /快照必须停在当时那一刻/, 'app_test.dart 缺少「真快照」断言'),
   ] },
   { id: 'D12', status: 'fixed', what: '测试器花括号嵌套错位 → CI 假通过', custom: checkD12 },
   { id: 'D13', status: 'fixed', what: '测试断言把缺陷固化为「正确行为」', assertions: () => [

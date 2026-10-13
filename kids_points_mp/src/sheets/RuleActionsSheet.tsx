@@ -12,13 +12,16 @@ export interface RuleActionsSheetProps {
   visible: boolean
   rule: PointRule | null
   onClose: () => void
+  /** 点“编辑这条规则”：由页面负责收起本菜单并打开编辑态表单（修 C10） */
+  onEdit?: () => void
 }
 
-/** 长按 / 点击规则：加入今天的习惯、删除规则。 */
+/** 长按 / 点击规则：编辑规则、加入今天的习惯、移到回收站。 */
 export default function RuleActionsSheet({
   visible,
   rule,
-  onClose
+  onClose,
+  onEdit
 }: RuleActionsSheetProps) {
   if (!rule) return null
 
@@ -35,9 +38,11 @@ export default function RuleActionsSheet({
   }
 
   const handleRemove = () => {
+    // 修 C9：删除只改状态位（软删），规则留在数据里 90 天可恢复 ——
+    // 历史流水的回指（ruleId / ruleVersion）因此不会指向空。
     store.removeRule(rule)
     onClose()
-    toast('规则已删除')
+    toast('已移到回收站，90 天内可在「我的 · 回收站」恢复')
   }
 
   return (
@@ -48,6 +53,14 @@ export default function RuleActionsSheet({
       onClose={onClose}
     >
       <ActionRow
+        icon='pencil'
+        label={`编辑这条规则（当前第 ${rule.currentVersion} 版）`}
+        onClick={() => {
+          if (onEdit) onEdit()
+        }}
+      />
+      <View className='kp-sheet-gap-10' />
+      <ActionRow
         icon='listCheck'
         label='加入今天的习惯'
         onClick={handleAddToHabits}
@@ -55,7 +68,7 @@ export default function RuleActionsSheet({
       <View className='kp-sheet-gap-10' />
       <ActionRow
         icon='trash'
-        label='删除这条规则'
+        label='移到回收站'
         danger
         onClick={handleRemove}
       />

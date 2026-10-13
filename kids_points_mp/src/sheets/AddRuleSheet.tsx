@@ -11,25 +11,38 @@ import PointsStepper from '../components/PointsStepper'
 import SegmentedToggle from '../components/SegmentedToggle'
 import SheetFrame from '../components/SheetFrame'
 import { store } from '../data/store'
-import { dailyLimitMax, dailyLimitMin } from '../data/types'
+import type { PointRule } from '../data/types'
+import { dailyLimitMax, dailyLimitMin, ruleChangeNotice } from '../data/types'
 import { toast } from '../utils/toast'
 import './sheets.scss'
 
 export interface AddRuleSheetProps {
   visible: boolean
   onClose: () => void
+  /**
+   * 传了规则即为**编辑态**（同一张表单，修 C10）；不传则是新增。
+   * 编辑态下 `id` 不变、`currentVersion` 由 store 递增 —— 页面不做版本运算。
+   */
+  rule?: PointRule | null
 }
 
-/** “新增规则”：约定做到什么、得几分（也可约定扣分）。 */
-export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
-  const [title, setTitle] = useState('')
+/** “新增 / 编辑规则”：约定做到什么、得几分（也可约定扣分）。 */
+export default function AddRuleSheet({
+  visible,
+  onClose,
+  rule = null
+}: AddRuleSheetProps) {
+  const [title, setTitle] = useState(rule ? rule.title : '')
   // 修 E15：表单收集的是**结构字段**（条件 + 每日次数），不再是「细则」自由串
-  const [condition, setCondition] = useState('')
-  const [dailyLimit, setDailyLimit] = useState(1)
-  const [isGain, setIsGain] = useState(true)
-  const [amount, setAmount] = useState(2)
-  const [iconIndex, setIconIndex] = useState(0)
-
+  const [condition, setCondition] = useState(rule ? rule.condition : '')
+  const [dailyLimit, setDailyLimit] = useState(rule ? rule.dailyLimit : 1)
+  const [isGain, setIsGain] = useState(rule ? rule.points >= 0 : true)
+  const [amount, setAmount] = useState(rule ? Math.abs(rule.points) : 2)
+  const [iconIndex, setIconIndex] = useState(() => {
+    if (!rule) return 0
+    const index = ruleIconOptions.findIndex((option) => option.icon === rule.icon)
+    return index < 0 ? 0 : index
+  })
   const handleSubmit = () => {
     const trimmed = title.trim()
     if (trimmed === '') {
@@ -37,11 +50,35 @@ export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
       return
     }
     const option = ruleIconOptions[iconIndex]
+    const points = isGain ? amount : -amount
+    if (rule) {
+      // 修 C10（§3.3）：改动后若“今天已打卡数 ≥ 新上限”，**必须**告知家长
+      // 今天不能再打卡了 —— 否则改完规则孩子打不了卡，却不知原因。
+      // 文案由纯函数 ruleChangeNotice 派生（写在 JSX 里的文案测不到）。
+      const notice = ruleChangeNotice({
+        childName: store.profile.name,
+        checkedCountToday: store.checkedCountTodayOfRule(rule),
+        newDailyLimit: dailyLimit
+      })
+      const message = store.updateRule(rule, {
+        title: trimmed,
+        condition,
+        dailyLimit,
+        points
+      })
+      if (message) {
+        toast(message)
+        return
+      }
+      onClose()
+      toast(notice ?? `已更新规则：${trimmed}（第 ${rule.currentVersion + 1} 版）`)
+      return
+    }
     const message = store.addRule(
       trimmed,
       condition,
       dailyLimit,
-      isGain ? amount : -amount,
+      points,
       option.icon,
       option.color
     )
@@ -55,11 +92,10 @@ export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
       `已新增规则：${trimmed}（每天 ${dailyLimit} 次 · ${isGain ? '+' : '-'}${amount} 积分）`
     )
   }
-
   return (
     <SheetFrame
       visible={visible}
-      title='新增规则'
+      title={rule ? '编辑规则' : '新增规则'}
       subtitle='规则会出现在积分规则页，也可以加入今天的习惯'
       actionLabel='保存规则'
       actionIcon='check'
@@ -105,4 +141,3 @@ export default function AddRuleSheet({ visible, onClose }: AddRuleSheetProps) {
     </SheetFrame>
   )
 }
-

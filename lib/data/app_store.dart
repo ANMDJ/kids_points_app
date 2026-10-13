@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../models/audit.dart';
 import '../models/child_profile.dart';
 import '../models/habit.dart';
 import '../models/point_record.dart';
 import '../models/point_rule.dart';
+import '../models/rule_version.dart';
+import '../models/trash.dart';
 import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import 'seed_data.dart';
@@ -44,10 +47,32 @@ class AppStore extends ChangeNotifier {
 
   int _points = 0;
   late ChildProfile profile;
-  final List<Habit> habits = <Habit>[];
-  final List<Wish> wishes = <Wish>[];
+
+  /// 流水：**只增不删**（撤销也走冲正记录）—— 与审计、版本表同等待遇。
   final List<PointRecord> records = <PointRecord>[];
-  final List<PointRule> rules = <PointRule>[];
+
+  /// 规则版本表 —— **只增不删、永不 UPDATE**（`02` §5.3 / §5.6），修 C10。
+  final List<RuleVersion> ruleVersions = <RuleVersion>[];
+
+  /// 审计流水 —— **追加式**（只增不删、永不 UPDATE），修 C11。
+  final List<AuditEntry> auditLog = <AuditEntry>[];
+
+  // 三个配置列表的**唯一**存储：含回收站条目（status 为 deleted 的项）。
+  // 页面**不得**直接读它们 —— 一律走下面的 getter（自动过滤回收站，§3.6）。
+  final List<Habit> _habitList = <Habit>[];
+  final List<Wish> _wishList = <Wish>[];
+  final List<PointRule> _ruleList = <PointRule>[];
+
+  /// 列表的**唯一**读法（docs/design/08 §3.6）：[activeOnly] 只在这里收口。
+  ///
+  /// 页面拿到的是“活着的”；回收站拿的是 `deleted` 的 ——
+  /// 排除 `deleted` 的判断全仓库只有 trash.dart 一处，
+  /// 两端各写一遍 `status == active` 迟早漂移（那正是 E15 / E17 教过的）。
+  List<Habit> get habits => activeOnly(_habitList);
+
+  List<Wish> get wishes => activeOnly(_wishList);
+
+  List<PointRule> get rules => activeOnly(_ruleList);
 
   int get points => _points;
 
@@ -62,10 +87,12 @@ class AppStore extends ChangeNotifier {
       goodHabitCount: 0,
       rewardCount: 0,
     );
-    habits.clear();
-    wishes.clear();
+    _habitList.clear();
+    _wishList.clear();
+    _ruleList.clear();
     records.clear();
-    rules.clear();
+    ruleVersions.clear();
+    auditLog.clear();
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -73,18 +100,24 @@ class AppStore extends ChangeNotifier {
     final SeedBundle seed = buildSeedData();
     _points = seed.points;
     profile = seed.profile;
-    habits
+    _habitList
       ..clear()
       ..addAll(seed.habits);
-    wishes
+    _wishList
       ..clear()
       ..addAll(seed.wishes);
     records
       ..clear()
       ..addAll(seed.records);
-    rules
+    _ruleList
       ..clear()
       ..addAll(seed.rules);
+    ruleVersions
+      ..clear()
+      ..addAll(seed.ruleVersions);
+    // 夹具的审计**从空开始**：审计记录的是“这台设备上发生过的变更”，
+    // 预置数据不是变更（否则回收站 / 审计页会显示一堆没人做过的操作）。
+    auditLog.clear();
   }
 
   /// 恢复演示数据（“我的”页长按头像可触发）。返回是否真的执行了恢复。
@@ -156,22 +189,33 @@ class AppStore extends ChangeNotifier {
     _points += live.points;
     profile.goodHabitCount += 1;
     final DateTime time = DateTime.now();
-    records.insert(
-      0,
-      PointRecord(
-        id: _newId('rec'),
-        title: live.title,
-        subtitle: recordSubtitle(time: time, source: source),
-        points: live.points,
-        time: time,
-        category: RecordCategory.praise,
-        icon: live.icon,
-        color: live.color,
-        source: source,
-        operatorRole: actor.role,
-        habitId: live.id,
-        balanceAfter: _points,
-      ),
+    final PointRecord record = PointRecord(
+      id: _newId('rec'),
+      title: live.title,
+      subtitle: recordSubtitle(time: time, source: source),
+      points: live.points,
+      time: time,
+      category: RecordCategory.praise,
+      icon: live.icon,
+      color: live.color,
+      source: source,
+      operatorRole: actor.role,
+      habitId: live.id,
+      // 修 C10：习惯由哪条规则派生，就把那条规则**当时的版本**钉在这一笔上 ——
+      // 没有它，规则改成 +5 之后这笔 +3 就成了无法解释的数字。
+      ruleId: live.ruleId,
+      ruleVersion: _currentRuleVersion(live.ruleId),
+      balanceAfter: _points,
+    );
+    records.insert(0, record);
+    // 修 C11：写流水与记审计在**同一次操作**里、只 persist 一次
+    _audit(
+      AuditAction.pointRecordCheckIn,
+      AuditTargetType.pointRecord,
+      record.id,
+      null,
+      auditSnapshotOf(record.snapshot()),
+      actor,
     );
     _persist();
     return null;
@@ -219,29 +263,38 @@ class AppStore extends ChangeNotifier {
     _points -= target.points;
     if (profile.goodHabitCount > 0) profile.goodHabitCount -= 1;
     final DateTime time = DateTime.now();
-    records.insert(
-      0,
-      PointRecord(
-        id: _newId('rec'),
-        title: '撤销：${target.title}',
-        subtitle: recordSubtitle(
-          time: time,
-          source: RecordSource.correction,
-          note: target.title,
-        ),
-        points: -target.points,
+    final PointRecord record = PointRecord(
+      id: _newId('rec'),
+      title: '撤销：${target.title}',
+      subtitle: recordSubtitle(
         time: time,
-        category: RecordCategory.adjust,
-        icon: Icons.remove_rounded,
-        color: AppColors.pointSpend,
         source: RecordSource.correction,
-        operatorRole: actor.role,
         note: target.title,
-        habitId: habit.id,
-        ruleId: target.ruleId,
-        reversesRecordId: target.id,
-        balanceAfter: _points,
       ),
+      points: -target.points,
+      time: time,
+      category: RecordCategory.adjust,
+      icon: Icons.remove_rounded,
+      color: AppColors.pointSpend,
+      source: RecordSource.correction,
+      operatorRole: actor.role,
+      note: target.title,
+      habitId: habit.id,
+      // 修 C10：冲正记录**继承**原记录的规则与版本 ——
+      // “哪一版规则产生了这笔分、又是谁撤销的”因此都留在账上
+      ruleId: target.ruleId,
+      ruleVersion: target.ruleVersion,
+      reversesRecordId: target.id,
+      balanceAfter: _points,
+    );
+    records.insert(0, record);
+    _audit(
+      AuditAction.pointRecordUndoCheckIn,
+      AuditTargetType.pointRecord,
+      record.id,
+      null,
+      auditSnapshotOf(record.snapshot()),
+      actor,
     );
     _persist();
     return null;
@@ -278,22 +331,31 @@ class AppStore extends ChangeNotifier {
     final String title =
         reason.trim().isEmpty ? (isGain ? '额外奖励' : '扣除积分') : reason.trim();
     final DateTime time = DateTime.now();
-    records.insert(
-      0,
-      PointRecord(
-        id: _newId('rec'),
-        title: title,
-        subtitle: recordSubtitle(time: time, source: source, note: note),
-        points: delta,
-        time: time,
-        category: RecordCategory.adjust,
-        icon: isGain ? Icons.add_rounded : Icons.remove_rounded,
-        color: isGain ? AppColors.pointGain : AppColors.pointSpend,
-        source: source,
-        operatorRole: actor.role,
-        note: note.trim(),
-        balanceAfter: _points,
-      ),
+    final PointRecord record = PointRecord(
+      id: _newId('rec'),
+      title: title,
+      subtitle: recordSubtitle(time: time, source: source, note: note),
+      points: delta,
+      time: time,
+      category: RecordCategory.adjust,
+      icon: isGain ? Icons.add_rounded : Icons.remove_rounded,
+      color: isGain ? AppColors.pointGain : AppColors.pointSpend,
+      source: source,
+      operatorRole: actor.role,
+      note: note.trim(),
+      // 手动“记一笔”不来自任何规则 —— 版本号因此为 null（不是“忘了写”）
+      ruleId: null,
+      ruleVersion: null,
+      balanceAfter: _points,
+    );
+    records.insert(0, record);
+    _audit(
+      AuditAction.pointRecordQuickNote,
+      AuditTargetType.pointRecord,
+      record.id,
+      null,
+      auditSnapshotOf(record.snapshot()),
+      actor,
     );
     _persist();
     return null;
@@ -315,56 +377,81 @@ class AppStore extends ChangeNotifier {
     wish.redeemed = true;
     profile.rewardCount += 1;
     final DateTime time = DateTime.now();
-    records.insert(
-      0,
-      PointRecord(
-        id: _newId('rec'),
-        // 修 B8：完整标题，不截断
-        title: '兑换：${wish.title}',
-        subtitle: recordSubtitle(
-          time: time,
-          source: source,
-          category: RecordCategory.exchange,
-        ),
-        points: -wish.cost,
+    final PointRecord record = PointRecord(
+      id: _newId('rec'),
+      // 修 B8：完整标题，不截断
+      title: '兑换：${wish.title}',
+      subtitle: recordSubtitle(
         time: time,
-        category: RecordCategory.exchange,
-        icon: Icons.redeem_rounded,
-        color: AppColors.orange,
         source: source,
-        operatorRole: actor.role,
-        // 修 B8：回指心愿，即使心愿被删除也能解释这笔支出
-        wishId: wish.id,
-        balanceAfter: _points,
+        category: RecordCategory.exchange,
       ),
+      points: -wish.cost,
+      time: time,
+      category: RecordCategory.exchange,
+      icon: Icons.redeem_rounded,
+      color: AppColors.orange,
+      source: source,
+      operatorRole: actor.role,
+      // 兑换与规则无关，版本号同样为 null
+      ruleId: null,
+      ruleVersion: null,
+      // 修 B8：回指心愿，即使心愿被删除也能解释这笔支出
+      wishId: wish.id,
+      balanceAfter: _points,
+    );
+    records.insert(0, record);
+    _audit(
+      AuditAction.pointRecordRedeem,
+      AuditTargetType.pointRecord,
+      record.id,
+      auditSnapshotOf(wish.snapshot()),
+      auditSnapshotOf(record.snapshot()),
+      actor,
     );
     _persist();
     return true;
   }
 
-  void addWish(
-      {required String title, required int cost, required String emoji}) {
+  void addWish({
+    required String title,
+    required int cost,
+    required String emoji,
+    ActorContext actor = const ActorContext(),
+  }) {
     final String id = _newId('wish');
-    wishes.insert(
-      0,
-      Wish(
-        id: id,
-        title: title.trim(),
-        cost: cost,
-        emoji: emoji,
-        // 修 E16：配色只由「空档 + id」决定，与列表长度无关 —— 删项后既有心愿不再换色
-        coverStyle: pickCoverStyle(
-          wishes.map((Wish item) => item.coverStyle).toList(),
-          id,
-        ),
+    final Wish wish = Wish(
+      id: id,
+      title: title.trim(),
+      cost: cost,
+      emoji: emoji,
+      // 修 E16：配色只由「空档 + id」决定，与列表长度无关 —— 删项后既有心愿不再换色
+      // （回收站里的心愿不参与选色：它们不在列表上，配色可以回收再利用）
+      coverStyle: pickCoverStyle(
+        wishes.map((Wish item) => item.coverStyle).toList(),
+        id,
       ),
+    );
+    _wishList.insert(0, wish);
+    _audit(
+      AuditAction.wishCreate,
+      AuditTargetType.wish,
+      wish.id,
+      null,
+      auditSnapshotOf(wish.snapshot()),
+      actor,
     );
     _persist();
   }
 
-  void removeWish(Wish wish) {
-    wishes.remove(wish);
-    _persist();
+  /// 删除心愿 —— **软删**（进回收站，90 天内可恢复），修 C9。
+  ///
+  /// 原先 `wishes.remove(wish)`：误删不可恢复；且已发生的兑换流水再也找不到
+  /// 它回指的心愿（`wishId` 指向空 —— “这笔扣分换的是什么”从此无解）。
+  void removeWish(Wish wish, {ActorContext actor = const ActorContext()}) {
+    final Wish? live = _findById(_wishList, wish.id);
+    if (live == null) return;
+    if (_softDelete(live, TrashKind.wish, actor)) _persist();
   }
 
   // ------------------------------------------------------------ 积分规则
@@ -381,29 +468,58 @@ class AppStore extends ChangeNotifier {
     required int points,
     required IconData icon,
     required Color color,
+    ActorContext actor = const ActorContext(),
   }) {
     if (!isDailyLimitValid(dailyLimit)) {
       return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
     }
-    rules.insert(
-      0,
-      PointRule(
-        id: _newId('rule'),
-        title: title.trim(),
-        condition: condition.trim().isEmpty ? '家长约定' : condition.trim(),
-        dailyLimit: dailyLimit,
-        points: points,
-        icon: icon,
-        color: color,
+    final PointRule rule = PointRule(
+      id: _newId('rule'),
+      title: title.trim(),
+      condition: condition.trim().isEmpty ? '家长约定' : condition.trim(),
+      dailyLimit: dailyLimit,
+      points: points,
+      icon: icon,
+      color: color,
+      // 修 C10：新建即 version 1，并**同时**留下 version 1 的版本记录 ——
+      // 于是 `currentVersion` 永远指向一条真实存在的版本（回放不留空档）。
+      currentVersion: 1,
+    );
+    _ruleList.insert(0, rule);
+    ruleVersions.add(
+      RuleVersion(
+        id: _newId('rv'),
+        ruleId: rule.id,
+        version: 1,
+        title: rule.title,
+        condition: rule.condition,
+        dailyLimit: rule.dailyLimit,
+        points: rule.points,
+        changedByRole: actor.role,
+        changedAt: DateTime.now(),
+        changeNote: '新建规则',
       ),
+    );
+    _audit(
+      AuditAction.pointRuleCreate,
+      AuditTargetType.pointRule,
+      rule.id,
+      null,
+      auditSnapshotOf(rule.snapshot()),
+      actor,
     );
     _persist();
     return null;
   }
 
-  void removeRule(PointRule rule) {
-    rules.remove(rule);
-    _persist();
+  /// 删除规则 —— **软删**（进回收站，90 天内可恢复），修 C9。
+  ///
+  /// 版本记录**不跟着删**：否则历史流水的 `(ruleId, ruleVersion)` 指向空
+  /// （“这分按什么规则给的”永远无法回答，见 `02` §5.6）。
+  void removeRule(PointRule rule, {ActorContext actor = const ActorContext()}) {
+    final PointRule? live = _findById(_ruleList, rule.id);
+    if (live == null) return;
+    if (_softDelete(live, TrashKind.pointRule, actor)) _persist();
   }
 
   /// 按规则生成一个首页习惯（规则页“加入今天的习惯”用）。
@@ -412,7 +528,10 @@ class AppStore extends ChangeNotifier {
   /// **修 A1**：原先 `points: rule.points.abs()` 把扣分规则**静默转成加分习惯** ——
   /// 家长定「打人 −3 分」，孩子打人后打卡反而 **+3 分**。属产品性质级错误。
   /// 扣分规则不应生成可打卡习惯，直接拒绝并给出可读文案。
-  String? addHabitFromRule(PointRule rule) {
+  String? addHabitFromRule(
+    PointRule rule, {
+    ActorContext actor = const ActorContext(),
+  }) {
     if (habits.any((Habit h) => h.title == rule.title)) {
       return '“${rule.title}”已经在今天的习惯里了';
     }
@@ -421,16 +540,27 @@ class AppStore extends ChangeNotifier {
     }
     // 修 E15：条件与频次**直取结构字段** —— 原先这里 rule.detail.split(' · ')
     // 反解析：多一段就丢一段、没分隔符就静默落到默认值「每天 1 次」。
-    habits.add(
-      Habit(
-        id: _newId('habit'),
-        title: rule.title,
-        points: rule.points,
-        condition: rule.condition,
-        dailyLimit: rule.dailyLimit,
-        icon: rule.icon,
-        color: rule.color,
-      ),
+    final Habit habit = Habit(
+      id: _newId('habit'),
+      title: rule.title,
+      points: rule.points,
+      condition: rule.condition,
+      dailyLimit: rule.dailyLimit,
+      icon: rule.icon,
+      color: rule.color,
+      // 修 C10：记住“我是由哪条规则派生的” —— 有了这条链，打卡写出的流水
+      // 才能同时写清 (ruleId, ruleVersion)；改规则时也才知道该同步谁。
+      // 靠标题匹配是 E15 那类病（改个名就断链）。
+      ruleId: rule.id,
+    );
+    _habitList.add(habit);
+    _audit(
+      AuditAction.habitCreate,
+      AuditTargetType.habit,
+      habit.id,
+      null,
+      auditSnapshotOf(habit.snapshot()),
+      actor,
     );
     _persist();
     return null;
@@ -438,12 +568,393 @@ class AppStore extends ChangeNotifier {
 
   // ------------------------------------------------------------ 档案
 
-  void renameChild(String name) {
+  void renameChild(String name, {ActorContext actor = const ActorContext()}) {
     final String trimmed = name.trim();
     if (trimmed.isEmpty) return;
+    final AuditSnapshot before = auditSnapshotOf(profile.snapshot());
     profile.name = trimmed;
+    // 修 C11：改名是“成员”类变更 —— 用 `memberRename` 记一条，
+    // 而不是混进流水（成员变更不是积分变更）。
+    // 成员增删 / 角色切换 / 家长同意在本轮**未实现**（前端没有入口），
+    // 因此 AuditAction 里也没有对应取值 —— 不假装覆盖。
+    _audit(
+      AuditAction.memberRename,
+      AuditTargetType.member,
+      profile.childId.isEmpty ? 'local-child' : profile.childId,
+      before,
+      auditSnapshotOf(profile.snapshot()),
+      actor,
+    );
     _persist();
   }
+
+  // ============================================ 回收站（修 C9）＋ 审计（修 C11）
+
+  /// 写入一条审计 —— **追加式**：只 `insert(0, …)`、永不 UPDATE、永不删除（修 C11）。
+  ///
+  /// [before] / [after] 一律由 [auditSnapshotOf] **深拷贝**而来。
+  /// 存引用的话，写完之后原对象一改，“变更前后”会同时指向那批已变形的值 ——
+  /// 审计就成了摆设，而这正是 C11 要防的“看起来在做安全”（docs/design/08 §6）。
+  void _audit(
+    AuditAction action,
+    AuditTargetType targetType,
+    String targetId,
+    AuditSnapshot? before,
+    AuditSnapshot? after,
+    ActorContext actor,
+  ) {
+    auditLog.insert(
+      0,
+      AuditEntry(
+        id: _newId('audit'),
+        action: action,
+        targetType: targetType,
+        targetId: targetId,
+        before: before,
+        after: after,
+        actorRole: actor.role,
+        time: DateTime.now(),
+      ),
+    );
+  }
+
+  /// 按类型取**含回收站**的原始列表（只给 store 内部与回收站用）。
+  List<SoftDeletable> _listOf(TrashKind kind) {
+    switch (kind) {
+      case TrashKind.pointRule:
+        return _ruleList;
+      case TrashKind.wish:
+        return _wishList;
+      case TrashKind.habit:
+        return _habitList;
+    }
+  }
+
+  /// 按 id 找出**活着的和回收站里的**那一条（找不到返回 null）。
+  static T? _findById<T extends SoftDeletable>(List<T> list, String id) {
+    for (final T item in list) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  // 类型 → 审计动作 / 对象类型。与 Taro 侧的 `${kind}.delete` 是**同一张表**：
+  // 写成 switch 而不是拼字符串，枚举穷尽由编译器保证（拼错串只会在半夜才发现）。
+  AuditAction _deleteActionOf(TrashKind kind) {
+    switch (kind) {
+      case TrashKind.pointRule:
+        return AuditAction.pointRuleDelete;
+      case TrashKind.wish:
+        return AuditAction.wishDelete;
+      case TrashKind.habit:
+        return AuditAction.habitDelete;
+    }
+  }
+
+  AuditAction _restoreActionOf(TrashKind kind) {
+    switch (kind) {
+      case TrashKind.pointRule:
+        return AuditAction.pointRuleRestore;
+      case TrashKind.wish:
+        return AuditAction.wishRestore;
+      case TrashKind.habit:
+        return AuditAction.habitRestore;
+    }
+  }
+
+  AuditAction _purgeActionOf(TrashKind kind) {
+    switch (kind) {
+      case TrashKind.pointRule:
+        return AuditAction.pointRulePurge;
+      case TrashKind.wish:
+        return AuditAction.wishPurge;
+      case TrashKind.habit:
+        return AuditAction.habitPurge;
+    }
+  }
+
+  AuditTargetType _targetTypeOf(TrashKind kind) {
+    switch (kind) {
+      case TrashKind.pointRule:
+        return AuditTargetType.pointRule;
+      case TrashKind.wish:
+        return AuditTargetType.wish;
+      case TrashKind.habit:
+        return AuditTargetType.habit;
+    }
+  }
+
+  /// 软删除：**只改 `status` ＋ `deletedAt`，物理数据一律保留** —— 修 C9。
+  ///
+  /// 原先 `removeWish` / `removeRule` 直接 `remove` 掉对象：误删不可恢复；
+  /// 且被删主体一消失，历史流水的回指（`ruleId` / `wishId`）就指向空，
+  /// “这 +1 分按什么规则给的”再也无法回答。
+  bool _softDelete(SoftDeletable item, TrashKind kind, ActorContext actor) {
+    if (item.status == RecordStatus.deleted) return false;
+    final AuditSnapshot before = auditSnapshotOf(item.snapshot());
+    item.status = RecordStatus.deleted;
+    item.deletedAt = DateTime.now();
+    _audit(
+      _deleteActionOf(kind),
+      _targetTypeOf(kind),
+      item.id,
+      before,
+      auditSnapshotOf(item.snapshot()),
+      actor,
+    );
+    return true;
+  }
+
+  /// 从回收站恢复：回到 `active` 并清掉 `deletedAt` —— 修 C9。
+  bool _restoreItem(SoftDeletable item, TrashKind kind, ActorContext actor) {
+    if (item.status != RecordStatus.deleted) return false;
+    final AuditSnapshot before = auditSnapshotOf(item.snapshot());
+    item.status = RecordStatus.active;
+    item.deletedAt = null;
+    _audit(
+      _restoreActionOf(kind),
+      _targetTypeOf(kind),
+      item.id,
+      before,
+      auditSnapshotOf(item.snapshot()),
+      actor,
+    );
+    return true;
+  }
+
+  /// 回收站条目（规则 / 心愿 / 习惯三类汇总）—— 修 C9。
+  ///
+  /// [now] 由调用方传入，好让“90 天边界”可以被确定性地测试（见 [isTrashExpired]）。
+  /// 是否**已过期**只是判定；真正清理要等 UI 调 [purgeExpiredTrash] ——
+  /// **不做任何自动清理**（过期不等于必须删，产品决定）。
+  List<TrashItem> trashItems({DateTime? now}) {
+    final DateTime time = now ?? DateTime.now();
+    final List<TrashItem> rows = <TrashItem>[];
+    void collect(TrashKind kind) {
+      for (final SoftDeletable item in trashOnly(_listOf(kind))) {
+        rows.add(
+          TrashItem(
+            kind: kind,
+            id: item.id,
+            title: item.title,
+            // 理论上 `deleted` 必有 `deletedAt`；兜底用 now 只为让展示层免于处理 null
+            deletedAt: item.deletedAt ?? time,
+            expired: isTrashExpired(item.deletedAt, now: time),
+          ),
+        );
+      }
+    }
+    collect(TrashKind.pointRule);
+    collect(TrashKind.wish);
+    collect(TrashKind.habit);
+    rows.sort((TrashItem a, TrashItem b) => b.deletedAt.compareTo(a.deletedAt));
+    return rows;
+  }
+
+  /// 从回收站恢复某一条（按类型 + id 定位）。
+  bool restoreTrash(
+    TrashKind kind,
+    String id, {
+    ActorContext actor = const ActorContext(),
+  }) {
+    final SoftDeletable? item = _findById(_listOf(kind), id);
+    if (item == null) return false;
+    if (!_restoreItem(item, kind, actor)) return false;
+    _persist();
+    return true;
+  }
+
+  /// 从回收站恢复某条规则（规则页 / 回收站页用）—— 修 C9。
+  bool restoreRule(PointRule rule, {ActorContext actor = const ActorContext()}) =>
+      restoreTrash(TrashKind.pointRule, rule.id, actor: actor);
+
+  /// 从回收站恢复某个心愿（心愿页 / 回收站页用）—— 修 C9。
+  bool restoreWish(Wish wish, {ActorContext actor = const ActorContext()}) =>
+      restoreTrash(TrashKind.wish, wish.id, actor: actor);
+
+  /// **彻底**删除某条回收站内容 —— 修 C9。
+  ///
+  /// 只允许删除 `status == deleted` 的条目：列表里的东西想删必须先软删，
+  /// 否则“彻底删除”就成了绕过回收站的物理删（C9 又回来了）。
+  bool purgeTrash(
+    TrashKind kind,
+    String id, {
+    ActorContext actor = const ActorContext(),
+  }) {
+    final List<SoftDeletable> list = _listOf(kind);
+    final int index = list.indexWhere(
+      (SoftDeletable row) => row.id == id && row.status == RecordStatus.deleted,
+    );
+    if (index < 0) return false;
+    final SoftDeletable item = list[index];
+    _audit(
+      _purgeActionOf(kind),
+      _targetTypeOf(kind),
+      item.id,
+      auditSnapshotOf(item.snapshot()),
+      null,
+      actor,
+    );
+    list.removeAt(index);
+    _persist();
+    return true;
+  }
+
+  /// 清理**已过期**（满 90 天）的回收站条目，返回清掉的条数 —— 修 C9。
+  ///
+  /// **只在 UI 显式调用时执行**（回收站页的“清理已过期”按钮）：
+  /// 到期不等于必须删 —— 见 docs/design/08 §3.5（判定是纯函数，动作由产品决定）。
+  int purgeExpiredTrash({DateTime? now, ActorContext actor = const ActorContext()}) {
+    final DateTime time = now ?? DateTime.now();
+    int purged = 0;
+    void sweep(List<SoftDeletable> list, TrashKind kind) {
+      // 先摘出清单再删：边遍历边删会撞上并发修改异常（与 JS 同罪）
+      final List<SoftDeletable> expired = list
+          .where(
+            (SoftDeletable item) =>
+                item.status == RecordStatus.deleted &&
+                isTrashExpired(item.deletedAt, now: time),
+          )
+          .toList();
+      for (final SoftDeletable item in expired) {
+        _audit(
+          _purgeActionOf(kind),
+          _targetTypeOf(kind),
+          item.id,
+          auditSnapshotOf(item.snapshot()),
+          null,
+          actor,
+        );
+        list.remove(item);
+        purged += 1;
+      }
+    }
+    sweep(_ruleList, TrashKind.pointRule);
+    sweep(_wishList, TrashKind.wish);
+    sweep(_habitList, TrashKind.habit);
+    if (purged > 0) _persist();
+    return purged;
+  }
+
+  /// 删除首页习惯 —— **软删**（进回收站，90 天内可恢复），修 C9。
+  void removeHabit(Habit habit, {ActorContext actor = const ActorContext()}) {
+    final Habit? live = _findById(_habitList, habit.id);
+    if (live == null) return;
+    if (_softDelete(live, TrashKind.habit, actor)) _persist();
+  }
+
+  /// 从回收站恢复某个习惯 —— 修 C9。
+  bool restoreHabit(Habit habit, {ActorContext actor = const ActorContext()}) =>
+      restoreTrash(TrashKind.habit, habit.id, actor: actor);
+
+  // =================================================== 规则编辑（修 C10）
+
+  /// 某条规则**当前**的版本号（规则不在体系里时 null）。
+  int? _currentRuleVersion(String? ruleId) {
+    if (ruleId == null) return null;
+    for (final PointRule rule in _ruleList) {
+      if (rule.id == ruleId) return rule.currentVersion;
+    }
+    return null;
+  }
+
+  /// 编辑规则 —— **四步一笔**（docs/design/02 §5.3：读版本 → 归档版本 →
+  /// 更新规则 → 写审计），修 C10。
+  ///
+  /// 四件事在**一次调用里做完、只 `_persist()` 一次**：分成两次调用就会留下
+  /// “改了但没记”的窗口 —— 那正是 C10 ＋ C11 要一起防的东西。
+  ///
+  /// 时间线语义（§3.2 / `02` §5.4）：**历史不可回溯、未来从新规**。
+  /// 已发生流水的 `points` / `ruleVersion` **一字不动**；由这条规则派生的
+  /// 首页习惯跟着新规走，于是“今日剩余额度”自然按新规重算（A3 的派生设计）。
+  ///
+  /// 成功返回 null，失败返回提示文案（与 [addRule] 同约定）。
+  String? updateRule(
+    PointRule rule, {
+    required String title,
+    required String condition,
+    required int dailyLimit,
+    required int points,
+    // 变更说明，写进版本记录（家长回看“为什么改”）
+    String changeNote = '',
+    ActorContext actor = const ActorContext(),
+  }) {
+    final PointRule? live = _findById(_ruleList, rule.id);
+    if (live == null) return '这条规则已经不在了';
+    if (live.status == RecordStatus.deleted) {
+      return '“${live.title}”在回收站里，先恢复再改';
+    }
+    if (!isDailyLimitValid(dailyLimit)) {
+      return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
+    }
+    final String nextTitle = title.trim().isEmpty ? live.title : title.trim();
+    final String nextCondition = condition.trim().isEmpty ? '家长约定' : condition.trim();
+    if (nextTitle == live.title &&
+        nextCondition == live.condition &&
+        dailyLimit == live.dailyLimit &&
+        points == live.points) {
+      return '没有改动，规则保持原样';
+    }
+
+    final DateTime time = DateTime.now();
+    final AuditSnapshot changed = auditSnapshotOf(live.snapshot());
+    final int version = live.currentVersion + 1;
+
+    // ① 先归档新版本（装的**是**新值）—— 顺序不能反：先改 `PointRule` 再补版本，
+    //    中间那一瞬 `currentVersion` 会指向一条不存在的版本记录（回放即见空档）。
+    ruleVersions.add(
+      RuleVersion(
+        id: _newId('rv'),
+        ruleId: live.id,
+        version: version,
+        title: nextTitle,
+        condition: nextCondition,
+        dailyLimit: dailyLimit,
+        points: points,
+        changedByRole: actor.role,
+        changedAt: time,
+        changeNote: changeNote.trim(),
+      ),
+    );
+
+    // ② 原地更新规则本体 —— **`id` 不变**（改价不等于换对象，否则历史断裂）
+    live.title = nextTitle;
+    live.condition = nextCondition;
+    live.dailyLimit = dailyLimit;
+    live.points = points;
+    live.currentVersion = version;
+
+    // ③ 派生同步：由这条规则生成的首页习惯跟着新规走（§3.2「未来从新规」）。
+    //    习惯是规则的**派生**，不单独记审计 —— 否则一次改动会产生两条审计，
+    //    回放时会把“同步”误读成一次独立变更。
+    for (final Habit habit in _habitList) {
+      if (habit.ruleId != live.id) continue;
+      habit.title = live.title;
+      habit.condition = live.condition;
+      habit.dailyLimit = live.dailyLimit;
+      habit.points = live.points;
+      habit.icon = live.icon;
+      habit.color = live.color;
+    }
+
+    // ④ 记一条审计（`before` / `after` 是真快照）
+    _audit(
+      AuditAction.pointRuleUpdate,
+      AuditTargetType.pointRule,
+      live.id,
+      changed,
+      auditSnapshotOf(live.snapshot()),
+      actor,
+    );
+    _persist();
+    return null;
+  }
+
+  ///
+  /// 今日“这条规则”已经产生几次表扬流水 —— 给 §3.3 的影响提示用（修 C10）。
+  /// 直接复用 [checkedCountTodayByRule] 的同一口径，别在页面里另算一遍。
+  int checkedCountTodayOfRule(PointRule rule, {DateTime? now}) =>
+      checkedCountTodayByRule(records, rule.id, now: now);
 
   // ------------------------------------------------------------ 内部工具
 

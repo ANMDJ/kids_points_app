@@ -6,10 +6,12 @@ import AppCard from '../../components/AppCard'
 import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
 import type { IconName } from '../../components/Icon/icons'
+import TrashSheet from '../../sheets/TrashSheet'
 import { ALLOW_DEMO_RESET, useStore } from '../../data/store'
 import { withAlpha } from '../../utils/color'
 import { pushPage, switchTab } from '../../utils/nav'
 import { prompt, toast } from '../../utils/toast'
+import { useSheet } from '../../utils/useSheet'
 import './index.scss'
 
 /** 昵称最长 16 个字符（对应 Flutter TextField 的 maxLength）。 */
@@ -51,6 +53,10 @@ function StatColumn({ value, label }: { value: number; label: string }) {
 /** 我的：孩子档案 + 好习惯 / 奖励次数战绩 + 积分记录 / 积分规则入口。 */
 export default function Profile() {
   const store = useStore()
+  // 修 C9：回收站入口固定在“我的”页（两端同一处）—— 打开的是底部弹窗，
+  // 不新增路由，恢复 / 彻底删除各一条路径。
+  const trashSheet = useSheet()
+  const trashCount = store.trashItems().length
 
   const handleRename = async () => {
     const name = await prompt('修改昵称', store.profile.name, '输入新的昵称')
@@ -139,6 +145,22 @@ export default function Profile() {
                 </View>
               </View>
             ))}
+            <View className='kp-profile__menu-divider' />
+            <View
+              className='kp-profile__menu'
+              onClick={() => trashSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#e9834b', 34 / 255) }}
+              >
+                <Icon name='trash' size={19} color='#e9834b' />
+              </View>
+              <Text className='kp-profile__menu-label'>
+                {trashCount > 0 ? `回收站（${trashCount}）` : '回收站'}
+              </Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
           </AppCard>
         </View>
 
@@ -151,6 +173,11 @@ export default function Profile() {
 
         <View className='kp-profile__gap' />
         <View className='kp-nav-space' />
+
+        {/* 修 C9：回收站弹窗（SheetFrame 本身就是覆盖层，挂在页面根节点内即可） */}
+        {trashSheet.open ? (
+          <TrashSheet visible={trashSheet.visible} onClose={trashSheet.hide} />
+        ) : null}
       </View>
     </GradientPage>
   )

@@ -1,4 +1,11 @@
-import type { ChildProfile, Habit, PointRecord, PointRule, Wish } from './types'
+import type {
+  ChildProfile,
+  Habit,
+  PointRecord,
+  PointRule,
+  RuleVersion,
+  Wish
+} from './types'
 import { recordSubtitle } from './types'
 
 /**
@@ -12,6 +19,8 @@ export interface SeedBundle {
   wishes: Wish[]
   records: PointRecord[]
   rules: PointRule[]
+  /** 规则版本表 —— 与 store.ruleVersions 同构（02 §5.3），测试夹具的唯一来源 */
+  ruleVersions: RuleVersion[]
 }
 
 export function buildSeedData(): SeedBundle {
@@ -27,6 +36,9 @@ export function buildSeedData(): SeedBundle {
   // 修 A2 / A3 / E17：这里只写**结构字段**，checked / limitText / doneText 全部删除。
   // 「今天完成几次」由 records 派生（types.ts 的 habitView）：
   // 番茄钟 1/2（还能再打一次）、收书包 1/1（已达上限）、自主阅读 0/1（还没打）。
+  // 修 C10：习惯若由规则生成，`ruleId` 指向**规则 id**（不是标题 —— 按标题匹配是 E15 那类病：
+  // 规则改个名，派生链就断）。手工新建的习惯写 null。
+  // 演示数据三条习惯依次对应 rule-1 / rule-2 / rule-4（rule-3「围棋课后作业」尚未加入今天的习惯）。
   const habits: Habit[] = [
     {
       id: 'habit-pomodoro',
@@ -35,7 +47,11 @@ export function buildSeedData(): SeedBundle {
       condition: '专注 25 分钟',
       dailyLimit: 2,
       icon: 'book',
-      color: '#7fbf55'
+      color: '#7fbf55',
+      ruleId: 'rule-1',
+      // 修 C9：新建即 active；删除只改状态位
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'habit-backpack',
@@ -44,7 +60,11 @@ export function buildSeedData(): SeedBundle {
       condition: '睡前整理好',
       dailyLimit: 1,
       icon: 'backpack',
-      color: '#f5a24b'
+      color: '#f5a24b',
+      ruleId: 'rule-2',
+      // 修 C9：新建即 active；删除只改状态位
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'habit-reading',
@@ -53,7 +73,11 @@ export function buildSeedData(): SeedBundle {
       condition: '阅读 20 分钟',
       dailyLimit: 1,
       icon: 'stories',
-      color: '#7bb0e8'
+      color: '#7bb0e8',
+      ruleId: 'rule-4',
+      // 修 C9：新建即 active；删除只改状态位
+      status: 'active',
+      deletedAt: null
     }
   ]
 
@@ -64,7 +88,10 @@ export function buildSeedData(): SeedBundle {
       cost: 40,
       emoji: '🍖',
       coverStyle: 'A',
-      redeemed: false
+      redeemed: false,
+      // 修 C9：演示数据全部 active（回收站是"用出来的"，不是预置的）
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'wish-2',
@@ -72,7 +99,10 @@ export function buildSeedData(): SeedBundle {
       cost: 40,
       emoji: '🐶',
       coverStyle: 'B',
-      redeemed: false
+      redeemed: false,
+      // 修 C9：演示数据全部 active（回收站是"用出来的"，不是预置的）
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'wish-3',
@@ -80,7 +110,10 @@ export function buildSeedData(): SeedBundle {
       cost: 445,
       emoji: '🎡',
       coverStyle: 'C',
-      redeemed: false
+      redeemed: false,
+      // 修 C9：演示数据全部 active（回收站是"用出来的"，不是预置的）
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'wish-4',
@@ -88,7 +121,10 @@ export function buildSeedData(): SeedBundle {
       cost: 445,
       emoji: '🧩',
       coverStyle: 'D',
-      redeemed: false
+      redeemed: false,
+      // 修 C9：演示数据全部 active（回收站是"用出来的"，不是预置的）
+      status: 'active',
+      deletedAt: null
     }
   ]
 
@@ -110,6 +146,8 @@ export function buildSeedData(): SeedBundle {
       note: '',
       habitId: 'habit-pomodoro',
       ruleId: 'rule-1',
+      // 修 C10：写入当时那条规则的版本号（演示数据只有 version 1）
+      ruleVersion: 1,
       wishId: null,
       reversesRecordId: null,
       balanceAfter: 124
@@ -131,6 +169,8 @@ export function buildSeedData(): SeedBundle {
       note: '',
       habitId: 'habit-backpack',
       ruleId: 'rule-2',
+      // 修 C10：写入当时那条规则的版本号（演示数据只有 version 1）
+      ruleVersion: 1,
       wishId: null,
       reversesRecordId: null,
       balanceAfter: 123
@@ -152,6 +192,8 @@ export function buildSeedData(): SeedBundle {
       note: '',
       habitId: null,
       ruleId: 'rule-3',
+      // 修 C10：写入当时那条规则的版本号（演示数据只有 version 1）
+      ruleVersion: 1,
       wishId: null,
       reversesRecordId: null,
       balanceAfter: 121
@@ -174,6 +216,8 @@ export function buildSeedData(): SeedBundle {
       note: '',
       habitId: null,
       ruleId: null,
+      // 兑换与规则无关 —— 版本号为 null（不是"忘了写"）
+      ruleVersion: null,
       wishId: null,
       reversesRecordId: null,
       balanceAfter: 116
@@ -194,7 +238,12 @@ export function buildSeedData(): SeedBundle {
       dailyLimit: 2,
       points: 1,
       icon: 'book',
-      color: '#f6c64a'
+      color: '#f6c64a',
+      // 修 C10：新建即 version 1（与 store.addRule 同一约定）
+      currentVersion: 1,
+      // 修 C9：新建即 active
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'rule-2',
@@ -203,7 +252,12 @@ export function buildSeedData(): SeedBundle {
       dailyLimit: 1,
       points: 2,
       icon: 'backpack',
-      color: '#e9834b'
+      color: '#e9834b',
+      // 修 C10：新建即 version 1（与 store.addRule 同一约定）
+      currentVersion: 1,
+      // 修 C9：新建即 active
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'rule-3',
@@ -212,7 +266,12 @@ export function buildSeedData(): SeedBundle {
       dailyLimit: 1,
       points: 5,
       icon: 'clipboard',
-      color: '#7fbf55'
+      color: '#7fbf55',
+      // 修 C10：新建即 version 1（与 store.addRule 同一约定）
+      currentVersion: 1,
+      // 修 C9：新建即 active
+      status: 'active',
+      deletedAt: null
     },
     {
       id: 'rule-4',
@@ -221,9 +280,31 @@ export function buildSeedData(): SeedBundle {
       dailyLimit: 1,
       points: 2,
       icon: 'stories',
-      color: '#7fbf55'
+      color: '#7fbf55',
+      // 修 C10：新建即 version 1（与 store.addRule 同一约定）
+      currentVersion: 1,
+      // 修 C9：新建即 active
+      status: 'active',
+      deletedAt: null
     }
   ]
+
+  // 修 C10：每条规则都补一条 `version: 1` 的版本记录 —— 与 store.addRule 的写法一致
+  // （`currentVersion` 必须永远指向一条**真实存在**的版本，回放不留空档）。
+  // 时间取「前天 9:00」：演示数据里没有版本变更，也就不会与今天的流水抢时序。
+  const ruleVersionAt = new Date(y, m, d - 2, 9, 0).getTime()
+  const ruleVersions: RuleVersion[] = rules.map((rule) => ({
+    id: `rv-${rule.id}-1`,
+    ruleId: rule.id,
+    version: 1,
+    title: rule.title,
+    condition: rule.condition,
+    dailyLimit: rule.dailyLimit,
+    points: rule.points,
+    changedByRole: 'guardian',
+    changedAt: ruleVersionAt,
+    changeNote: '初始版本'
+  }))
 
   return {
     points: 124,
@@ -236,6 +317,7 @@ export function buildSeedData(): SeedBundle {
     habits,
     wishes,
     records,
-    rules
+    rules,
+    ruleVersions
   }
 }

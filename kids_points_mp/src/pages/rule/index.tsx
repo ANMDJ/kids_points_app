@@ -19,6 +19,9 @@ export default function Rule() {
   const viewport = useViewport()
   const addSheet = useSheet()
   const actions = usePayloadSheet<PointRule>()
+  // 修 C10：编辑规则复用同一张表单（编辑态）—— 与新增共用一个组件，
+  // 页面不做版本运算（currentVersion 由 store 递增）。
+  const editSheet = usePayloadSheet<PointRule>()
 
   return (
     <>
@@ -34,7 +37,7 @@ export default function Rule() {
           <PageHeader title='积分规则' onBack={goBack} />
           <View className='kp-rule__hint'>
             <Text className='kp-rule__hint-text'>
-              长按规则可加入今天的习惯，也可以删除
+              长按规则可编辑、加入今天的习惯，也可以移到回收站
             </Text>
           </View>
           {store.rules.length === 0 ? (
@@ -78,7 +81,20 @@ export default function Rule() {
         <RuleActionsSheet
           visible={actions.visible}
           rule={actions.data}
+          onEdit={() => {
+            // 先收起操作菜单，再打开编辑态表单（两个弹窗不叠在一起）
+            const target = actions.data
+            actions.hide()
+            if (target) editSheet.show(target)
+          }}
           onClose={actions.hide}
+        />
+      ) : null}
+      {editSheet.open && editSheet.data ? (
+        <AddRuleSheet
+          visible={editSheet.visible}
+          rule={editSheet.data}
+          onClose={editSheet.hide}
         />
       ) : null}
     </>

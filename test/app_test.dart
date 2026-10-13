@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kids_points_app/data/app_store.dart';
 import 'package:kids_points_app/main.dart';
+import 'package:kids_points_app/models/audit.dart';
 import 'package:kids_points_app/models/habit.dart';
 import 'package:kids_points_app/models/point_record.dart';
 import 'package:kids_points_app/models/point_rule.dart';
+import 'package:kids_points_app/models/rule_version.dart';
+import 'package:kids_points_app/models/trash.dart';
 import 'package:kids_points_app/models/wish.dart';
 import 'package:kids_points_app/screens/wishlist_screen.dart';
 import 'package:kids_points_app/theme/app_colors.dart';
@@ -605,6 +608,318 @@ void main() {
       expect(find.textContaining('+2 积分'), findsWidgets);
       // 让 SnackBar 自动关闭，避免留下未完成的定时器
       await tester.pumpAndSettle(const Duration(seconds: 5));
+    });
+  });
+
+  // ── 阶段 C4：软删除 / 回收站（修 C9）＋ 规则可编辑（修 C10）＋ 审计（修 C11）──
+  // 与 Taro `kids_points_mp/.tmp_test/run.js` 的同名用例一一对应：两端行为必须一致。
+  group('软删除与回收站（修 C9）', () {
+    test('三类配置同待遇：列表里消失、回收站找得到、原对象仍在、可恢复', () {
+      final AppStore store = seededStore();
+      final int recordsBefore = store.records.length;
+      final PointRule rule = store.rules[0];
+      final Wish wish = store.wishes[0];
+      final Habit habit = store.habits[0];
+
+      store.removeRule(rule);
+      store.removeWish(wish);
+      store.removeHabit(habit);
+
+      // ① 列表里消失（软删若漏掉 activeOnly 这一层，本条立刻红）
+      expect(store.rules.length, 3);
+      expect(store.wishes.length, 3);
+      expect(store.habits.length, 2);
+      // ⑤ 配置的删除不牵动账本：流水条数一字不变
+      expect(store.records.length, recordsBefore);
+
+      // ② 回收站里找得到（三类汇总成一个列表，条目带类型文案与保留期判定）
+      final List<TrashItem> rows = store.trashItems();
+      expect(rows.length, 3);
+      expect(
+        rows.map((TrashItem row) => row.kind).toSet(),
+        <TrashKind>{TrashKind.pointRule, TrashKind.wish, TrashKind.habit},
+      );
+      expect(rows.every((TrashItem row) => row.expired), isFalse);
+      expect(
+        rows.firstWhere((TrashItem row) => row.id == wish.id).title,
+        wish.title,
+      );
+      expect(trashKindLabelOf(TrashKind.pointRule), '规则');
+
+      // ③ 原对象**仍在**（不是被 filter 掉）：只改状态位，物理数据一律保留
+      expect(rule.status, RecordStatus.deleted);
+      expect(wish.status, RecordStatus.deleted);
+      expect(habit.status, RecordStatus.deleted);
+      expect(wish.deletedAt, isNotNull);
+      // 删除只降低可见性：版本表不跟着删（否则历史流水的 (ruleId, ruleVersion) 指向空）
+      expect(
+        store.ruleVersions
+            .where((RuleVersion item) => item.ruleId == rule.id)
+            .length,
+        1,
+      );
+
+      // 恢复：回到列表、状态复位、回收站清空
+      expect(store.restoreRule(rule), isTrue);
+      expect(store.restoreWish(wish), isTrue);
+      expect(store.restoreHabit(habit), isTrue);
+      expect(store.rules.length, 4);
+      expect(store.wishes.length, 4);
+      expect(store.habits.length, 3);
+      expect(wish.deletedAt, isNull);
+      expect(rule.status, RecordStatus.active);
+      expect(store.trashItems(), isEmpty);
+      expect(store.records.length, recordsBefore);
+    });
+  });
+
+  group('回收站保留期与唯一过滤器（修 C9）', () {
+    test('90 天边界：第 89 天仍可恢复，满 90 天判定过期（真删由 UI 决定）', () {
+      final DateTime now = DateTime.now();
+      const Duration day = Duration(days: 1);
+      DateTime ago(int days) => now.subtract(day * days);
+
+      expect(isTrashExpired(null, now: now), isFalse, reason: '没进回收站谈不上过期');
+      expect(isTrashExpired(ago(89), now: now), isFalse, reason: '第 89 天必须仍可恢复');
+      expect(isTrashExpired(ago(90), now: now), isTrue, reason: '满 90 天即算过期（>=）');
+      expect(isTrashExpired(ago(91), now: now), isTrue);
+      expect(trashRetentionText(now, now: now), '还能恢复 90 天');
+      expect(trashRetentionText(ago(89), now: now), '还能恢复 1 天');
+      expect(trashRetentionText(ago(90), now: now), '已过保留期');
+
+      // 过期只是**判定**：没调用 purgeExpiredTrash 之前一条都不许少（过期不等于必须删）
+      final AppStore store = seededStore();
+      store.removeRule(store.rules[0]);
+      final DateTime later = now.add(day * 91);
+      expect(store.trashItems(now: later).single.expired, isTrue);
+      expect(store.rules.length, 3, reason: '判定过期不等于已经删除');
+
+      expect(store.purgeExpiredTrash(now: later), 1);
+      expect(store.rules.length, 3);
+      expect(store.trashItems(now: later), isEmpty);
+      expect(store.auditLog.first.action, AuditAction.pointRulePurge);
+      expect(
+        store.auditLog.first.after,
+        isNull,
+        reason: '彻底删除后的 after 为空（末态留在 before 里）',
+      );
+      // 回收站只管配置：流水仍然一字不动
+      expect(store.records.length, 4);
+    });
+
+    test('唯一过滤器：activeOnly / trashOnly 是列表口径的单一来源', () {
+      final AppStore store = seededStore();
+      final Wish wish = store.wishes[0];
+      expect(activeOnly(store.wishes).length, store.wishes.length);
+      expect(trashOnly(store.wishes), isEmpty);
+      store.removeWish(wish);
+      // 公开的 wishes 只发 active 的：调用方**不需要**再过滤一遍（写法只有一处）
+      expect(activeOnly(store.wishes).length, 3);
+      expect(trashOnly(store.wishes), isEmpty);
+      // 过滤器本身按状态位判定，回收站与它同口径
+      expect(activeOnly(<Wish>[wish]), isEmpty);
+      expect(trashOnly(<Wish>[wish]).length, 1);
+      expect(store.trashItems().length, trashOnly(<Wish>[wish]).length);
+    });
+  });
+
+  group('规则可编辑（修 C10）', () {
+    test('updateRule：id 不变、版本 +1 且连续、历史流水一字不改、今日额度按新规', () {
+      final AppStore store = seededStore();
+      final PointRule rule = store.rules.firstWhere(
+        (PointRule item) => item.id == 'rule-1',
+      ); // 番茄钟 +1 / 每天最多 2 次
+      final Habit habit = store.habits.firstWhere(
+        (Habit item) => item.ruleId == rule.id,
+      );
+      final int versionsBefore = store.ruleVersions.length;
+      final String idBefore = rule.id;
+
+      // 先造一笔历史：改规则之后它必须**一字不动**
+      expect(store.checkIn(habit), isNull);
+      final int historyCount = store.records.length;
+      final int historyPoints = store.records.first.points;
+      final int? historyVersion = store.records.first.ruleVersion;
+      expect(historyPoints, 1);
+      expect(historyVersion, 1, reason: '流水要钉住当时的规则版本');
+
+      // ① id 不变 ② currentVersion +1 ③ 版本表追加一条（装的是**新值**）
+      expect(
+        store.updateRule(
+          rule,
+          title: '番茄钟写作业',
+          condition: '专注 25 分钟',
+          dailyLimit: 1,
+          points: 3,
+          changeNote: '1 分太少了',
+        ),
+        isNull,
+      );
+      expect(rule.id, idBefore);
+      expect(rule.currentVersion, 2);
+      expect(rule.points, 3);
+      expect(rule.dailyLimit, 1);
+      expect(store.ruleVersions.length, versionsBefore + 1);
+      final RuleVersion latest = store.ruleVersions.last;
+      expect(latest.version, 2);
+      expect(latest.points, 3);
+      expect(latest.changeNote, '1 分太少了');
+      expect(
+        store.ruleVersions
+            .where((RuleVersion item) => item.ruleId == rule.id)
+            .map((RuleVersion item) => item.version)
+            .toList(),
+        <int>[1, 2],
+        reason: '版本号必须连续、每条都真实存在（回放不留空档）',
+      );
+
+      // ④ 历史不可回溯：已发生流水的值与含义都不动
+      expect(store.records.length, historyCount);
+      expect(store.records.first.points, historyPoints);
+      expect(store.records.first.ruleVersion, historyVersion);
+
+      // ⑤ 派生习惯跟着新规走 → 今日额度按新规重算（已打卡 2 次 ≥ 新上限 1 次）
+      expect(habit.points, 3);
+      expect(habit.dailyLimit, 1);
+      expect(store.checkIn(habit), '“番茄钟写作业”今天已经完成 2 次啦，明天继续加油～');
+      expect(
+        store.checkedCountTodayOfRule(rule),
+        2,
+        reason: '额度按 ruleId 口径现算，不另存一份',
+      );
+
+      // ⑥ §3.3 的影响提示**必须**出现（纯函数、可测，不许写在 Widget 里）
+      expect(
+        ruleChangeNotice(
+          childName: store.profile.name,
+          checkedCountToday: 2,
+          newDailyLimit: 1,
+        ),
+        '改动后，萌新铲屎官的小可爱今天已完成 2 次，按新规则「每天 1 次」，今天不能再打卡了。',
+      );
+      expect(
+        ruleChangeNotice(childName: '小满', checkedCountToday: 0, newDailyLimit: 1),
+        isNull,
+        reason: '没到上限就不该打扰家长',
+      );
+
+      // 审计：一次改动 = 一条 point_rule.update，before / after 是改前改后的真快照
+      expect(store.auditLog.first.action, AuditAction.pointRuleUpdate);
+      expect(store.auditLog.first.before!['points'], 1);
+      expect(store.auditLog.first.after!['points'], 3);
+    });
+  });
+
+  group('规则编辑的守卫与审计（修 C10 / C11）', () {
+    test('无改动 / 越界 / 已进回收站：都不许产生新版本，也不许写审计', () {
+      final AppStore store = seededStore();
+      final PointRule rule = store.rules.firstWhere(
+        (PointRule item) => item.id == 'rule-1',
+      );
+      final int versionsBefore = store.ruleVersions.length;
+
+      // 无改动：原样返回提示，规则不动
+      expect(
+        store.updateRule(
+          rule,
+          title: rule.title,
+          condition: rule.condition,
+          dailyLimit: rule.dailyLimit,
+          points: rule.points,
+        ),
+        '没有改动，规则保持原样',
+      );
+
+      // 越界：拒绝，且**不**夹到边界（静默改写会让家长以为约定已生效）
+      expect(
+        store.updateRule(
+          rule,
+          title: rule.title,
+          condition: rule.condition,
+          dailyLimit: 9,
+          points: 3,
+        ),
+        contains('之间的整数'),
+      );
+
+      // 已进回收站：必须先恢复再改，不许隔着回收站改
+      store.removeRule(rule);
+      final int auditBefore = store.auditLog.length;
+      expect(
+        store.updateRule(
+          rule,
+          title: rule.title,
+          condition: rule.condition,
+          dailyLimit: 1,
+          points: 3,
+        ),
+        contains('在回收站里'),
+      );
+
+      expect(store.ruleVersions.length, versionsBefore, reason: '三种拒绝都不产生新版本');
+      expect(store.auditLog.length, auditBefore, reason: '三种拒绝都不写审计（多出来的只有已计入的那条）');
+    });
+
+    test('审计：每次变更同一笔留痕、只增不删、before / after 是真快照', () {
+      final AppStore store = seededStore();
+      expect(store.auditLog, isEmpty, reason: '审计只记这台设备上发生过的变更，预置数据不算');
+
+      final Wish wish = store.wishes[0];
+      final String title = wish.title;
+      store.removeWish(wish, actor: const ActorContext(role: MemberRole.child));
+
+      // ① 变更与留痕在**同一笔操作**里（不是事后补记）
+      expect(store.auditLog.length, 1);
+      final AuditEntry entry = store.auditLog.first;
+      expect(entry.action, AuditAction.wishDelete);
+      expect(entry.targetType, AuditTargetType.wish);
+      expect(entry.targetId, wish.id);
+      expect(entry.actorRole, MemberRole.child, reason: '谁操作的就记谁 —— 与流水 A4 同一口径');
+      expect(entry.before!['status'], 'active');
+      expect(entry.after!['status'], 'deleted');
+
+      // ② 真快照：写完审计再改原对象，审计内容**不得跟着变**
+      //    （只断言 auditLog.length == 1 的用例会全绿放行 —— 08 §6）
+      final DateTime? deletedAt = wish.deletedAt;
+      wish.status = RecordStatus.active;
+      wish.deletedAt = null;
+      expect(entry.before!['title'], title);
+      expect(entry.after!['title'], title);
+      expect(entry.after!['status'], 'deleted');
+      expect(entry.after!['deletedAt'], deletedAt, reason: '快照必须停在当时那一刻');
+      wish.status = RecordStatus.deleted;
+      wish.deletedAt = deletedAt;
+
+      // ③ 只增不删：恢复再删一次，审计**累加**（每次变更都有痕，谁也没抹掉）
+      expect(store.restoreWish(wish), isTrue);
+      store.removeWish(wish);
+      expect(
+        store.auditLog.take(3).map((AuditEntry row) => row.action).toList(),
+        <AuditAction>[
+          AuditAction.wishDelete,
+          AuditAction.wishRestore,
+          AuditAction.wishDelete,
+        ],
+      );
+      expect(store.auditLog.length, 3);
+
+      // 新建类：before 为空、after 是末态；打卡 / 记一笔记的是流水本身；改名记成员类
+      store.addWish(title: '新心愿', cost: 10, emoji: '🎁');
+      expect(store.auditLog.first.action, AuditAction.wishCreate);
+      expect(store.auditLog.first.before, isNull);
+      expect(store.auditLog.first.after!['title'], '新心愿');
+      expect(store.checkIn(store.habits.first), isNull);
+      expect(store.auditLog.first.action, AuditAction.pointRecordCheckIn);
+      expect(store.auditLog.first.targetType, AuditTargetType.pointRecord);
+      expect(store.addQuickNote(delta: 2, reason: '额外奖励'), isNull);
+      expect(store.auditLog.first.action, AuditAction.pointRecordQuickNote);
+      store.renameChild('小明');
+      expect(store.auditLog.first.action, AuditAction.memberRename);
+      expect(store.auditLog.first.before!['name'], isNot(store.auditLog.first.after!['name']));
+      // 成员增删 / 角色切换 / 家长同意在本轮**未实现**（前端没有入口）—— 不假装覆盖
+      expect(store.auditLog.first.targetType, AuditTargetType.member);
+
+      expect(store.auditLog.length, 7, reason: '审计只增：7 次变更 = 7 条');
     });
   });
 }

@@ -1,5 +1,30 @@
 # 阶段 C4 交接单 · C9（软删除/回收站）＋ C10（规则可编辑）＋ C11（`AuditLog` 变更可追溯）
 
+> ## ✅ 已收口（2026-10-13）
+>
+> 本单的提案**已全部落地**（双端同步）。收口实测（完整记录见 `03` 文末「验收门」）：
+>
+> | 闸门 | 结果 |
+> |---|---|
+> | `node tools/defect-status.mjs` | ✅ `ALL PASS`（**18/18**，C9 / C10 / C11 三块已 `unfixed → fixed`） |
+> | Taro `npx tsc --noEmit -p tsconfig.json` / `npm run build:weapp` | ✅ `EXIT=0` / `EXIT=0` |
+> | 现编产物 ＋ `node .tmp_test/run.js` | ✅ **25/25 `ALL PASS`**（新增 C9 ×3 ＋ C10 ＋ C11 五条） |
+> | `flutter analyze` / `flutter test` | ✅ `No issues found!` / **38/38**（`app_test.dart` 37 ＋ `widget_test.dart` 1；本轮新增 6 条） |
+> | `cd backend && npm run ci` | ✅ `CI_EXIT=0`（8 步全绿，含 `defects:check` 18/18） |
+>
+> **§6 的 7 例证伪做了 6 例**（① 物理删回退 ／ ② 少一处过滤 ／ ③ 偷换 id ／ ⑤ 审计挪出同一笔 → 本轮以「审计改成 `push`」等价覆盖 ／ ⑥⑦ 台账改口）——
+> 全部**点名对应条目**变红，还原后回绿（sha256 逐字节比对）。未做的是 ④「顺手改历史流水的 `points`」：
+> 该断言由 `C10` 测试而非守门人承载，本轮**没有**注入实测，别把它当成已验证。
+>
+> 三处**与提案不同**的地方（提案是建议，实现才是事实，按 §4 的"行号会漂移"精神据实记录）：
+> ① 三块验证器的**具体断言正则**按真实代码定形（§4.3 的正则只是草案）；
+> ② `A2` 原断言 `final int dailyLimit;` **被 C10 的新语义作废** —— 改规则要**原地同步**派生习惯，
+>    于是 `Habit.title/points/condition/dailyLimit` 不再是 `final`，断言改为「结构字段存在且可写」；
+> ③ §8 第 4 条（成员/同意留**显式占位**）落实为：`AuditAction` **只列前端真能触达的 5 类动作**，
+>    不写没人能触发的取值，并在 `03` §C11 现状里**写明未实现** —— 不假装覆盖。
+>
+> 下面保留**动手前**的原文（含"C4 还没动过一行代码"那句），以便对照"当时的前提"与"实际的做法"。
+
 > **写于** 2026-10-12（本机）；**给**：接手 C4 的下一个会话。
 > **一句话状态**：**C3 已收口**（提交 `90e9ce7`）：守门人 `ALL PASS`（18 条）、`backend npm run ci` 8 步全绿、
 > `run.js` 20/20、`flutter test` 32/32。**C4 还没动过一行代码** —— 台账 `03:36/37/38` 三行仍是 `❌ 未修`，
@@ -249,6 +274,7 @@ git commit -m "feat(c4)+docs: 软删除/回收站(C9) + 规则可编辑(C10) + A
 **已核实（本轮实测，可复核）**
 
 - 守门人 `node tools/defect-status.mjs` → `ALL PASS`（18 条）、`EXIT=0`；其中 `C9/C10/C11` 显示「台账=❌ 未修」。
+  （**C4 收口后这三行已变为「台账=✅ 已修」** —— 上句是**本单写作当时**的事实，保留以对照前提。）
 - `git log -1` = `90e9ce7`；`git status --short` 只有 `kids_points_mp/package.json`、`package-lock.json`。
 - 后端 schema 字段/索引/`REVOKE`/模块占位状态：逐文件读取确认（§2.1 每行都有 `文件:行号`）。
 - 双端物理删除点与调用方、结构字段定义位置、`AuditLog`/`PointRuleVersion` 模型形状：grep ＋ 读文件确认（§2.2）。

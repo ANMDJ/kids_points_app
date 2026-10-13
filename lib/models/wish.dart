@@ -1,3 +1,5 @@
+import 'trash.dart' show RecordStatus, SoftDeletable, defaultStatus;
+
 /// 心愿插画的配色方案 —— **稳定枚举**，与后端 `enum WishCoverStyle` 一一对应
 /// （`backend/prisma/schema.prisma`）。
 ///
@@ -37,7 +39,10 @@ WishCoverStyle pickCoverStyle(List<WishCoverStyle> taken, String id) {
 }
 
 /// 心愿单里可以兑换的奖励。
-class Wish {
+/// **修 C9 追加**：软删除位 `status` / `deletedAt`。删除心愿不再从数据里消失 ——
+/// 历史扣分流水的 `wishId` 因此永远指得到人（“那 40 分兑换了什么”永远答得出），
+/// 且误删可在 90 天内恢复。
+class Wish implements SoftDeletable {
   Wish({
     required this.id,
     required this.title,
@@ -45,9 +50,14 @@ class Wish {
     required this.emoji,
     required this.coverStyle,
     this.redeemed = false,
+    this.status = defaultStatus,
+    this.deletedAt,
   });
 
+  @override
   final String id;
+
+  @override
   final String title;
 
   /// 兑换所需积分
@@ -61,4 +71,25 @@ class Wish {
 
   /// 是否已兑换
   bool redeemed;
+
+  /// `active` 才出现在心愿单里；`deleted` 进回收站 —— 修 C9
+  @override
+  RecordStatus status;
+
+  /// 进入回收站的时间（`active` 时为 null）—— 修 C9
+  @override
+  DateTime? deletedAt;
+
+  /// 审计快照的**结构字段**（由 `auditSnapshotOf` 深拷贝）—— 修 C11
+  @override
+  Map<String, Object?> snapshot() => <String, Object?>{
+        'id': id,
+        'title': title,
+        'cost': cost,
+        'emoji': emoji,
+        'coverStyle': coverStyle.name,
+        'redeemed': redeemed,
+        'status': status.name,
+        'deletedAt': deletedAt,
+      };
 }
