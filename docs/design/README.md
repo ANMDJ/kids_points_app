@@ -150,9 +150,19 @@
 6. 已决策：**P1** 不压缩工期；**P2** L6 不到位（模板定稿 **18 条**）；
    **P3** `02` §5 不可变性与规则版本确认定稿。
 7. **W1 开工前要先补的两件事**（`06` §10.6）：
-   ① **引入测试框架** —— 现在只有手写断言的 `npm run db:verify`，"回归"不能只靠人肉重跑脚本；
+   ① ~~**引入测试框架**~~ → ✅ **已完成（2026-10-14，阶段 B1）** —— 现在只有手写断言的 `npm run db:verify`，"回归"不能只靠人肉重跑脚本，故补上**常设测试套件**：
+   `node:test`（Node 内置 runner）＋ 既有 `tsx` 作加载器，**零新增依赖**（选型是实测的：Node 26 原生类型剥离
+   连模块都解析不了，jest/vitest 需新增依赖且 TS 6.0.3 有兼容风险）；新增 `npm run test` /
+   `typecheck:tests` / `test:canfail` 三步进 CI（**11 → 14 步**），首批用例覆盖矩阵性质与
+   `restrictions` 守卫行为。**两个 fail-closed 守卫**：① 「**0 用例不算通过**」——
+   实测空目录时 runner 是 `ℹ tests 0` 且**退出码 0**，故入口自己遍历文件并强制用例数 ≥ 文件数；
+   ② `test:canfail` 用必红夹具证明「测试真的会红」且**点名失败用例**。详见「CI 步骤」节的「测试框架」小节。
+   > **实测基线（2026-10-14 收口时跑的，非推断）**：`npm run ci` → **`CI_EXIT=0`（14 步）**；
+   > `npm run test` → 2 个用例文件 / **16 个用例全部通过**（`TEST_EXIT=0`）；`npm run test:canfail` →
+   > **4/4 ALL PASS**（`CANFAIL_EXIT=0`）。其中 canfail 的附注行**当场复现**了第 ① 条守卫的依据：
+   > runner 自己对空目录是「退出码=0，用例数=0」—— 即那条守卫拦的是**真实存在**的假绿，不是假想需求。
    ② **`kids_points_app` 口令改为部署注入** —— 现在 `900_ledger_revoke.sql` 里是硬编码占位
-   （`change-me-before-production`），生产必须换掉。
+   （`change-me-before-production`），生产必须换掉。**仍是待办（阶段 B2）**。
 8. ~~**C1 · E18 ＋ D13 收口**~~ → ✅ **已完成（2026-10-12，提交 `24c5c73` → `4699518`）**：
    首启改为**空态**、生产闸门拆成**可测判据**（`demoResetAllowed()` ＋ 派生常量）、种子降级为**显式夹具**、
    D13 第 10 条断言改写；`run.js` **16/16**、`flutter test` **24/24**、`flutter analyze` **0 issue**、
@@ -272,13 +282,19 @@
 ### CI 步骤
 
 **后端 —— 已落地为一条命令**（`backend/`）：
-
 ```
 npm run ci
-= prisma:validate → typecheck → typecheck:tools → honesty:probe → defects:check → templates:check → icons:check → build → contracts:emit
+= prisma:validate → typecheck → typecheck:tests → typecheck:tools → honesty:probe
+  → defects:check → templates:check → icons:check → relation:check → restrictions:check
+  → test → test:canfail → build → contracts:emit          （共 14 步）
 ```
+> **勘误（2026-10-14 补齐）**：上面这一行原写于 W0（9 步），此后 D-a 加 `relation:check`、D-b 加 `restrictions:check`、
+> 阶段 B1 加 `typecheck:tests` / `test` / `test:canfail` —— 只有待办条目被更新，**这行代码块没跟上**。
+> 现已按 `backend/package.json` 的 `ci` 脚本**逐字重抄**。凡是"链式命令写在文档里"的地方，都会这样漂移 ——
+> 所以真实基线**以 `npm run ci` 的输出为准**，不以本行为准。
 
-其中 `honesty:probe` 包含两项**结构性守卫**：
+其中 `honesty:probe` 自带 4 项检查（A/B 是**注入式诚实性对照**，C/D 是结构性守卫）：
+
 - **D12 回归守卫**：扫描测试运行器的花括号嵌套深度，确认汇总与 `process.exitCode`
   **不在任何回调内部**（该探针已用夹具 `__fixtures__/d12-misnested-runner.js`
   证明**能失败** —— 否则它自己就会变成下一处假绿）
@@ -298,6 +314,38 @@ npm run ci
 把首启改回注入 seed、把守卫常量改回字面恒真）—— 7/7 全部变红，还原后重回全绿（`tools/_scratch/c1-tamper.mjs`，可复跑）。
 > 反例本身也要证伪：第一版「伪造新增行」反例隔了空行，被解析器按"表格已结束"正确忽略 —— **绿的是我的反例，不是守卫**；
 > 改成紧贴末行后才复现。写反例时踩的坑，恰好说明"绿"必须能被解释。
+
+**测试框架（阶段 B1 新增，2026-10-14）—— 用 Node 内置 runner，**零新增依赖**：
+
+```
+npm run test             # = node scripts/run-tests.mjs（自己遍历 test/**/*.test.ts）
+npm run typecheck:tests  # = tsc --noEmit -p tsconfig.test.json（tsx **不做类型检查**，必须单独 typecheck）
+npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真的会红」）
+```
+
+选型依据是**实测**（Node v26.10.0，2026-10-14），不是偏好：
+
+| 方案 | 实测结果 |
+|---|---|
+| 原生 `node --test`（Node 26 类型剥离） | ❌ 连模块都解析不了（`ERR_MODULE_NOT_FOUND`：本仓库是 CJS ＋ 无扩展名导入） |
+| jest / vitest | 需新增依赖；且 TS **6.0.3** 很新，`ts-jest` 一类存在版本兼容风险 |
+| **`node:test` ＋ 既有 `tsx`** | ✅ 零新增依赖；**带装饰器**的契约（`class-validator`）能加载、且元数据真的生效（坏值被拒并点名） |
+
+**两个 fail-closed 守卫**（都是因为实测发现「绿得不诚实」才加的）：
+
+1. **0 用例不算通过**：实测 `node --import tsx --test <空目录>`（以及只含 `*.spec.ts` 的目录）
+   输出 `ℹ tests 0` 而**退出码 0** —— 「一个用例都没跑」看起来是绿的。故 `run-tests.mjs` **自己遍历文件**
+   （不依赖 Node 的发现规则，这也正是测试文件必须命名 `*.test.ts` 的原因），并强制
+   `用例数 ≥ 1` **且** `用例数 ≥ 文件数`（有文件一个用例都没贡献 ⇒ 红）；解析不出汇总行也判红。
+2. **证明「测试会红」**：`test:canfail` 用夹具 `scripts/__fixtures__/always-red-runner.fixture.ts`
+   要求 runner 退出码非 0 **且点名夹具里的两条失败用例**（防「红在别的理由上」—— D-a 阶段踩过）；
+   再把入口指向空目录 `scripts/__fixtures__/empty-test-dir/`，要求它**退出码非 0**。
+   `--test-concurrency=1` 是**刻意**的：共享状态（数据库 / 构建产物）不许并发 —— W2 的库不变量用例必须串行。
+
+> **实测基线（2026-10-14，B1 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
+> `contracts:emit` 输出「已生成 contracts/permission-matrix.json（25 个动作）」且生成物 **`git status` 无 diff** ⇒ 幂等）；
+> `npm run test` → **2 个用例文件 / 16 个用例全部通过**；`npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
+> 其附注行**当场复现**了第 ① 条守卫的依据：runner 自己对空目录是「退出码=0，用例数=0」。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：
 

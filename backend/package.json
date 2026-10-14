@@ -9,7 +9,10 @@
     "start:dev": "nest start --watch",
     "postinstall": "prisma generate",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "typecheck:tools": "tsc --noEmit -p tsconfig.tools.json",
+    "test": "node scripts/run-tests.mjs",
+    "test:canfail": "node scripts/test-can-fail.mjs",
     "prisma:validate": "prisma validate",
     "prisma:format": "prisma format",
     "prisma:generate": "prisma generate",
@@ -24,7 +27,7 @@
     "restrictions:check": "tsx scripts/check-restrictions.ts",
     "honesty:probe": "node scripts/honesty-probe.mjs",
     "defects:check": "node ../tools/defect-status.mjs",
-    "ci": "npm run prisma:validate && npm run typecheck && npm run typecheck:tools && npm run honesty:probe && npm run defects:check && npm run templates:check && npm run icons:check && npm run relation:check && npm run restrictions:check && npm run build && npm run contracts:emit",
+    "ci": "npm run prisma:validate && npm run typecheck && npm run typecheck:tests && npm run typecheck:tools && npm run honesty:probe && npm run defects:check && npm run templates:check && npm run icons:check && npm run relation:check && npm run restrictions:check && npm run test && npm run test:canfail && npm run build && npm run contracts:emit",
     "ci:db": "npm run db:verify"
   },
   "dependencies": {
