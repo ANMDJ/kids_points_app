@@ -1,0 +1,15 @@
+{
+  // 用途：src + test 一起**真编译**成 CJS，供 npm test 在编译产物上跑
+  // —— 见 scripts/run-tests.mjs 文件头「为什么不能继续用 tsx」。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": ".tmp_test_build",
+    "types": ["node"],
+    "incremental": false,
+    "sourceMap": false,
+    "declaration": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
