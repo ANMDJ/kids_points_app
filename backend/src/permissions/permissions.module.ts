@@ -6,7 +6,10 @@ import { PermissionsGuard } from './permissions.guard'
  * 屏障二 + 屏障三 + action-dispatcher（docs/design/02 §2 / §3 / §6）
  *
  * ├ 屏障二：消费 `src/contracts/permission-matrix.ts` 的矩阵（**唯一事实源**）。
- * │   ALLOW → 放行；REQUIRE_APPROVAL → 202 + 建 ApprovalRequest；DENY → 403。
+ * │   ALLOW → 放行；DENY → **403 `FORBIDDEN`**；REQUIRE_APPROVAL → **403 `APPROVAL_REQUIRED`**。
+ * │   ⚠ 与 `02` §3 的那句「REQUIRE_APPROVAL → 202 + 建 ApprovalRequest」**有意不同**：
+ * │     建单需要业务参数（金额 / 心愿 id …），Guard 在**判定阶段**拿不到 ⇒ 这里只能
+ * │     **拒绝并点名**，绝不静默放行。「202 + 建单」是 dispatcher 的活，**尚未落地**（W1-B 起）。
  * │   ✅ **已落地（2026-10-14，W1-A）**：`PermissionsGuard` + `@RequireAction(...)` ——
  * │   矩阵**第一次被 HTTP 路径消费**（此前 `resolveVerdict` 只在单测里被调用）。
  * │   四处 fail-closed 见 guard 文件头；实测见 `test/permissions-guard.test.ts`。

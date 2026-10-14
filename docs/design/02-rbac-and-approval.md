@@ -126,6 +126,12 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
    │    REQUIRE_APPROVAL → 202 + 创建 ApprovalRequest（见 §4）
    │    ALLOW            → 进入屏障三
    │    作用：回答"这个角色能不能做这件事"
+    │
+    │    ✅ **W1-A 落地注（2026-10-14）**：上面是**目标口径**。已落地的是**判定段** ——
+    │    `PermissionsGuard`：DENY → 403 FORBIDDEN；REQUIRE_APPROVAL → **403 APPROVAL_REQUIRED**；
+    │    端点漏标 → 403 NO_ACTION_DECLARED；viewer / 未知动作 → DENY。
+    │    **「202 + 建 ApprovalRequest」尚未落地**（建单需要业务参数，是 dispatcher 的活，见 §6）。
+    │    差别**是刻意的**：判定阶段只能"拒绝并点名"，绝不静默放行。
    │
    └─ 屏障三：成员级收紧（Member-level Tightening）
         家长可对**单个孩子**追加限制，只能更严、不能更松：
