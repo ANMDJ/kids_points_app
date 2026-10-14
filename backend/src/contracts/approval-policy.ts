@@ -38,8 +38,12 @@
  * `adjust_points` / `add_wish`（矩阵 `ALLOW`），自批只是把"自己提的兑换"从
  * "等别人"变成"自己确认"；孩子照旧受 `02` §9.16 / §9.17 的每日配额与 ±50 上限约束。
  *
- * ⚠️ 与 `member-restrictions.ts` 同款的诚实标注：**HTTP 路径尚未开工**，
- *    本文件此刻**还没有被任何请求调用** —— 别把它的存在读成"审批已验收"。
+ * ── 落地状态（2026-10-14 阶段 B4 更新，**上一版标注已被证伪**）────────────
+ * ✅ **HTTP 路径已建成并真实消费本文件**：`approvals.controller.ts` → `approvals.service.ts`
+ *    （`POST /approvals`、`POST /approvals/:id/decide`），用例 `test/approvals-http.test.ts`
+ *    （26 条**真 HTTP**用例，含一条「改矩阵 ⇒ HTTP 行为必须跟着变」——判定若被抄一份就会红）。
+ * ⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
+ *    （W1/W2），不是静默成功。**别把「判定已上线」读成「审批已验收」。**
  */
 
 import { resolveVerdict, type ActionType, type Role } from './permission-matrix'

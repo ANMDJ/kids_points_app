@@ -1,5 +1,13 @@
 import { Module } from '@nestjs/common'
 
+import { TemporaryRoleHeaderGuard } from '../device-session/temporary-role.guard'
+import { ApprovalsController } from './approvals.controller'
+import {
+  APPROVALS_REPOSITORY,
+  NotImplementedApprovalsRepository
+} from './approvals.repository'
+import { ApprovalsService } from './approvals.service'
+
 /**
  * 审批（docs/design/02 §4）
  *
@@ -23,7 +31,24 @@ import { Module } from '@nestjs/common'
  *   绝不因为"只有一位家长"就自动批准。判据见 `src/contracts/approval-policy.ts`（02 §4.5），
  *   本模块**必须消费它**，不得在 controller / service 里另写一份。
  *
- * ⚠ W0 状态：**签名占位**。验收用例见 02 §9.3 / §9.7 / §9.8 / §9.10 / §9.25–§9.27。
+ * 状态（2026-10-14 阶段 B4）：
+ *   · **HTTP 路径已建**（`POST /approvals`、`POST /approvals/:id/decide`），判定**真实消费**
+ *     `approval-policy.ts`；用例见 `test/approvals-http.test.ts`（真 HTTP，非直接调 service）。
+ *   · 持久化端口 `ApprovalsPort` 的**默认实现是显式 501** —— 落库 / 账本 / 审计属 W1–W3。
+ *     即：**判定已上线，写入未落地**，且未落地这件事有可执行断言钉着。
+ *   · 身份是**临时口径**（`x-kp-role` 头，生产 503），W1 换成 DeviceSession。
+ *
+ * 验收用例见 02 §9.3 / §9.7 / §9.8 / §9.10 / §9.25–§9.27。
  */
-@Module({})
+@Module({
+  controllers: [ApprovalsController],
+  providers: [
+    ApprovalsService,
+    TemporaryRoleHeaderGuard,
+    // ★ 默认实现 = 一律 501（见 approvals.repository.ts 的说明）。
+    //   W1/W2 落 Prisma 实现时**只换这一行**，service / controller / 用例都不动。
+    { provide: APPROVALS_REPOSITORY, useClass: NotImplementedApprovalsRepository }
+  ]
+})
 export class ApprovalsModule {}
+

@@ -739,7 +739,7 @@ User（自然人）
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
 | 跨语言契约 | ✅ `contracts/permission-matrix.json`（25 动作，由 TS 生成） | `contracts:emit` |
-| **自批策略（"谁可以批准"的定义）** | ✅ **契约定形**：`backend/src/contracts/approval-policy.ts` ＋ `test/approval-policy.test.ts`（10 用例）；**HTTP 路径未开工** | `npm run test` → 3 个用例文件 / **26 用例全通过**；两条反向对照均变红并点名 |
+| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径**：`approval-policy.ts` ＋ `test/approval-policy.test.ts`（10 用例）＋ `test/approvals-http.test.ts`（26 条真 HTTP）；**落库/账本/审计仍未落地（默认 501）** | `npm run test` → 4 个用例文件 / **52 用例全通过**；四条证伪均变红并点名 |
 | 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
 | 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **14 步全绿，`CI_EXIT=0`** |
 | 首启空态 + 演示数据守卫 | ✅（E18 收口） | release/profile 构建入口被树摇 |
@@ -749,7 +749,7 @@ User（自然人）
 | 项 | 状态 | 影响 |
 |---|---|---|
 | **后端业务实现** | ❌ **仅空模块签名** —— 无 service / controller / repository / DTO | W1–W3、W6 的主体工作量 |
-| **审批写入路径（含自批）** | ❌ 判定已定形（`approval-policy.ts`），但**没有任何 HTTP 路径调用它** | W1；别把契约绿灯读成"审批已验收"（同 D3b 的诚实标注） |
+| **审批写入路径的落库部分** | ⚠️ 判定与 HTTP 路径**已上线**（`POST /approvals`、`POST /approvals/:id/decide`）；**落库 / 账本流水 / 审计写入未落地** —— `ApprovalsPort` 默认实现**显式 501**（不静默成功） | W1/W2；别把判定绿灯读成"审批已验收" |
 | **双端接 API** | ❌ 未开始；`AppStore` 仍为**内存态**（重启回到空态） | W4 |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
 | **通知 / 推送** | ❌ 无依赖、无凭据（L3） | W6 |
@@ -762,7 +762,7 @@ User（自然人）
 按 §11 顺序推进 **W1（身份与权限）→ W2（账本内核）**，
 并在**第 1 天并行启动 L2 / L4**；W5 的引导与模板需 L5 法务文本到位。
 
-W1 落地审批写入路径时**必须消费** `backend/src/contracts/approval-policy.ts`（P4），
+W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费** `backend/src/contracts/approval-policy.ts`（P4），
 不得在 controller / service 里另写一份"谁可以批准"。
 
 ---

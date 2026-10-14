@@ -267,7 +267,36 @@
    > `npm run ci` → **`CI_EXIT=0`（14 步）**。
    **遗留（W1 必做）**：审批写入路径（含自批）落地时**必须消费** `approval-policy.ts`，
    不得在 controller / service 里另写一份判定；`02` §4.5 的六条硬约束要逐条落成 HTTP 用例。
-   **下一步**：与 **W1**（25 动作矩阵的单点 Guard 消费）合并推进 —— 本裁定正是 W1 的第一块砖。
+   **✅ 已推进（阶段 B4，2026-10-14）**：HTTP 路径建成并**真实消费** `approval-policy.ts` —— 见下面第 15 条。
+
+15. ~~**「谁可以批准」的 HTTP 路径**~~ → ✅ **已完成（2026-10-14，阶段 B4）**：审批从「契约」走到「线上路径」——
+   `POST /approvals`（**202** pending ／ **201** 自批 ／ **400** 没资格却要自批）与
+   `POST /approvals/:id/decide`（200 ／ 403 无批准资格 ／ 409 已决 ／ 404 没有这条），
+   判定**完全消费** `backend/src/contracts/approval-policy.ts`（`approvals.service.ts` 内**零角色判断**），
+   用例 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**，26 条）。
+   全局管道经 `backend/src/app.setup.ts` 的 `applyGlobalPipes()` 装配（`main.ts` 与测试**同一函数**）。
+   > **实测基线（收口时跑的，非推断）**：`npm run test` → **4 个用例文件 / 52 个用例全通过**；
+   > **四条证伪**（改完即还原，`sha256` 复原：`b9ca4232…` / `7d3eea13…` / `e266d449…` / `d02c9be9…`）：
+   > ① 关掉 `ValidationPipe` 的白名单 → 「未知键 → 400」**变红并点名**；② 在 service 里硬编码
+   > 「child 一律不能自批」→ 「唯一事实源：改矩阵行为必须跟着变」**变红并点名**；
+   > ③ 让默认仓储「假装成功」→ 「501 fail-closed」**变红并点名**；④ 让 `tsc` 少产出一个测试文件 → 新守卫**变红并点名**。
+   > `npm run ci` → **`CI_EXIT=0`（14 步）**。
+   > **真实应用探针（同日，`node dist/main.js` —— 真实 AppModule ＋ 真实 Prisma ＋ 真实全局管道，非测试替身）**：
+   > 合法请求（guardian / redeem 未勾选）→ **501 `APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`**；孩子要自批 → **400 `SELF_APPROVAL_NOT_ALLOWED`**；
+   > 带多余键 `foo` → **400**；缺身份头 → **401 `UNAUTHENTICATED`**；启动日志含
+   > `Mapped {/approvals/:id/decide, POST}` 与 `数据库已连接`。脚本 `tools/_scratch/b4-live-probe.sh`（可复跑）。
+   **两条硬事实（本轮实测得到，都会咬人）**：① **测试入口从 `tsx` 换成「先 `tsc` 真编译再跑」**——
+   esbuild/tsx 对**不在 tsconfig `include` 内**的文件连装饰器都不转译
+   （`Parameter decorators only work when experimental decorators are enabled`）；挪进 `include` 后**更糟**：
+   `ValidationPipe` 因缺 `emitDecoratorMetadata` 而**静默整体失效**（实测 `{action:'redeem', foo:1}` 返回 **201**）。
+   现在 `tsc -p tsconfig.test.build.json` → `.tmp_test_build/` → 再跑（metadata 与生产同一套）；
+   ② 新增守卫：**源码测试文件数 == 编译产物文件数**（少一个即红并点名），
+   防「文件静默没编译出来 ⇒ 静默没跑」（与 D12 同类）；`--test-concurrency=1` 同时定死「共享状态不许并发」。
+   **两条诚实记录**：① **落库 / 账本流水 / 审计写入仍未落地** —— `ApprovalsPort` 的默认实现是
+   **显式 501**（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），组 A 的 4 条用例专门钉住「不许假装成功」；
+   ② 身份是**临时口径**（`x-kp-role` / `x-kp-user-id` 头；缺即 401、取值白名单、`NODE_ENV=production` → 503），
+   W1 的 `DeviceSession` 到位后必须删掉 `src/device-session/temporary-role.guard.ts`。
+   **下一步**：W1（`DeviceSession` ＋ 矩阵单点 Guard）→ W2（账本内核 ＋ `ApprovalsPort` 的 Prisma 实现）。
 
 ### 文档缺陷修正记录
 
@@ -314,6 +343,16 @@
 > `migrate dev` 不跑 seed 不报错；`npm start` 起不来却被归因为"环境没装库" ——
 > **沉默的失败比失败的报错危险得多。**
 
+**本轮 B4（2026-10-14，实测暴露 1 处 —— 这一处是**文档自己写反了**）**
+
+| # | 缺陷 | 若不修正的后果 |
+|---|---|---|
+| 18 | 本文「测试框架」节（B1 写下）断言 **「`tsx`：带装饰器的契约能加载、且元数据真的生效」** | 成立的部分**只有**「离线自检能跑」（`validateRestrictions()` 直接调 `plainToInstance` ＋ `validate`，约束由装饰器自身注册，**不需要** `emitDecoratorMetadata`）。一旦外推到 **Nest 的 HTTP 路径**，`ValidationPipe` 会**静默整体失效**（实测多余键返回 **201**），而测试照样全绿。已改为「先 `tsc` 真编译再跑产物」 |
+
+> 它与 3–17 的性质不同：**不是「没验证」，而是「验证了一半就外推」**。
+> 两个都叫「装饰器元数据」，但一个是 class-validator 自己的约束注册，另一个是 TypeScript 的
+> `design:paramtypes` —— **同名不同物**，恰好是最难自查的一类。
+
 ### CI 步骤
 
 **后端 —— 已落地为一条命令**（`backend/`）：
@@ -353,8 +392,8 @@ npm run ci
 **测试框架（阶段 B1 新增，2026-10-14）—— 用 Node 内置 runner，**零新增依赖**：
 
 ```
-npm run test             # = node scripts/run-tests.mjs（自己遍历 test/**/*.test.ts）
-npm run typecheck:tests  # = tsc --noEmit -p tsconfig.test.json（tsx **不做类型检查**，必须单独 typecheck）
+npm run test             # = node scripts/run-tests.mjs（遍历 test/**/*.test.ts → tsc 真编译 → 跑**产物**）
+npm run typecheck:tests  # = tsc --noEmit -p tsconfig.test.json（转译器**不做类型检查**，必须单独 typecheck）
 npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真的会红」）
 ```
 
@@ -364,7 +403,23 @@ npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真
 |---|---|
 | 原生 `node --test`（Node 26 类型剥离） | ❌ 连模块都解析不了（`ERR_MODULE_NOT_FOUND`：本仓库是 CJS ＋ 无扩展名导入） |
 | jest / vitest | 需新增依赖；且 TS **6.0.3** 很新，`ts-jest` 一类存在版本兼容风险 |
-| **`node:test` ＋ 既有 `tsx`** | ✅ 零新增依赖；**带装饰器**的契约（`class-validator`）能加载、且元数据真的生效（坏值被拒并点名） |
+| **`node:test` ＋ 既有 `tsx`** | ⚠️ **只对「不碰 Nest 容器」的代码成立** —— 本行原写「元数据真的生效」，**已被 B4 实测证伪**（见下） |
+| **`node:test` ＋ 先 `tsc` 真编译、再跑产物**（**B4 起采用**） | ✅ 装饰器与 `emitDecoratorMetadata` 与生产**同一套**；仍是零新增依赖（用仓库自带 `typescript`） |
+
+**★ B4 更新（2026-10-14）：为什么入口必须「先真编译」** —— 三件事都是实测（Node v26.10.0）：
+
+1. **tsx 对不在 `tsconfig.include` 内的文件，连装饰器都不转译**：同一份带 `@Controller()` / `@Body()`
+   的文件放 `backend/` 根 → `Parameter decorators only work when experimental decorators are enabled`；
+   放进 `src/`（include 内）→ 能跑。**同一文件、两种命运。**
+2. **挪进 include 之后更危险**：`ValidationPipe` **静默整体失效** —— `{action:'redeem', foo:1}`（多余键）
+   与 `{action:'nope'}`（非法枚举）**都返回 201**。根因：esbuild **不产出 `emitDecoratorMetadata`**，
+   Nest 拿不到 `design:paramtypes` ⇒ 判不出「这个参数要不要校验」⇒ 整体跳过且**不报错**。
+   注意它的失败形态：**不会红，只会什么都不做。**
+3. 故 `run-tests.mjs` 现在是 `tsc -p tsconfig.test.build.json`（`src` ＋ `test` → `.tmp_test_build/`，
+   **每次先 rm 重建**，绝不复用旧产物 —— 同本文件「完整流水线」里 `run.js` 那条的理由），再在**产物**上跑；
+   并新增守卫：**源码 `*.test.ts` 数 == 编译产物 `*.test.js` 数**（少一个即红并点名），
+   防「文件静默没编译出来 ⇒ 静默没跑」（与 D12 同类）。
+   > 代价：`npm test` 每次多一次全量 `tsc`（本机约 2 秒量级）—— 换来「测的就是要上线的东西」。
 
 **两个 fail-closed 守卫**（都是因为实测发现「绿得不诚实」才加的）：
 
@@ -377,9 +432,10 @@ npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真
    再把入口指向空目录 `scripts/__fixtures__/empty-test-dir/`，要求它**退出码非 0**。
    `--test-concurrency=1` 是**刻意**的：共享状态（数据库 / 构建产物）不许并发 —— W2 的库不变量用例必须串行。
 
-> **实测基线（2026-10-14，B1 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
+> **实测基线（2026-10-14，B4 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
 > `contracts:emit` 输出「已生成 contracts/permission-matrix.json（25 个动作）」且生成物 **`git status` 无 diff** ⇒ 幂等）；
-> `npm run test` → **3 个用例文件 / 26 个用例全部通过**（B3 之后）；`npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
+> `npm run test` → **4 个用例文件 / 52 个用例全部通过**（B4 之后；跑的是 `.tmp_test_build/` 里的产物）；
+> `npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
 > 其附注行**当场复现**了第 ① 条守卫的依据：runner 自己对空目录是「退出码=0，用例数=0」。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：

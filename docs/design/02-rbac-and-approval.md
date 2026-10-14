@@ -284,8 +284,15 @@ model ApprovalRequest {
 （`canReview()` / `canSelfApprove()` / `decideRequestOutcome()` / `canDecide()` / `isSelfApproved()`），
 配 `backend/test/approval-policy.test.ts`（10 条性质测试：含"不勾选一律 `pending`"与
 "孩子自批被拒"两条会失败的对照）。
-⚠️ 与 `member-restrictions.ts` 的诚实标注同款：**HTTP 路径尚未开工**，本文件此刻还没有被任何请求调用
-—— 别把它的存在读成"审批已验收"。
+**落地状态（2026-10-14 阶段 B4，**上一版标注已被证伪**）**：✅ **HTTP 路径已建成并消费本文件** ——
+`POST /approvals`（本文 §9.3 / §9.25 / §9.26 / §9.27 的状态码口径）与
+`POST /approvals/:id/decide`（§9.10 的「双击同意 → 409」等），实现见 `backend/src/approvals/`，
+用例见 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**，26 条）。
+⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
+（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不是静默成功；身份是**临时口径**
+（`x-kp-role` / `x-kp-user-id` 头，缺即 401、取值白名单、`NODE_ENV=production` → 503），
+W1 的 `DeviceSession` 到位后必须替换（`backend/src/device-session/temporary-role.guard.ts`）。
+真起 `dist/main.js`（真实 AppModule ＋ Prisma ＋ 全局管道）复验：**501 / 400 / 401** 与用例完全一致。
 
 ---
 
