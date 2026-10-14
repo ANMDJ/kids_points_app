@@ -75,7 +75,7 @@ cd kids_points_mp && npx tsc --noEmit -p tsconfig.json; echo TSC_EXIT=$?   # 期
 | `WishCoverStyle` 枚举 | schema `:107-112`（W0 建，C3 前端已对齐） | 与 `types.ts:59` / `lib/models/wish.dart:7` 一一对应 |
 | `PointRuleVersion` | schema `:371-391` | `@@unique([ruleId, version])`；**只增不删**；`onDelete: Restrict`（不得因删用户丢作者） |
 | `AuditLog` | schema `:636-663` | `action` / `targetType` / `targetId` / `before` / `after`(JSON) / `actorUserId` / `actorRole` / `deviceId` / `ipHash` / `createdAt`；三个索引（`childId+createdAt`、`targetType+targetId`、`action+createdAt`） |
-| DB 层"不可改删" | `backend/prisma/sql/900_ledger_revoke.sql:39-41` | 对 `PointRecord` / `PointRuleVersion` / `AuditLog` **REVOKE UPDATE, DELETE**，且带**自检**（权限不符就让迁移失败，不留空承诺） |
+| DB 层"不可改删" | `backend/prisma/sql/900_ledger_revoke.sql:50-52` | 对 `PointRecord` / `PointRuleVersion` / `AuditLog` **REVOKE UPDATE, DELETE**，且带**自检**（权限不符就让迁移失败，不留空承诺）；口令见 `901_set_app_password.sql`（部署注入，B2） |
 | 权限矩阵已含 `update_rule` | `contracts/permission-matrix.json`、`backend/src/contracts/permission-matrix.ts:46` | `guardian: ALLOW` / `child: DENY` |
 
 > ⚠️ **后端 API 仍是占位**：`backend/src/rules/rules.module.ts` 与 `backend/src/audit/audit.module.ts` 都只有 `@Module({})`
@@ -261,8 +261,10 @@ git commit -m "feat(c4)+docs: 软删除/回收站(C9) + 规则可编辑(C10) + A
 ## 10. C4 之后（别丢）
 
 - **C5** = `D9`（`iconName` → `IconData` 映射；见 `03`、README 待办 4）。
-- **W1 开工前两件事**（README 待办 7）：① 引入测试框架（现在只有手写断言的 `npm run db:verify`）；
-  ② `kids_points_app` 口令改为部署注入（`900_ledger_revoke.sql` 里现在是硬编码占位）。
+- **W1 开工前两件事**（README 待办 7）：① 引入测试框架（现在只有手写断言的 `npm run db:verify`）
+  → ✅ **已完成（阶段 B1，2026-10-14）**；
+  ② `kids_points_app` 口令改为部署注入（`900_ledger_revoke.sql` 里现在是硬编码占位）
+  → ✅ **已完成（阶段 B2，2026-10-14**：900 只建角色、`901_set_app_password.sql` 注入口令）。
 - **首启引导流程**（`04`）仍是空白 —— 别把"首启空态"当成"引导已完成"（README 待办 8 的遗留）。
 - **待办（用户指示，尚未做）**：「工具/文件职责地图」—— `tools/**` 每个脚本负责什么、什么命令在哪个目录跑、产物在哪；
   **暂不**接 VS Code task / pre-commit 钩子（见 `07` §6）。

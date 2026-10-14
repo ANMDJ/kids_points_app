@@ -137,7 +137,8 @@ ALTER TABLE "UserChildRelation"
 - **闸门 ④ 目前"无字面量可查"**：仓库里 `relation` 字面量 **0 处**（后端 API 未开工）。
   它是**防将来**的：等写入路径落地，它才会真正开始工作 —— 这一点写在这里，免得后人以为它已经"验过什么"。
 - **数据库链照旧**：本次**没有** `migrate reset`，但仍照规矩跑了一遍
-  `seed → 900_ledger_revoke.sql → db:verify`（`reset` 之后这三步**必须**重跑，见 `06` §10.3）。
+  `seed → 900_ledger_revoke.sql → 901_set_app_password.sql → db:verify`
+  （`reset` 之后这条链**必须**重跑，见 `06` §10.3；**901 与 `ON_ERROR_STOP=1` 是阶段 B2 新增的**）。
 
 ## 6. 下一会话怎么复跑
 
@@ -154,8 +155,13 @@ node tools/_scratch/d1b-falsify.mjs       # 期望 15 例全 PASS
 # ④ 数据库侧（需要活库 + 两条连接串）
 npx prisma migrate status                 # 期望 Database schema is up to date!
 npm run seed                              # 期望 库内合计 18 条
-"/d/Program Files/PostgreSQL/18/bin/psql.exe" "$(grep -m1 '^MIGRATION_DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"' | sed 's/?.*$//')" -f prisma/sql/900_ledger_revoke.sql
-npm run db:verify                         # 期望 ALL PASS —— I5 在真实库上生效
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/sql/900_ledger_revoke.sql
+# ↑ 阶段 B2 起：**必须**带 -v ON_ERROR_STOP=1（实测：不带时脚本内 RAISE 的退出码仍是 0）
+#   本机的 $MIGRATION_DATABASE_URL 取法（从 .env 里抠，避免手抄）：
+#   export MIGRATION_DATABASE_URL="$(grep -m1 '^MIGRATION_DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"' | sed 's/?.*$//')"
+APP_DB_PASSWORD='<强口令>' psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -v app_password="$APP_DB_PASSWORD" -f prisma/sql/901_set_app_password.sql
+npm run db:verify                         # 期望 ALL PASS —— I5 + 口令判据 P1–P3 在真实库上生效
 
 # ⑤ 前端（本步未改，复跑只为确认没被波及）
 cd kids_points_mp && npx tsc --noEmit -p tsconfig.json   # exit 0

@@ -432,6 +432,9 @@ rec#1 的 (ruleId, ruleVersion) 指向空
 > 因此必须：**迁移走所有者、应用走仅 CRUD 的 `kids_points_app`**（裁定 D7），
 > 并由 `prisma/sql/900_ledger_revoke.sql` **自检**权限是否真的生效（否则让迁移直接失败）；
 > 验证脚本 `npm run db:verify` 按 **SQLSTATE 42501** 判定，**不依赖错误文案**。
+> ★ 该角色（`kids_points_app`）的口令**不写在仓库里**：由 `prisma/sql/901_set_app_password.sql`
+> 在部署时从环境变量注入（阶段 B2，2026-10-14）；`npm run db:verify` 另有 P1–P3 三条口令判据
+> （非空 / 非占位值 / 长度下限 · 不与所有者口令复用 · 用户名必须分离）。
 
 ---
 

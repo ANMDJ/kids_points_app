@@ -11,18 +11,29 @@
 --    —— 见 docs/design/06-w0-report.md §3「待确认决策 D7」。
 --
 --  执行前提：`prisma migrate deploy` 已建表，且以**所有者/超级用户**身份执行：
---      psql "$MIGRATION_DATABASE_URL" -f prisma/sql/900_ledger_revoke.sql
+--      psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/sql/900_ledger_revoke.sql
+--      # ★ `-v ON_ERROR_STOP=1` 不可省：实测（psql 18.6）脚本内的 RAISE EXCEPTION
+--      #   在**不带**它时 psql 退出码仍是 **0** —— 下面第 ④ 段的"让脚本失败"
+--      #   就成了一句空话（D12 假绿的同一形状）。
+--
+--  ★ 口令不在这里（B2，2026-10-14）：本脚本**只建角色、不设口令**；
+--    口令由 `901_set_app_password.sql` 在部署时从环境变量注入。
+--    完整链条：migrate deploy → 900 → 901 → `npm run db:verify`。
 --
 --  执行后，应用的 DATABASE_URL 应改用 kids_points_app 角色；
 --  迁移仍使用 MIGRATION_DATABASE_URL（所有者）。
 -- ══════════════════════════════════════════════════════════════════════════
 
--- ① 应用角色（幂等创建）
+-- ① 应用角色（幂等创建；**不设口令** —— 口令属于 901，见下）
+--    ★ 为什么这里不"顺手设一下口令"：900 是要**反复重跑**的运维脚本，
+--      若在此处 `ALTER ROLE ... PASSWORD`，每次重跑都会把**生产口令冲掉**。
+--      "只在缺失时建角色、口令交给 901 注入" 才是可重入且不破坏现状的形状。
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kids_points_app') THEN
-    -- ⚠ 生产环境请改用密钥管理注入，不要把这个占位密码带上去
-    CREATE ROLE kids_points_app LOGIN PASSWORD 'change-me-before-production';
+    -- 此前这里是 `LOGIN PASSWORD 'change-me-before-production'`（阶段 B2 已删除）：
+    -- 占位口令的真实危害不是"弱"，而是**它会被原样带上生产**。
+    CREATE ROLE kids_points_app LOGIN;
   END IF;
 END
 $$;

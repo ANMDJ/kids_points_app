@@ -131,8 +131,11 @@
   自述「与 `kids_points_mp` 同源」，但 `prototype/verify.mjs` **只读原型自身**、`tools/icon-names-check.mjs`
   只覆盖 Taro / Flutter / 后端**三份**手抄名单 —— 原型是**第四份**。四组未对账面与建议方案见
   `docs/design/README.md` 待办 13；本轮的只读探针与下手包在 `tools/_scratch/`（**临时物，不入库**）。
-- **本步没动数据库**：无迁移，因此**没有**跑 `seed → 900_ledger_revoke.sql → db:verify`
-  （那三步只在 `migrate reset` 之后**必须**重跑，见 `06` §10.3；D-a 单 §6 ④ 有完整命令）。若下一轮动 schema，照那条链复跑。
+- **本步没动数据库**：无迁移，因此**没有**跑
+  `seed → 900_ledger_revoke.sql → 901_set_app_password.sql → db:verify`
+  （这条链只在 `migrate reset` 之后**必须**重跑，见 `06` §10.3；D-a 单 §6 ④ 有完整命令）。
+  ★ 阶段 B2（2026-10-14）在链中**插入 901**（口令部署注入），且所有 psql 命令一律要 `-v ON_ERROR_STOP=1`。
+  若下一轮动 schema，照那条链复跑。
 
 ## 6. 下一会话怎么复跑
 

@@ -418,11 +418,17 @@ L1 关闭后我按既定顺序执行，**结果与文档承诺有 9 处不一致
 的条目同样依附于 schema —— 与其论证"它应该还在"，不如整段重跑一次，成本是 0.1 秒）。
 同理，**`migrate reset` 之后 seed 也不会自动补**（缺陷 11），必须 `npm run seed`。
 
+★ **阶段 B2（2026-10-14）把这条规则扩成三步**：`migrate reset` 之后必须重跑
+`900_ledger_revoke.sql` → `901_set_app_password.sql`（应用口令部署注入）→ `npm run db:verify`；
+且所有 psql 调用**必须**带 `-v ON_ERROR_STOP=1` —— 实测（psql 18.6）：不带它时脚本内
+`RAISE EXCEPTION` 的 psql 退出码**仍然是 0**，于是 900 第 ④ 段的"让迁移失败"只是一句空话，
+又是 D12 那类假绿。
+
 ### 10.4 本轮新增的「会失败」资产
 
 | 资产 | 作用 |
 |---|---|
-| `backend/scripts/verify-db.mjs` + `npm run db:verify` | I5 实证（P0 + A–D + F + G）；**有反向对照证明它能变红** |
+| `backend/scripts/verify-db.mjs` + `npm run db:verify` | I5 实证（P0 + A–D + F + G；阶段 B2 增补 **P1a/P1b/P1c/P2/P3** 口令判据）；**有反向对照证明它能变红** |
 | `backend/prisma/seed/rule-templates.ts` | 幂等 upsert（按 `slug`）；**写库前先跑离线自检，不过即拒绝写库** |
 | `backend/tsconfig.tools.json` + `npm run typecheck:tools` | 覆盖 `scripts/**`、`prisma/**`、`prisma.config.ts`（此前**零覆盖**） |
 | `npm run seed` / `npm run ci:db` | 把"容易漏的手工步骤"变成**有名字的命令**，漏了就是漏了一个可被 review 的命令 |
@@ -439,9 +445,21 @@ L1 关闭后我按既定顺序执行，**结果与文档承诺有 9 处不一致
 
 1. **D1–D10 仍需你逐条确认**（尤其 D2/D4/D7/D10）。注意 **D7 现在已经是代码事实**：
    连接串分工、`prisma.config.ts`、seed、`900_ledger_revoke.sql` 都按它落地了 —— 推翻成本正在上升。
-2. **应用角色的口令策略**：`900_ledger_revoke.sql` 里的 `kids_points_app` 口令是**硬编码占位**
+2. ~~**应用角色的口令策略**：`900_ledger_revoke.sql` 里的 `kids_points_app` 口令是**硬编码占位**
    （`change-me-before-production`）。生产必须由部署注入（`ALTER ROLE … PASSWORD`）。
-   现在改还是 W1 一起改？**我建议 W1 一起改**（那本来就属于"身份与权限"范畴）。
+   现在改还是 W1 一起改？**我建议 W1 一起改**（那本来就属于"身份与权限"范畴）。~~
+   → ✅ **已收口（阶段 B2，2026-10-14）**：硬编码占位口令**已删除**，改为
+   **900 只建角色（`CREATE ROLE … LOGIN`，不设口令）＋ 新增 `prisma/sql/901_set_app_password.sql`
+   在部署时从环境变量注入**（脚本开头是 fail-closed 守卫：变量缺失即 `RAISE EXCEPTION`）；
+   `.env.example` 的占位符换成 `REPLACE_ME_BY_DEPLOY`；`npm run db:verify` 增补 P1–P3 口令判据。
+   **当时那句建议（"W1 一起改"）没有采纳，而是先改了** —— 口令机密性与 W1 的功能矩阵不是同一类风险，
+   拖到 W1 只会让"占位口令被原样带上生产"多活一个阶段。
+   > **实测证据（非推断）**：① 不带 `-v app_password` 跑 901 → **退出码 3**（守卫真的会失败）；
+   > ② 注入后旧口令连接 → **`SQLSTATE 28P01` 认证失败**；③ 新口令 `db:verify` → **12/12 ALL PASS**；
+   > ④ 反向对照（`DATABASE_URL` 换回占位口令）→ **P1b 变红并点名命中项**（退出码 1）；
+   > ⑤ `npm run ci` → **`CI_EXIT=0`（14 步）**。
+   > 附带修掉一个**假绿**：实测脚本内 `RAISE EXCEPTION` 在**不带** `-v ON_ERROR_STOP=1` 时退出码仍是 **0**，
+   > 故 900 / 901 与所有文档命令一律补上 `ON_ERROR_STOP=1`（见 §10.3 的运维规则）。
 3. **L5 未做**：`git init` + 首次提交 + CI 平台选择（等你定平台）。
 4. **没有自动化测试框架**：`verify-db.mjs` 是我手写的断言，不是 jest/vitest。
    **W2 开始写业务逻辑之前必须引入测试框架** —— 否则"回归"只能靠人肉重跑脚本，

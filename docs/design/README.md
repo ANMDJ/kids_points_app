@@ -161,8 +161,19 @@
    > `npm run test` → 2 个用例文件 / **16 个用例全部通过**（`TEST_EXIT=0`）；`npm run test:canfail` →
    > **4/4 ALL PASS**（`CANFAIL_EXIT=0`）。其中 canfail 的附注行**当场复现**了第 ① 条守卫的依据：
    > runner 自己对空目录是「退出码=0，用例数=0」—— 即那条守卫拦的是**真实存在**的假绿，不是假想需求。
-   ② **`kids_points_app` 口令改为部署注入** —— 现在 `900_ledger_revoke.sql` 里是硬编码占位
-   （`change-me-before-production`），生产必须换掉。**仍是待办（阶段 B2）**。
+   ② ~~**`kids_points_app` 口令改为部署注入**~~ → ✅ **已完成（2026-10-14，阶段 B2）** —— 口令已从仓库里**彻底移出**：
+   `900_ledger_revoke.sql` 只建角色（`CREATE ROLE … LOGIN`，**不设口令**），口令改由新增的
+   `prisma/sql/901_set_app_password.sql` 在部署时从环境变量注入（`-v app_password=…`），
+   脚本开头是 fail-closed 守卫（变量缺失即 `RAISE EXCEPTION`，**不是**靠 `\quit` —— 实测 `\quit 1` 不支持退出码）；
+   `.env.example` 占位符换成 `REPLACE_ME_BY_DEPLOY`；`npm run db:verify` 增补
+   **P1a/P1b/P1c/P2/P3** 五条口令判据（非空 · 非占位值 · 长度下限 · 不与所有者口令复用 · 用户名必须分离）。
+   > **实测基线（2026-10-14 收口时跑的，非推断）**：① 不带 `-v app_password` 跑 901 → **退出码 3**（守卫真的会失败，不是空承诺）；
+   > ② 注入后**旧口令**（`change-me-before-production`）连接 → **`SQLSTATE 28P01` 认证失败**（口令确实换了）；
+   > ③ 新口令跑 `db:verify` → **12/12 ALL PASS**（`DB_VERIFY_EXIT=0`，含 P1–P3）；
+   > ④ 反向对照：把 `DATABASE_URL` 换回占位口令 → **P1b 变红并点名命中项**（`DB_VERIFY_EXIT=1`）；
+   > ⑤ `npm run ci` → **`CI_EXIT=0`（14 步）**。
+   > 顺带修掉一个**假绿**：实测脚本内 `RAISE EXCEPTION` 在**不带** `-v ON_ERROR_STOP=1` 时 psql 退出码**仍是 0** ——
+   > 故 900 / 901 与全部文档命令一律补上 `ON_ERROR_STOP=1`（此前 900 第 ④ 段那句"让脚本失败"是空话）。
 8. ~~**C1 · E18 ＋ D13 收口**~~ → ✅ **已完成（2026-10-12，提交 `24c5c73` → `4699518`）**：
    首启改为**空态**、生产闸门拆成**可测判据**（`demoResetAllowed()` ＋ 派生常量）、种子降级为**显式夹具**、
    D13 第 10 条断言改写；`run.js` **16/16**、`flutter test` **24/24**、`flutter analyze` **0 issue**、
