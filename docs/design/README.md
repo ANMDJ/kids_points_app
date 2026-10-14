@@ -158,7 +158,7 @@
    实测空目录时 runner 是 `ℹ tests 0` 且**退出码 0**，故入口自己遍历文件并强制用例数 ≥ 文件数；
    ② `test:canfail` 用必红夹具证明「测试真的会红」且**点名失败用例**。详见「CI 步骤」节的「测试框架」小节。
    > **实测基线（2026-10-14 收口时跑的，非推断）**：`npm run ci` → **`CI_EXIT=0`（14 步）**；
-   > `npm run test` → 2 个用例文件 / **16 个用例全部通过**（`TEST_EXIT=0`）；`npm run test:canfail` →
+   > `npm run test` → **3 个用例文件 / 26 个用例全部通过**（`TEST_EXIT=0`；B3 加自批策略后由 16 → 26）；`npm run test:canfail` →
    > **4/4 ALL PASS**（`CANFAIL_EXIT=0`）。其中 canfail 的附注行**当场复现**了第 ① 条守卫的依据：
    > runner 自己对空目录是「退出码=0，用例数=0」—— 即那条守卫拦的是**真实存在**的假绿，不是假想需求。
    ② ~~**`kids_points_app` 口令改为部署注入**~~ → ✅ **已完成（2026-10-14，阶段 B2）** —— 口令已从仓库里**彻底移出**：
@@ -244,6 +244,30 @@
    **触发条件（满足任一条就应当捡起）**：① 有人**照着 `prototype/` 去实现小程序 UI**（W4/W5 前后）；
    ② 改动 `kids_points_mp/src/components/Icon/icons.ts`、`src/styles/vars.scss`、`src/data/types.ts` 的
    图标 / 色板 / 派生文案；③ 改动 `contracts/permission-matrix.json`。**在那之前不必做**。
+14. **「谁可以批准」（自批）—— 用户已裁定，契约已定形（2026-10-14，阶段 B3）**：
+   原状是**功能死锁**、不是安全漏洞：`redeem` 对两端都是 `REQUIRE_APPROVAL`，
+   但"批准人资格"全仓**无定义**（矩阵只回答"哪个角色能**发起**"，`02` §4.1–§4.4 只回答"状态怎么走"）——
+   **单家长家庭**（只有一位 `guardian`）提交兑换后**没有任何人能批准** → 永远 `pending` → 到期被 `expired` 扫掉。
+   用户裁定：**允许申请人自批，但自批必须是一次「显式动作」** —— ① 两步式（提交后**本人**二次确认）
+   或 ② 一步式（申请时勾选"自动审批"，`autoApprove: true`）；界面"弹窗"与"勾选"都只是这两种形态的皮。
+   **未勾选 / 缺字段一律 `pending`** —— 不存在"只有一位家长就自动批准"的特例（那会让同一 API
+   随家庭人数改变安全语义，且审计里出现没有人点过同意的批准）。
+   判据收进 `backend/src/contracts/approval-policy.ts`（`canReview` / `canSelfApprove` /
+   `decideRequestOutcome` / `canDecide` / `isSelfApproved`）—— **完全由矩阵导出**，不新增第三处名单；
+   孩子与 `viewer` 不能自批（`review_approvals` 为 `DENY`）；没资格却传 `autoApprove` →
+   `400 SELF_APPROVAL_NOT_ALLOWED`（**不静默忽略**，同 `restrictions` 的多余键拒绝口径）。
+   **不新增字段 / 枚举 / 迁移**：自批由 `decidedByUserId == requesterUserId` 判定（同 D4 口径），
+   审计动作名 `approval.self_approved`（`AuditLog.action` 本就是自由字符串）。
+   文档同步：PRD §14.1 **P4** ／ FR-04 ／ FR-08（验收 9.25–9.27）／ §7 注 ／ §15.1–§15.3；
+   `02` **§4.5** ／ §9（9.25–9.27）。用例：`backend/test/approval-policy.test.ts`（10 条，全套 26/26）。
+   > **实测基线（2026-10-14 收口时跑的，非推断）**：`npm run test` → **3 个用例文件 / 26 个用例全通过**；
+   > **两条反向对照**（改完即还原，`sha256` 复原：`927dcc84…`）：
+   > ① 把「不勾选就不批」改成真值判断 → 第 1 条用例**变红并点名**（`autoApprove=1` 被误判成显式勾选）；
+   > ② 拿掉 `canReview()` 资格检查（孩子也能自批）→ **2 条变红**（"孩子永远不能自批" ＋ "资格完全由矩阵导出"）。
+   > `npm run ci` → **`CI_EXIT=0`（14 步）**。
+   **遗留（W1 必做）**：审批写入路径（含自批）落地时**必须消费** `approval-policy.ts`，
+   不得在 controller / service 里另写一份判定；`02` §4.5 的六条硬约束要逐条落成 HTTP 用例。
+   **下一步**：与 **W1**（25 动作矩阵的单点 Guard 消费）合并推进 —— 本裁定正是 W1 的第一块砖。
 
 ### 文档缺陷修正记录
 
@@ -355,7 +379,7 @@ npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真
 
 > **实测基线（2026-10-14，B1 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
 > `contracts:emit` 输出「已生成 contracts/permission-matrix.json（25 个动作）」且生成物 **`git status` 无 diff** ⇒ 幂等）；
-> `npm run test` → **2 个用例文件 / 16 个用例全部通过**；`npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
+> `npm run test` → **3 个用例文件 / 26 个用例全部通过**（B3 之后）；`npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
 > 其附注行**当场复现**了第 ① 条守卫的依据：runner 自己对空目录是「退出码=0，用例数=0」。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：

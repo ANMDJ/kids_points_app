@@ -241,6 +241,52 @@ model ApprovalRequest {
 
 「同意」与分析统计、通知发送**必须分离**：推送失败不能回滚账本（见 `01` §事务边界）。
 
+### 4.5 谁可以批准 —— 「自批」的裁定（2026-10-14，PRD §14.1 **P4**）
+
+> 回应问题：**`redeem` 对两端都是 `REQUIRE_APPROVAL`，那到底"谁可以批准"？**
+> 原状：**全仓无定义** —— 矩阵只回答"哪个角色能**发起**"，§4.1–§4.4 只回答"状态怎么走"；
+> "批准人资格"既没有文字也没有判据（`grep` 全仓 0 处，`ApprovalRequest` 上也没有"批准人 ≠ 申请人"这类约束）。
+> 后果不是安全漏洞，而是**功能死锁**：**单家长家庭**（只有一位 `guardian`）提交兑换后
+> **没有任何人能批准** → 永远 `pending` → 到期被 `expired` 扫掉。
+> 孩子"按规矩办事"反而换不出心愿 —— 这是必须修的体验缺陷，不是可选项。
+
+**裁定：允许申请人自批，但自批必须是一次「显式动作」**（绝不静默自动批准）。
+
+| 形态 | 做法 | 契约上的显式信号 |
+|---|---|---|
+| ① 两步式（二次确认） | 先建 `pending`，再由**申请人自己**调批准端点 | 多出来的那次批准调用（落库后 `decidedByUserId === requesterUserId`） |
+| ② 一步式（申请时勾选"自动审批"） | 建请求带 `autoApprove: true`，同一事务内直接落 `approved` + 写流水 | `autoApprove === true` |
+
+界面上的"弹窗二次确认"与"请求时勾选"**只是这两种形态的皮** —— 契约只看那个显式信号。
+
+**硬约束（六条，全部可测）**：
+
+1. **批准资格** = 矩阵 `review_approvals` 行为 `ALLOW` → 只有 `guardian`；`child` / `viewer` 一律不能批准。
+2. **自批资格** = 动作对该角色是 `REQUIRE_APPROVAL` **且** 具备批准资格 —— 两条都由矩阵导出，
+   **不新增第三处"批准人名单"**（权限只能在一处定义，§2）。
+3. **不勾选就不批**：`autoApprove` 缺席 / `false` / 非布尔 → 一律 `pending`。
+   ★ **不存在**"只有一位家长所以自动批准"的特例 —— 那会让同一个 API 随家庭人数改变安全语义，
+   且审计里会凭空出现**没有人点过同意**的批准记录。
+4. **没资格却显式要求自批 → 拒绝**：`400 SELF_APPROVAL_NOT_ALLOWED`，**不是静默忽略** ——
+   静默忽略会让客户端以为已批，而库里那条 `pending` 谁也没看见
+   （与 `member-restrictions.ts` 的多余键拒绝同一口径：形状 = 集合封闭）。
+5. **同一执行路径**：自批与"他人批准"走**同一套**重校验 ＋ 同一事务 ＋ 同一流水，
+   差别只落在 `decidedByUserId`。
+6. **审计可辨**：`decidedByUserId === requesterUserId` ⇒ 自批（`isSelfApproved()`），
+   审计动作名 `approval.self_approved`（`AuditLog.action` 本就是自由字符串）；
+   **不新增字段 / 枚举 / 迁移**（同 §5 的 D4 口径：冗余的两份真相必然漂移）。
+
+**边界（为什么它不扩大任何权限）**：家长本来就能 `adjust_points` / `add_wish`（矩阵 `ALLOW`），
+自批只是把"自己提的兑换"从"等别人"变成"自己确认"；孩子**不能**自批，
+故孩子的申请照旧受 §9.16 / §9.17 的每日配额与 ±50 上限约束 —— **自批不是绕过配额的通道**。
+
+**唯一实现点**：`backend/src/contracts/approval-policy.ts`
+（`canReview()` / `canSelfApprove()` / `decideRequestOutcome()` / `canDecide()` / `isSelfApproved()`），
+配 `backend/test/approval-policy.test.ts`（10 条性质测试：含"不勾选一律 `pending`"与
+"孩子自批被拒"两条会失败的对照）。
+⚠️ 与 `member-restrictions.ts` 的诚实标注同款：**HTTP 路径尚未开工**，本文件此刻还没有被任何请求调用
+—— 别把它的存在读成"审批已验收"。
+
 ---
 
 ## 5. ★ 积分记录的不可变性与规则版本化（核心）
@@ -586,4 +632,7 @@ model InviteCode {
 | 9.22 | 成员级 `restrictions` 试图放宽矩阵 `DENY` | 被忽略，仍为 DENY（屏障三方向性） |
 | 9.23 | 通知发送失败 | 账本已提交不受影响（事务边界） |
 | 9.24 | 孩子自助打卡 | `source=child_self`，`subtitle` **不含**"家长"（A4） |
+| 9.25 | 家长建 `redeem` 请求并带 `autoApprove: true` | 直接 `approved` ＋ 生成流水；`decidedByUserId == requesterUserId`；审计 `approval.self_approved` |
+| 9.26 | 孩子建 `request_redeem` 并带 `autoApprove: true` | **`400 SELF_APPROVAL_NOT_ALLOWED`**（**不得静默忽略成 `pending`** —— 客户端会以为已批） |
+| 9.27 | **单家长家庭**：唯一家长提交 `redeem`，**不带** `autoApprove` | `pending`（**不自动批准**，先证明死锁已解而特权未扩）；同一家长二次确认 → `approved` |
 
