@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 
 import { TemporaryRoleHeaderGuard } from '../device-session/temporary-role.guard'
+import { PermissionsModule } from '../permissions/permissions.module'
 import { ApprovalsController } from './approvals.controller'
 import {
   APPROVALS_REPOSITORY,
@@ -41,6 +42,9 @@ import { ApprovalsService } from './approvals.service'
  * 验收用例见 02 §9.3 / §9.7 / §9.8 / §9.10 / §9.25–§9.27。
  */
 @Module({
+  // 屏障二由 PermissionsModule 提供（PermissionsGuard）。
+  // ★ 挂载顺序（身份 → 判定）见 approvals.controller.ts 的 @UseGuards。
+  imports: [PermissionsModule],
   controllers: [ApprovalsController],
   providers: [
     ApprovalsService,

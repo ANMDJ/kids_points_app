@@ -15,7 +15,7 @@ import {
   decideRequestOutcome,
   isSelfApproved
 } from '../contracts/approval-policy'
-import type { Actor } from '../device-session/temporary-role.guard'
+import type { Actor } from '../permissions/actor'
 import {
   APPROVALS_REPOSITORY,
   type ApprovalRow,

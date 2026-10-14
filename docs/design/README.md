@@ -296,7 +296,41 @@
    **显式 501**（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），组 A 的 4 条用例专门钉住「不许假装成功」；
    ② 身份是**临时口径**（`x-kp-role` / `x-kp-user-id` 头；缺即 401、取值白名单、`NODE_ENV=production` → 503），
    W1 的 `DeviceSession` 到位后必须删掉 `src/device-session/temporary-role.guard.ts`。
-   **下一步**：W1（`DeviceSession` ＋ 矩阵单点 Guard）→ W2（账本内核 ＋ `ApprovalsPort` 的 Prisma 实现）。
+   **下一步**：W1 剩余两段（**身份** ＝ `DeviceSession`；**屏障一／三** ＝ 成员资格门与收紧接线）→ W2（账本内核 ＋ `ApprovalsPort` 的 Prisma 实现）。
+
+16. ~~**权限矩阵没有调用者（屏障二只是注释）**~~ → ✅ **已落地（2026-10-14，阶段 W1-A）**：
+   `PERMISSION_MATRIX` 此前**没有任何请求路径会查它**（`resolveVerdict` 只被单测调用）——
+   一张没人查的权限表等于注释，它不会拦住任何人。现在接上**唯一一个**消费点：
+   `backend/src/permissions/permissions.guard.ts`（`PermissionsGuard` ＋ `@RequireAction('动作名')`），
+   判定**全部**来自矩阵（guard 内**零**角色名单）。三值语义按 `02` §3：
+   `ALLOW` → 放行；`DENY` → **403 `FORBIDDEN`**；`REQUIRE_APPROVAL` → **403 `APPROVAL_REQUIRED`**；
+   **端点漏标** → **403 `NO_ACTION_DECLARED`**；`viewer` ／未知动作 → `DENY`（继承 D6）。
+   挂载点是**控制器级** `@UseGuards(TemporaryRoleHeaderGuard, PermissionsGuard)` ——
+   **不是** `APP_GUARD`：Nest 的 Guard 顺序是「全局 → 控制器 → 方法」，全局注册会让屏障二
+   **先于**身份解析执行（拿到空 `actor`）；数组顺序（身份在前）同理，写反即**响亮失败**。
+   `Actor` / `RequestWithActor` 随之从临时头文件迁到 `src/permissions/actor.ts`
+   （类型搬家与行为变更分成两次 diff：W1-C 删临时 Guard 时不会牵动审批模块）。
+   用例 `backend/test/permissions-guard.test.ts`（**真起 Nest ＋ 真发 HTTP**，16 条）＋
+   **改掉一条旧断言**：`approvals-http.test.ts` 里「viewer 传 `autoApprove` → 400」现在由屏障二在
+   **更外层**拦成 **403**（拦得更早，**不是覆盖丢失**：policy 层的 viewer fail-closed
+   仍由 `approval-policy.test.ts` 的纯函数用例钉着）。
+   > **实测基线（收口时跑的，非推断）**：`npm run test` → **5 个用例文件 / 68 个用例全通过**；
+   > `npm run ci` → **`CI_EXIT=0`（14 步）**。**六条证伪**（`tools/_scratch/w1a-canfail.mjs`，
+   > 改完即还原、逐条 `sha256` 复原）：① 让矩阵的 `DENY` 对 `review_approvals` 失效 →
+   > 「child DENY ⇒ 403」**变红并点名**；② 让 `viewer` 从 `DENY` 变回 `ALLOW` → 「viewer 一律 403」**红**；
+   > ③ 让 `REQUIRE_APPROVAL` 对 `add_wish` 失效 → 「403 `APPROVAL_REQUIRED`」**红**；
+   > ④ 在 guard 里硬编码一份名单 → 组 D「改矩阵 ⇒ 行为必须跟着变」**红**；
+   > ⑤ 删掉 controller 上的 `@RequireAction` → 「child 批准 ⇒ 403」**红**；
+   > ⑥ 让 `@RequireAction` 写入 `undefined` → 「双角色 `ALLOW` 都放行」**红**。
+   > **证伪的两个前提（本轮实测得到，会咬人）**：① **变异必须编译得过** —— `false && …` 会让整块
+   > 不可达、`actor` 的类型收窄随之丢失，`tsc` 报 **`TS18048`** 而**测试根本没跑**
+   > （于是"点名"断言失败；那也是 `run-tests.mjs`「编译不过就拒绝跑测试」那道守卫真生效的证据）；
+   > ② 组 D 的手法是**运行期改矩阵对象**（`as const` 只管类型层）—— 这是「矩阵之外不得有第二份判定」
+   > 唯一能被证伪的方式。
+   **仍未落地（不粉饰，与"已完成"分开记）**：① **屏障一**（成员资格门 `MembershipModule`）无调用者；
+   ② **屏障三**（`member-restrictions.ts` 的 `stricter()`）**未接入任何请求路径**；
+   ③ actor 仍是**临时头**（`x-kp-role`）—— **屏障二是真的，「我是谁」目前还是假的**。
+   **下一步**：W1-B（屏障三接线 ＋ 成员资格门）→ W1-C（`DeviceSession`，随后删临时 Guard）。
 
 ### 文档缺陷修正记录
 
@@ -432,11 +466,16 @@ npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真
    再把入口指向空目录 `scripts/__fixtures__/empty-test-dir/`，要求它**退出码非 0**。
    `--test-concurrency=1` 是**刻意**的：共享状态（数据库 / 构建产物）不许并发 —— W2 的库不变量用例必须串行。
 
-> **实测基线（2026-10-14，B4 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
+> **实测基线（2026-10-14，W1-A 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
 > `contracts:emit` 输出「已生成 contracts/permission-matrix.json（25 个动作）」且生成物 **`git status` 无 diff** ⇒ 幂等）；
-> `npm run test` → **4 个用例文件 / 52 个用例全部通过**（B4 之后；跑的是 `.tmp_test_build/` 里的产物）；
+> `npm run test` → **5 个用例文件 / 68 个用例全部通过**（W1-A 之后；跑的是 `.tmp_test_build/` 里的产物）；
 > `npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
 > 其附注行**当场复现**了第 ① 条守卫的依据：runner 自己对空目录是「退出码=0，用例数=0」。
+> 屏障二自己的**六条证伪**另跑一处：`node ../tools/_scratch/w1a-canfail.mjs` → **6 条 ALL PASS**
+> （每条都「退出码≠0 ＋ 点名预期用例 ＋ `sha256` 复原」，见上面第 16 条）。
+> 另：**编译不过就不许跑测试**这条守卫在本轮被真实触发过一次 —— 一个"看起来无害"的变异
+> （`if (false && …)`）因破坏类型收窄而报 `TS18048`，runner 直接拒绝执行（这正是我们要的行为：
+> 宁可红在编译，也不要红在"跑了一个不是要上线的产物"）。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：
 

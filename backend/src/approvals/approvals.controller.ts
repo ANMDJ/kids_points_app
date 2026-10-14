@@ -9,10 +9,10 @@ import {
   UseGuards
 } from '@nestjs/common'
 
-import {
-  TemporaryRoleHeaderGuard,
-  type RequestWithActor
-} from '../device-session/temporary-role.guard'
+import { TemporaryRoleHeaderGuard } from '../device-session/temporary-role.guard'
+import type { RequestWithActor } from '../permissions/actor'
+import { PermissionsGuard } from '../permissions/permissions.guard'
+import { RequireAction } from '../permissions/require-action.decorator'
 import { ApprovalsService } from './approvals.service'
 import { CreateApprovalRequestDto } from './dto/create-approval-request.dto'
 import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
@@ -37,7 +37,11 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  *   这里**不做任何 if (role …) 判断**（判定只有一处，见 service 头注释）。
  */
 @Controller('approvals')
-@UseGuards(TemporaryRoleHeaderGuard)
+// ★ `@UseGuards` 的**数组顺序就是语义**：身份在前（填 `req.kpActor`），判定在后。
+//   反过来写 ⇒ `PermissionsGuard` 读到空 actor 并**抛错**（刻意响亮失败，见 guard 类注释）。
+//   Nest 的执行顺序是「全局 → 控制器 → 方法」，同一层级内按数组顺序 —— 这也是
+//   屏障二**不能**改成 `APP_GUARD` 的原因。
+@UseGuards(TemporaryRoleHeaderGuard, PermissionsGuard)
 export class ApprovalsController {
   constructor(@Inject(ApprovalsService) private readonly service: ApprovalsService) {}
 
@@ -46,7 +50,10 @@ export class ApprovalsController {
     res.status(code)
   }
 
+  // 屏障二：矩阵 `request_approval`（guardian ALLOW / child ALLOW）——
+  // 两个角色都**有权提出**申请；「谁能批」是另一个动作（见下一个端点）。
   @Post()
+  @RequireAction('request_approval')
   async create(
     @Body() dto: CreateApprovalRequestDto,
     @Req() req: RequestWithActor,
@@ -57,7 +64,10 @@ export class ApprovalsController {
     return result.body
   }
 
+  // 屏障二：矩阵 `review_approvals`（guardian ALLOW / child DENY）——
+  // 孩子在**这里**就被拦下（403），不会走到 service：这正是屏障二该干的事。
   @Post(':id/decide')
+  @RequireAction('review_approvals')
   async decide(
     @Param('id') id: string,
     @Body() dto: DecideApprovalRequestDto,

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common'
 
 import type { Role } from '../contracts/permission-matrix'
+import type { Actor, RequestWithActor } from '../permissions/actor'
 
 /**
  * ⚠️ **临时**角色来源（W1 之前）—— 后续由 `DeviceSession.activeRole` 取代（`02` §7）。
@@ -27,17 +28,13 @@ import type { Role } from '../contracts/permission-matrix'
 export const ROLE_HEADER = 'x-kp-role'
 export const USER_ID_HEADER = 'x-kp-user-id'
 
-/** 请求上下文里的「操作人」（W1 之后由 DeviceSession 提供，字段不变）。 */
-export interface Actor {
-  userId: string
-  role: Role | 'viewer'
-}
-
-/** Guard 与 controller 之间的传递载体（同一请求对象上挂一个字段）。 */
-export interface RequestWithActor {
-  headers: Record<string, string | string[] | undefined>
-  kpActor?: Actor
-}
+/**
+ * ⚠️ 类型已迁出（W1-A，2026-10-14）：`Actor` / `RequestWithActor` 现在定义在
+ *    `src/permissions/actor.ts` —— 它们不是「临时头」的私有物，屏障一／屏障二
+ *    与各 service 都要用；留在本文件里会让 W1 删除临时 Guard 时连带牵动整个审批模块
+ *    （类型搬家与行为变更混进同一个 diff）。本文件自此只负责**一件事**：
+ *    「在没有真实身份之前，临时怎么造出一个 actor」。
+ */
 
 const KNOWN_ROLES: readonly (Role | 'viewer')[] = ['guardian', 'child', 'viewer']
 
@@ -77,7 +74,10 @@ export class TemporaryRoleHeaderGuard implements CanActivate {
       })
     }
 
-    req.kpActor = { userId, role }
+    // 显式标注：这里产出的正是三道屏障共同消费的 `Actor`（定义已迁至 permissions/actor.ts）。
+    // 将来身份来源换成 `DeviceSession` 时，这个注解会让类型不匹配在**编译期**暴露。
+    const actor: Actor = { userId, role }
+    req.kpActor = actor
     return true
   }
 }

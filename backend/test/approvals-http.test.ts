@@ -295,13 +295,18 @@ describe('判定（§4.5 六条硬约束 / §9.25–§9.27）', () => {
     assert.equal(r.body.code, SELF_APPROVAL_NOT_ALLOWED)
   })
 
-  it('fail-closed：viewer 传 autoApprove → 400（矩阵里 viewer 一律 DENY）', async () => {
+  // ★ 行为变更（W1-A，2026-10-14）：viewer 现在被**屏障二**（`PermissionsGuard`）在更外层
+  //   拦下 → **403 FORBIDDEN**，**不再**走到 policy 层（那里原本会给 400 SELF_APPROVAL_NOT_ALLOWED）。
+  //   这是**更强**的保证（拦得更早），**不是覆盖丢失**：policy 层对 viewer 的 fail-closed 仍由
+  //   `approval-policy.test.ts`（不经 HTTP 的纯函数用例）单独钉着 —— 两层各测各的，
+  //   不要把其中一个当成另一个的证据。
+  it('fail-closed：viewer 提任何请求 → 403（viewer 在矩阵里无列，屏障二在入口就拒绝）', async () => {
     const r = await send(url, '/approvals', {
       body: { action: 'redeem', autoApprove: true },
       headers: VIEWER
     })
-    assert.equal(r.status, 400)
-    assert.equal(r.body.code, SELF_APPROVAL_NOT_ALLOWED)
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'FORBIDDEN')
   })
 })
 
