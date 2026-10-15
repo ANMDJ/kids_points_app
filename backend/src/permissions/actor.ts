@@ -31,9 +31,12 @@ export interface Actor {
  *   （见 `ApprovalsController.actorOf`），绝不落到默认角色。
  *   默认 `guardian` 是提权，默认 `child` 是另一种撒谎 —— 见 device-session.guard.ts。
  *
- * · `kpChildId` 是**会话的孩子上下文**（临时口径：`x-kp-child-id` 头；最终由
- *   `DeviceSession.childId` 提供，见 02 §7）。屏障一（资格）与屏障三（成员级收紧）
- *   都必须先知道"对哪个孩子"—— 缺失时**绝不跳过检查**（见 MembershipGuard ②）。
+ * · `kpChildId` 是**会话的孩子上下文**（**由身份 Guard 写入**，见 `device-session.guard.ts`）：
+ *   取值来自请求头的选择器 `x-kp-child-id`，但它**必须**等于会话行上的 `childId`
+ *   （不等 ⇒ **500 `SESSION_CHILD_MISMATCH`**，`device-session/session.gate.ts`）——
+ *   所以"在哪个孩子的档案上"这半个身份**也不是客户端说了算**。
+ *   屏障一（资格）与屏障三（成员级收紧）都必须先知道"对哪个孩子"——
+ *   缺失时**绝不跳过检查**（见 MembershipGuard ②）。
  *
  * · `kpMember` 是**屏障一的输出**（已通过形状校验的成员位，含 `restrictions`）。
  *   ★ 它缺失 = 屏障一没跑。`PermissionsGuard` 对此**响亮失败**（500），
