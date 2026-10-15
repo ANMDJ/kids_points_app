@@ -436,8 +436,11 @@
    > 设备＋孩子上下文齐全 → **501 `SESSION_LOOKUP_NOT_IMPLEMENTED`**；**只发 W1-A/W1-B 的三个自报头
    > （不发设备头）→ 401**（自报角色**不再是身份**）；自报 `guardian` ＋ 设备头齐全 → 仍是 501；
    > 缺 `x-kp-child-id` → 401；无头 → 401；`NODE_ENV=production` → **503**。
-   > ★ 与 W1-B 的探针**对照着看**：同一条请求的 501 **换了名字**（`MEMBERSHIP_*` → `SESSION_*`）——
+   > ★ 与 W1-B 的探针**对照着看**（两轮各自的"①号请求"＝**当轮口径下头齐全的合法 `POST /approvals`**）：
+   > 501 **换了名字**（W1-B：`MEMBERSHIP_QUERY_NOT_IMPLEMENTED` → W1-C：`SESSION_LOOKUP_NOT_IMPLEMENTED`）——
    > 这是"身份层现在排在屏障一**之前**"的**可观测**证据（而不是注释里的一句声明）。
+   > ⚠️ 严格说**两次的请求头并不相同**（W1-B 是三个自报头，W1-C 换成"设备＋孩子上下文"）——
+   > 头集合变了**正是本阶段的目的**；若把 W1-B 的三个头**原样**发过来，W1-C 给的是 **401**（见上一条）。
    > **证伪的坑第三次出现（三条记录已一致）**：④ 号变异原本写成 `if (false && row.childId !== requestedChildId)`，
    > `tsc` 报 **TS18047**（`row` 的**非空收窄**被字面量 `false` 短路掉，`row.deviceId` 变成 possibly null）
    > ⇒ 编译不过 ⇒ runner 拒绝跑测试 ⇒ 表现为"没点名"。W1-A 是 `TS18048` / W1-B 是 `TS2339`，
