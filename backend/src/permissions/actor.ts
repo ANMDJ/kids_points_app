@@ -1,4 +1,5 @@
 import type { Role, Verdict } from '../contracts/permission-matrix'
+import type { Membership } from '../membership/membership.gate'
 
 /**
  * 「操作人」—— 身份解析的结果，也是三道屏障的**共同输入**。
@@ -30,7 +31,15 @@ export interface Actor {
  *   （见 `ApprovalsController.actorOf`），绝不落到默认角色。
  *   默认 `guardian` 是提权，默认 `child` 是另一种撒谎 —— 见 temporary-role.guard.ts。
  *
- * · `kpVerdict` 是**屏障二的输出**（矩阵判定），由 `PermissionsGuard` 写入。
+ * · `kpChildId` 是**会话的孩子上下文**（临时口径：`x-kp-child-id` 头；最终由
+ *   `DeviceSession.childId` 提供，见 02 §7）。屏障一（资格）与屏障三（成员级收紧）
+ *   都必须先知道"对哪个孩子"—— 缺失时**绝不跳过检查**（见 MembershipGuard ②）。
+ *
+ * · `kpMember` 是**屏障一的输出**（已通过形状校验的成员位，含 `restrictions`）。
+ *   ★ 它缺失 = 屏障一没跑。`PermissionsGuard` 对此**响亮失败**（500），
+ *   绝不把它读成"没有额外限制"—— 那会让屏障三静默失效，且看不出来。
+ *
+ * · `kpVerdict` 是**屏障二 × 屏障三 之后的最终判定**：由 `PermissionsGuard` 写入。
  *   ★ 它的存在**不代表已授权**：`DENY` 与 `REQUIRE_APPROVAL` 在 Guard 里就已被拒
  *   （根本走不到业务层）。保留这个字段，是为了让将来「确实需要审批的端点」
  *   能读到 `REQUIRE_APPROVAL` 并据此建 `ApprovalRequest`（02 §3 屏障二）。
@@ -38,5 +47,7 @@ export interface Actor {
 export interface RequestWithActor {
   headers: Record<string, string | string[] | undefined>
   kpActor?: Actor
+  kpChildId?: string
+  kpMember?: Membership
   kpVerdict?: Verdict
 }

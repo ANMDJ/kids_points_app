@@ -147,6 +147,45 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
 **屏障三的方向性约束（重要）**：`restrictions` 只能把 `ALLOW` 收紧为 `REQUIRE_APPROVAL` 或 `DENY`，
 **永远不能把 `DENY` 放宽**。否则家长可绕过产品安全底线（如让孩子自己审批自己的申请）。
 
+### ✅ W1-B 落地注（2026-10-15）：三道屏障**都接在请求路径上了**
+
+| 屏障 | 判定核（唯一实现点） | 请求路径上的消费点 | 用例 |
+|---|---|---|---|
+| 一 · 成员资格 | `backend/src/membership/membership.gate.ts`（纯函数 `resolveMembership()`）＋ 端口 `MembershipPort` | `MembershipGuard`（控制器级 `@UseGuards` 第 2 位） | `test/membership-gate.test.ts`（内核）／`test/membership-http.test.ts` 组 A（真 HTTP，**§9.21**） |
+| 二 · 矩阵 | `backend/src/contracts/permission-matrix.ts` | `PermissionsGuard`（第 3 位） | `test/permissions-guard.test.ts` |
+| 三 · 成员级收紧 | `backend/src/contracts/member-restrictions.ts` 的 `tightenVerdict()`（消费 `stricter()`） | 同上（**同一个** Guard：`stricter(矩阵判定, 限制判定)`） | `test/member-restrictions.test.ts`（含 **§9.22** 穷举）／`membership-http.test.ts` 组 B |
+
+守卫链（**数组顺序即语义**）：`@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)`。
+
+**这一步修掉的两个"看起来在安全"**：
+1. `MembershipModule` 此前是**空壳**（全仓零调用者）—— "这个人跟这个孩子有没有关系"从来没人问过；
+   于是只要角色头合法，就能对**任意** childId 走矩阵（矩阵**无权**回答资格问题，两者正交）。
+2. `stricter()` 此前**没有被任何请求路径调用** —— 家长为单个孩子配的限制**配了等于没配**，
+   而且"没生效"这件事**没人看得见**（比报错危险）。
+
+**两条 fail-closed（W1-B 新增，都有可执行断言）**：
+- `kpMember` 缺失 ⇒ `PermissionsGuard` **抛错（500）**："没查" ≠ "查了没有限制" ——
+  后者会让屏障三**静默失效**；
+- 成员位的 `restrictions` 形状坏了 ⇒ **500 `INVALID_MEMBER_RESTRICTIONS`**
+  （**数据坏了 ≠ 没权限**：若混成 403，会被当成权限问题排查很久）。
+  ★ D3b 的 `validateRestrictions()` 至此才有了**请求路径上的**调用方（此前只有离线闸门在调）。
+
+**诚实标注（不粉饰，与"已完成"分开记）**：
+- ⚠️ **成员位来自端口，默认实现是 501**（`MEMBERSHIP_QUERY_NOT_IMPLEMENTED`）：
+  真装配下**没有人**被放过去（fail-closed），但它也**还没有真的查过库** ——
+  真 Prisma 适配器属 W2。理由写在该文件的文件头：`MembershipModule` 一注入 `PrismaService`，
+  **无库 CI 会在启动阶段就崩**（`PrismaService` 构造时缺 `DATABASE_URL` 即抛），而本仓库的 HTTP 用例是无库跑的。
+- ⚠️ `requireApprovalForBonusOver`（**金额**阈值）**在 HTTP 路径上不生效** ——
+  金额属 dispatcher 的 payload（§6 未落地），当前唯一调用方拿不到它。
+  `membership-http.test.ts` 组 B 有一条**把这个现状钉住**的用例（而不是假装它在拦）。
+- ⚠️ 三条限制键**都不**作用于 `request_approval` ⇒ **屏障三在 `/approvals` 上结构性不生效**
+  （它作用于 dispatcher 落地后的 `add_wish` / `undo_check_in` / `request_points_bonus`）；
+  HTTP 层用**同一套守卫链**的探针端点验证（组 B）。
+- ⚠️ `POST /approvals/:id/decide` 用的是**请求头里的** childId，尚未与**审批行自己的** childId
+  做同源校验（要等 `ApprovalRow` 读模型带上它）—— 即：跨家庭推进审批这条路径**还没堵**。
+- ⚠️ 身份仍是**临时头**（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`**）——
+  **三道屏障都是真的，"我是谁"目前还是假的**（W1-C 的 `DeviceSession` 取代三个头）。
+
 **屏障三的形状（`D3b`，已定形 —— 阶段 D-b，2026-10-13）**：上面那三个键的**唯一权威**是
 `backend/src/contracts/member-restrictions.ts` 的 `RESTRICTION_KEYS` ＋ 运行时守卫
 `validateRestrictions()`（未知键、错类型、越界一律拒；prisma 侧仍是 `Json` 列 ——
@@ -293,12 +332,19 @@ model ApprovalRequest {
 **落地状态（2026-10-14 阶段 B4，**上一版标注已被证伪**）**：✅ **HTTP 路径已建成并消费本文件** ——
 `POST /approvals`（本文 §9.3 / §9.25 / §9.26 / §9.27 的状态码口径）与
 `POST /approvals/:id/decide`（§9.10 的「双击同意 → 409」等），实现见 `backend/src/approvals/`，
-用例见 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**，26 条）。
+用例见 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**）。
 ⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
 （`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不是静默成功；身份是**临时口径**
-（`x-kp-role` / `x-kp-user-id` 头，缺即 401、取值白名单、`NODE_ENV=production` → 503），
-W1 的 `DeviceSession` 到位后必须替换（`backend/src/device-session/temporary-role.guard.ts`）。
-真起 `dist/main.js`（真实 AppModule ＋ Prisma ＋ 全局管道）复验：**501 / 400 / 401** 与用例完全一致。
+（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`** 三个头，缺任一个即 401、角色取值白名单、
+`NODE_ENV=production` → 503），W1-C 的 `DeviceSession` 到位后必须替换
+（`backend/src/device-session/temporary-role.guard.ts`）。
+★ `x-kp-child-id` 是 **W1-B 新增的必需项**：它喂给屏障一（"对这个孩子，你是什么身份"）。
+**真装配复验（W1-B，2026-10-15，`tools/_scratch/w1b-live-probe.sh`，真 AppModule ＋ 真 Prisma）**：
+三个头齐全 → **501 `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`**（屏障一已接线，但成员查询端口未落地 ⇒
+fail-closed：此刻**没有人**被放过去）；缺 `x-kp-child-id` → **401**；无身份头 → **401**；
+`{action:'redeem', foo:1}` → **501**（★ Guard 在管道**之前**，所以屏障一的 501 会盖住管道的 400 ——
+成员查询落地后这条会回到 400；这是顺序使然，不是管道坏了）。
+启动日志含 `Mapped {/approvals/:id/decide, POST}` 与 `数据库已连接`。
 
 ---
 
@@ -641,8 +687,8 @@ model InviteCode {
 | 9.18 | PIN 连错 5 次 | 锁定 15 分钟 |
 | 9.19 | `DeviceSession` 到期 | 角色回落 `child` |
 | 9.20 | 撤回同意（`GuardianConsent`） | 全链路写入停止，导出可下载 |
-| 9.21 | 非成员访问 | 403 MEMBER_NOT_FOUND |
-| 9.22 | 成员级 `restrictions` 试图放宽矩阵 `DENY` | 被忽略，仍为 DENY（屏障三方向性） |
+| 9.21 | 非成员访问 | 403 MEMBER_NOT_FOUND（✅ W1-B 已有真 HTTP 用例：`membership-http.test.ts` 组 A） |
+| 9.22 | 成员级 `restrictions` 试图放宽矩阵 `DENY` | 被忽略，仍为 DENY（屏障三方向性）（✅ W1-B：内核**穷举** 25×2×6×5 ＋ HTTP 用例） |
 | 9.23 | 通知发送失败 | 账本已提交不受影响（事务边界） |
 | 9.24 | 孩子自助打卡 | `source=child_self`，`subtitle` **不含**"家长"（A4） |
 | 9.25 | 家长建 `redeem` 请求并带 `autoApprove: true` | 直接 `approved` ＋ 生成流水；`decidedByUserId == requesterUserId`；审计 `approval.self_approved` |

@@ -16,10 +16,15 @@
  *   `02` §3 屏障二（DENY → 403 ／ REQUIRE_APPROVAL → 转审批 ／ ALLOW → 放行）
  *   ＋ `02` §2（`viewer` 一律 DENY）。
  *
- * ── ⚠️ 诚实标注（不粉饰，两件事分开记）────────────────────────────────────
- *   本文件里的 actor **仍来自临时头**（`x-kp-role`）—— 屏障二本身是真的，
- *   但它保护的"角色"尚未由服务端确立（那要等 W1-C 的 `DeviceSession`）。
- *   即：**屏障二是真的，「我是谁」目前还是假的** —— 不要读成"权限已就绪"。
+ * ── ⚠️ 诚实标注（不粉饰，三件事分开记）────────────────────────────────────
+ *   ① 本文件里的 actor **仍来自临时头**（`x-kp-role` / `x-kp-user-id` / `x-kp-child-id`）——
+ *      屏障二本身是真的，但它保护的"角色"尚未由服务端确立（那要等 W1-C 的 `DeviceSession`）。
+ *      即：**屏障二是真的，「我是谁」目前还是假的** —— 不要读成"权限已就绪"。
+ *   ② W1-B 起探针链上**多了屏障一**（`MembershipGuard`）：资格判定也是真的，
+ *      但成员位来自**内存替身**（真 Prisma 查询属 W2）。
+ *   ③ 于是 `viewer` 在本文件所测的链上**永远到不了屏障二**（他不是任何孩子的成员位）——
+ *      "viewer ⇒ DENY" 这条判据的 HTTP 形态因此变成 `MEMBER_NOT_FOUND`，
+ *      而矩阵层面的那一条仍由 `permission-matrix.test.ts` 的纯函数用例钉着。
  */
 import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
@@ -31,13 +36,45 @@ import { applyGlobalPipes } from '../src/app.setup'
 import { ApprovalsModule } from '../src/approvals/approvals.module'
 import { PERMISSION_MATRIX } from '../src/contracts/permission-matrix'
 import { TemporaryRoleHeaderGuard } from '../src/device-session/temporary-role.guard'
+import type { MembershipLookupRow } from '../src/membership/membership.gate'
+import { MembershipGuard } from '../src/membership/membership.guard'
+import { MembershipModule } from '../src/membership/membership.module'
+import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 import { PermissionsGuard } from '../src/permissions/permissions.guard'
 import { PermissionsModule } from '../src/permissions/permissions.module'
 import { RequireAction } from '../src/permissions/require-action.decorator'
 
-const GUARDIAN = { 'x-kp-role': 'guardian', 'x-kp-user-id': 'u-dad' }
-const CHILD = { 'x-kp-role': 'child', 'x-kp-user-id': 'u-kid' }
-const VIEWER = { 'x-kp-role': 'viewer', 'x-kp-user-id': 'u-guest' }
+/**
+ * 身份三件套（W1-B 起第三个头必需）：谁 ＋ 什么角色 ＋ **对哪个孩子**。
+ * 屏障一要拿 childId 去问"这个人跟这个孩子有没有关系"，缺它 ⇒ 401（见临时身份 Guard）。
+ */
+const CHILD_ID = 'child-1'
+
+function identity(role: string, userId: string): Record<string, string> {
+  return { 'x-kp-role': role, 'x-kp-user-id': userId, 'x-kp-child-id': CHILD_ID }
+}
+
+const GUARDIAN = identity('guardian', 'u-dad')
+const CHILD = identity('child', 'u-kid')
+const VIEWER = identity('viewer', 'u-guest')
+
+/**
+ * 成员替身（W1-B）：探针链上现在有三道屏障，屏障一的端口必须喂进来 ——
+ * 否则默认实现（501）会把**所有**请求挡在屏障二之前，本文件的断言就全都变成在测屏障一。
+ * ★ 刻意**没有** `u-guest`（viewer）：他不是任何孩子的成员位 —— 于是 viewer 到不了屏障二，
+ *   这是「屏障一先于屏障二」的**设计后果**，不是覆盖丢失（见下方各组的说明）。
+ */
+function makeMembershipFake(): MembershipPort {
+  const members: MembershipLookupRow[] = [
+    { childId: CHILD_ID, userId: 'u-dad', role: 'guardian', status: 'active', restrictions: {} },
+    { childId: CHILD_ID, userId: 'u-kid', role: 'child', status: 'active', restrictions: {} }
+  ]
+  return {
+    async findMembership(childId, userId) {
+      return members.find((m) => m.childId === childId && m.userId === userId) ?? null
+    }
+  }
+}
 
 /**
  * 探针控制器：用**真装饰器 + 真 Guard** 把几种判定各钉一个端点。
@@ -45,7 +82,9 @@ const VIEWER = { 'x-kp-role': 'viewer', 'x-kp-user-id': 'u-guest' }
  * `review_approvals` 两个，覆盖不到 `REQUIRE_APPROVAL` 与"漏标"这两条分支。
  */
 @Controller('probe')
-@UseGuards(TemporaryRoleHeaderGuard, PermissionsGuard)
+// ★ 守卫链与实际业务端点（`/approvals`）**完全一致**：身份 → 屏障一 → 屏障二/三。
+//   若这里少挂一道，本文件证明的就不是线上那条链（那正是"看起来在测权限"的失败形态）。
+@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)
 class ProbeController {
   /** 矩阵 `view_child_points`：两种角色都 ALLOW。 */
   @Get('allow')
@@ -76,7 +115,7 @@ class ProbeController {
 }
 
 @Module({
-  imports: [PermissionsModule, ApprovalsModule],
+  imports: [PermissionsModule, ApprovalsModule, MembershipModule],
   controllers: [ProbeController],
   providers: [TemporaryRoleHeaderGuard]
 })
@@ -112,7 +151,11 @@ let app!: INestApplication
 let url = ''
 
 before(async () => {
-  const moduleRef = await Test.createTestingModule({ imports: [GuardProbeModule] }).compile()
+  const moduleRef = await Test.createTestingModule({ imports: [GuardProbeModule] })
+    // 成员替身：屏障一的端口（不注入 ⇒ 501，整条链在屏障一就断了）
+    .overrideProvider(MEMBERSHIP_REPOSITORY)
+    .useValue(makeMembershipFake())
+    .compile()
   app = moduleRef.createNestApplication()
   applyGlobalPipes(app) // 与 main.ts 同一函数：测的是**真装配**，不是测试自己搭的
   await app.listen(0, '127.0.0.1')
@@ -149,10 +192,14 @@ describe('组 A：矩阵判定（02 §3 屏障二）', () => {
     assert.equal(r.body.reached, 'deny-for-child')
   })
 
-  it('viewer：矩阵里**没有这一列** ⇒ 一律 403（fail-closed，D6 裁定）', async () => {
+  it('viewer ⇒ 403 MEMBER_NOT_FOUND（★ 屏障一先拦：他不是任何孩子的成员位）', async () => {
     const r = await send(url, '/probe/allow', { headers: VIEWER })
     assert.equal(r.status, 403, 'viewer 竟能通过 —— 只读角色退化成了可写角色')
-    assert.equal(r.body.code, 'FORBIDDEN')
+    // ★ 行为变更（W1-B）：`viewer` 不是合法 `MemberRole`（只有 guardian / child），
+    //   所以他**过不了屏障一** —— 403 的码是 MEMBER_NOT_FOUND，而不是屏障二的 FORBIDDEN。
+    //   "viewer 在矩阵里无列 ⇒ 一律 DENY" 这条判据仍由 `permission-matrix.test.ts`
+    //   的纯函数穷举钉着（那里不经 HTTP，不受屏障一影响）；两处各钉各的，不要互为证据。
+    assert.equal(r.body.code, 'MEMBER_NOT_FOUND')
   })
 })
 
@@ -167,12 +214,22 @@ describe('组 B：fail-closed 四处', () => {
   it('漏标的端点对**任何**角色都拒绝（含 guardian —— 不是"只拦孩子"）', async () => {
     for (const [name, headers] of [
       ['guardian', GUARDIAN],
-      ['child', CHILD],
-      ['viewer', VIEWER]
+      ['child', CHILD]
     ] as const) {
       const r = await send(url, '/probe/undeclared', { headers })
       assert.equal(r.status, 403, `${name} 通过了漏标端点`)
+      assert.equal(
+        r.body.code,
+        'NO_ACTION_DECLARED',
+        `${name} 被**别的理由**拒了 —— 屏障二的漏标分支没生效（403 来自别处时这条用例会假绿）`
+      )
     }
+    // ★ viewer 到不了这条分支：他在**屏障一**就被拦下（不是任何孩子的成员位）。
+    //   这是「屏障一先于屏障二」的设计后果（02 §3），不是覆盖丢失 ——
+    //   顺序本身由 `membership-http.test.ts` 组 A 的专门用例钉着。
+    const viewer = await send(url, '/probe/undeclared', { headers: VIEWER })
+    assert.equal(viewer.status, 403)
+    assert.equal(viewer.body.code, 'MEMBER_NOT_FOUND')
   })
 
   it('REQUIRE_APPROVAL（child + add_wish）⇒ 403 APPROVAL_REQUIRED，**不静默放行**', async () => {
@@ -222,14 +279,14 @@ describe('组 C：业务端点 /approvals 的屏障二', () => {
     assert.equal(r.body.code, 'FORBIDDEN')
   })
 
-  it('viewer 提出申请 ⇒ 403（viewer 无列 ⇒ 全 DENY）', async () => {
+  it('viewer 提出申请 ⇒ 403 MEMBER_NOT_FOUND（屏障一先拦；他不是任何孩子的成员位）', async () => {
     const r = await send(url, '/approvals', {
       method: 'POST',
       body: { action: 'redeem' },
       headers: VIEWER
     })
     assert.equal(r.status, 403)
-    assert.equal(r.body.code, 'FORBIDDEN')
+    assert.equal(r.body.code, 'MEMBER_NOT_FOUND')
   })
 })
 

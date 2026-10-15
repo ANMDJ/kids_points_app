@@ -297,6 +297,7 @@
    ② 身份是**临时口径**（`x-kp-role` / `x-kp-user-id` 头；缺即 401、取值白名单、`NODE_ENV=production` → 503），
    W1 的 `DeviceSession` 到位后必须删掉 `src/device-session/temporary-role.guard.ts`。
    **下一步**：W1 剩余两段（**身份** ＝ `DeviceSession`；**屏障一／三** ＝ 成员资格门与收紧接线）→ W2（账本内核 ＋ `ApprovalsPort` 的 Prisma 实现）。
+   > ★ 后续：其中「**屏障一／三**」已由 **W1-B（2026-10-15）** 完成 —— 见下面第 17 条。
 
 16. ~~**权限矩阵没有调用者（屏障二只是注释）**~~ → ✅ **已落地（2026-10-14，阶段 W1-A）**：
    `PERMISSION_MATRIX` 此前**没有任何请求路径会查它**（`resolveVerdict` 只被单测调用）——
@@ -327,10 +328,64 @@
    > （于是"点名"断言失败；那也是 `run-tests.mjs`「编译不过就拒绝跑测试」那道守卫真生效的证据）；
    > ② 组 D 的手法是**运行期改矩阵对象**（`as const` 只管类型层）—— 这是「矩阵之外不得有第二份判定」
    > 唯一能被证伪的方式。
-   **仍未落地（不粉饰，与"已完成"分开记）**：① **屏障一**（成员资格门 `MembershipModule`）无调用者；
-   ② **屏障三**（`member-restrictions.ts` 的 `stricter()`）**未接入任何请求路径**；
-   ③ actor 仍是**临时头**（`x-kp-role`）—— **屏障二是真的，「我是谁」目前还是假的**。
-   **下一步**：W1-B（屏障三接线 ＋ 成员资格门）→ W1-C（`DeviceSession`，随后删临时 Guard）。
+   **仍未落地（不粉饰，与"已完成"分开记）**：① ~~**屏障一**（成员资格门 `MembershipModule`）无调用者~~
+   ／ ② ~~**屏障三**（`member-restrictions.ts` 的 `stricter()`）**未接入任何请求路径**~~
+   → 两条均由 **W1-B 接线**（见下面第 17 条）；③ actor 仍是**临时头**（`x-kp-role`）——
+   **屏障二是真的，「我是谁」目前还是假的**（W1-C 处理）。
+   **下一步**：~~W1-B（屏障三接线 ＋ 成员资格门）~~ → ✅ 见第 17 条；下一段是 **W1-C**（`DeviceSession`，随后删临时 Guard）。
+
+17. ~~**屏障一（成员资格门）无调用者 ＋ `stricter()` 未接进请求路径**~~ → ✅ **已落地（2026-10-15，阶段 W1-B）**：
+   三道屏障**都接在同一条请求路径上**了。此前 `MembershipModule` 是**空壳**（全仓零调用者）、
+   `stricter()` **没有任何调用者** —— 也就是："这个人跟这个孩子有没有关系"从来没人问过
+   （只要角色头合法，就能对**任意** childId 走矩阵），而家长为单个孩子配的限制**配了等于没配**
+   且**没人看得见**。
+   **落地物**：`backend/src/membership/` 三件套（`membership.gate.ts` 纯函数判定内核 ＋
+   `membership.repository.ts` 端口/令牌/默认 501 ＋ `membership.guard.ts` 守卫）
+   ＋ `contracts/member-restrictions.ts` 新增 `tightenVerdict()`（消费 `stricter()`，
+   即**屏障三的判定核**，且**只能更严**在代码形状上就成立）
+   ＋ `permissions.guard.ts` 换成 `tightenVerdict(矩阵判定, member.restrictions, …)`。
+   **守卫链（数组顺序即语义）**：`@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)`
+   —— 身份 → **资格** → **矩阵＋成员级收紧**；`ApprovalsModule` 随之接入 `MembershipModule`。
+   ★ 实测坑：`@UseGuards(类)` 时 Nest 在**宿主模块**上下文里实例化守卫，
+   所以 `MembershipModule` 必须**导出端口令牌**（只导出 Guard 会直接
+   `Nest can't resolve dependencies of the MembershipGuard (?) … Symbol(MEMBERSHIP_REPOSITORY)`）。
+   **两条新的 fail-closed（都可执行断言）**：① `kpMember` 缺失 ⇒ `PermissionsGuard` **抛错（500）**
+   ——"没查" ≠ "查了没有限制"；② 成员位 `restrictions` 形状坏了 ⇒ **500 `INVALID_MEMBER_RESTRICTIONS`**
+   （**数据坏了 ≠ 没权限**）—— D3b 的 `validateRestrictions()` 至此才有了**请求路径上的**调用方。
+   **身份从两个头变三个头**：新增 **`x-kp-child-id`**（屏障一的必要输入；它是 `DeviceSession.childId`
+   的临时替身），缺任一个头 → **401**（缺孩子上下文**绝不**退化成"跳过检查"）。
+   **两条旧断言的行为变更（都改在明处，不是漂移）**：`approvals-http.test.ts` 与
+   `permissions-guard.test.ts` 里 viewer 的 403 码由 `FORBIDDEN` 变为 **`MEMBER_NOT_FOUND`** ——
+   `viewer` 不是任何孩子的成员位，所以他在**屏障一**就被拦下（屏障一先于屏障二，02 §3）；
+   "viewer 在矩阵里无列 ⇒ DENY" 仍由 `permission-matrix.test.ts` 的纯函数穷举钉着。
+   > **实测基线（收口时跑的，非推断）**：`npm run test` → **7 个用例文件 / 98 个用例全通过**
+   > （W1-A 之后是 5 / 68；新增 `membership-gate.test.ts` 8 条、`membership-http.test.ts` 16 条、
+   > `member-restrictions.test.ts` +6 条屏障三内核用例，含 §9.22 的**穷举** 25 动作 × 2 角色 × 6 限制 × 5 金额）；
+   > `npm run ci` → **`CI_EXIT=0`（14 步）**；**六条证伪**（`tools/_scratch/w1b-canfail.mjs`，
+   > 改完即还原、逐条 `sha256` 复原，`ALL PASS`）：① 让"查不到成员位"变成编造一个成员 →
+   > 「非成员 ⇒ 403」**红**；② 让"已移除"不再被拒 → 「removed ⇒ 403」**红**；
+   > ③ 让 `childCannotAddWish` 失效 → 「add_wish 被收紧」**红**；④ `stricter()` 写丢 →
+   > 「§9.22 方向性（穷举）」**红**；⑤ 让裸 `Json` 形状校验失效 → 「形状坏了 ⇒ 500」**红**；
+   > ⑥ 把 childId 写死 → 「childId 真的参与判定」**红**。
+   > **真装配复验（`tools/_scratch/w1b-live-probe.sh`，真 AppModule ＋ 真 Prisma ＋ 真全局管道）**：
+   > 三个头齐全 → **501 `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`**；缺 `x-kp-child-id` → **401**；
+   > 无身份头 → **401**；多余键 → **501**（Guard 在管道之前，屏障一的 501 盖住管道的 400 ——
+   > 成员查询落地后回到 400）；启动日志含 `Mapped {/approvals/:id/decide, POST}` 与 `数据库已连接`。
+   > **证伪的坑又踩了一次（值得记住）**：① 号变异原本写成在 guard 里加 `&& verdict.code !== 'MEMBER_NOT_FOUND'`
+   > —— **编译不过**（它破坏 `verdict` 的类型收窄，DENY 分支没有 `.row`，`tsc` 报 TS2339），
+   > runner 直接拒绝跑测试 ⇒ 表现为"没点名"。**W1-A 已记录过同一条教训**，本轮复现一次，
+   > 于是把该条改成动**判定内核**（能编译、且正是要防的"查不到就跳过"）。
+   **仍未落地（不粉饰，与"已完成"分开记）**：① **成员位仍是端口 + 内存替身**
+   —— 默认实现是 **501**（真装配下**没有人**被放过去，但它也**还没真的查过库**；真 Prisma 适配器属 W2，
+   理由：`MembershipModule` 一注入 `PrismaService`，**无库 CI 会在启动阶段就崩**）；
+   ② **`requireApprovalForBonusOver`（金额阈值）在 HTTP 路径上不生效** —— 金额属 dispatcher 的 payload
+   （02 §6 未落地），有一条用例**把这个现状钉住**；三条限制键**都不**作用于 `request_approval`
+   ⇒ **屏障三在 `/approvals` 上结构性不生效**（HTTP 层用同一套守卫链的探针端点验证）；
+   ③ `POST /approvals/:id/decide` 用的是**请求头里的** childId，**尚未**与审批行自己的 childId
+   做同源校验（要等 `ApprovalRow` 带上它）—— 即跨家庭推进审批这条路径**还没堵**；
+   ④ actor 仍是**临时头**（三个）—— **三道屏障都是真的，「我是谁」目前还是假的**。
+   **下一步**：W1-C（`DeviceSession`：把"我是谁 / 对哪个孩子"由服务端确立，随后删临时 Guard）→
+   W2（账本内核 ＋ `ApprovalsPort` / `MembershipPort` 的 Prisma 实现）。
 
 ### 文档缺陷修正记录
 
@@ -466,16 +521,19 @@ npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真
    再把入口指向空目录 `scripts/__fixtures__/empty-test-dir/`，要求它**退出码非 0**。
    `--test-concurrency=1` 是**刻意**的：共享状态（数据库 / 构建产物）不许并发 —— W2 的库不变量用例必须串行。
 
-> **实测基线（2026-10-14，W1-A 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
+> **实测基线（2026-10-15，W1-B 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
 > `contracts:emit` 输出「已生成 contracts/permission-matrix.json（25 个动作）」且生成物 **`git status` 无 diff** ⇒ 幂等）；
-> `npm run test` → **5 个用例文件 / 68 个用例全部通过**（W1-A 之后；跑的是 `.tmp_test_build/` 里的产物）；
-> `npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
+> `npm run test` → **7 个用例文件 / 98 个用例全部通过**（W1-B 之后；跑的是 `.tmp_test_build/` 里的产物。
+> W1-A 时是 **5 / 68**）；`npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
 > 其附注行**当场复现**了第 ① 条守卫的依据：runner 自己对空目录是「退出码=0，用例数=0」。
-> 屏障二自己的**六条证伪**另跑一处：`node ../tools/_scratch/w1a-canfail.mjs` → **6 条 ALL PASS**
-> （每条都「退出码≠0 ＋ 点名预期用例 ＋ `sha256` 复原」，见上面第 16 条）。
-> 另：**编译不过就不许跑测试**这条守卫在本轮被真实触发过一次 —— 一个"看起来无害"的变异
-> （`if (false && …)`）因破坏类型收窄而报 `TS18048`，runner 直接拒绝执行（这正是我们要的行为：
-> 宁可红在编译，也不要红在"跑了一个不是要上线的产物"）。
+> 各阶段自己的**证伪**另跑两处：`tools/_scratch/w1a-canfail.mjs` → **6 条 ALL PASS**、
+> `tools/_scratch/w1b-canfail.mjs` → **6 条 ALL PASS**（每条都「退出码≠0 ＋ 点名预期用例 ＋ `sha256` 复原」，
+> 见上面第 16／17 条）。
+> 另：**编译不过就不许跑测试**这条守卫**在两轮里各被真实触发过一次** —— W1-A 是一个"看起来无害"的变异
+> （`if (false && …)`）因破坏类型收窄报 `TS18048`；W1-B 是在 guard 的判定分支上加 `&& verdict.code !== …`
+> 破坏了 `verdict` 的类型收窄（`DENY` 分支没有 `.row`）报 `TS2339`。两次 runner 都直接拒绝执行
+> （这正是我们要的行为：宁可红在编译，也不要红在"跑了一个不是要上线的产物"）。
+> ★ 两次的**教训一致**：写证伪变异时**先确认它能编译**，否则"没点名"会被误读成脚本坏了（见第 17 条的记录）。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：
 

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 
 import { TemporaryRoleHeaderGuard } from '../device-session/temporary-role.guard'
+import { MembershipModule } from '../membership/membership.module'
 import { PermissionsModule } from '../permissions/permissions.module'
 import { ApprovalsController } from './approvals.controller'
 import {
@@ -37,14 +38,20 @@ import { ApprovalsService } from './approvals.service'
  *     `approval-policy.ts`；用例见 `test/approvals-http.test.ts`（真 HTTP，非直接调 service）。
  *   · 持久化端口 `ApprovalsPort` 的**默认实现是显式 501** —— 落库 / 账本 / 审计属 W1–W3。
  *     即：**判定已上线，写入未落地**，且未落地这件事有可执行断言钉着。
- *   · 身份是**临时口径**（`x-kp-role` 头，生产 503），W1 换成 DeviceSession。
+ *   · 身份是**临时口径**（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`** 头，生产 503），
+ *     W1 换成 DeviceSession。
+ *   · **W1-B（2026-10-15）**：三道屏障在控制器上串成一条链 ——
+ *     `@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)`
+ *     （身份 → 资格 → 矩阵＋成员级收紧）。默认装配下屏障一的端口是 501 ⇒
+ *     未注入成员替身时**整条路径 fail-closed**（不会"没查就过"）。
  *
  * 验收用例见 02 §9.3 / §9.7 / §9.8 / §9.10 / §9.25–§9.27。
  */
 @Module({
-  // 屏障二由 PermissionsModule 提供（PermissionsGuard）。
-  // ★ 挂载顺序（身份 → 判定）见 approvals.controller.ts 的 @UseGuards。
-  imports: [PermissionsModule],
+  // 屏障一由 MembershipModule 提供（MembershipGuard）—— 资格：这个人跟这个孩子有没有关系。
+  // 屏障二／三由 PermissionsModule 提供（PermissionsGuard）—— 矩阵 ＋ 成员级收紧。
+  // ★ 挂载顺序（身份 → 资格 → 判定）见 approvals.controller.ts 的 @UseGuards。
+  imports: [MembershipModule, PermissionsModule],
   controllers: [ApprovalsController],
   providers: [
     ApprovalsService,

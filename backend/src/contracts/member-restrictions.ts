@@ -19,18 +19,29 @@
  *   ③ `docs/design/02-rbac-and-approval.md` §3 屏障三的代码块
  * 由 `tools/restrictions-check.mjs` 逐字比对（`npm run restrictions:check`）。
  *
- * ── 方向性约束（02 §3 屏障三，本文件**不实现判定**）──────────────────
+ * ── 方向性约束（02 §3 屏障三）───────────────────────────────────────
  * `restrictions` 只能把矩阵的 `ALLOW` **收紧**为 `REQUIRE_APPROVAL` / `DENY`，
  * **永远不能把 `DENY` 放宽**：最终判定 = `min(矩阵判定, 成员级限制)`，
  * 严苛度 `DENY > REQUIRE_APPROVAL > ALLOW`（`contracts/permission-matrix.ts` 的 `stricter()`）。
- * ⚠️ 本阶段（D-b）只**定形**：写入/读取路径尚未开工（全仓 `restrictions` 引用 0 处），
- *    所以本文件此刻**还没有被任何 HTTP 路径调用** —— 别把它的存在读成"屏障三已验收"。
+ * 收紧的**实现**就是下面的 `tightenVerdict()`（W1-B 加的）。
+ *
+ * ── 本文件的两个阶段（都把话写清楚，免得被读成"已验收"）────────────────
+ *   · **D-b（2026-10-13）＝ 定形**：`RESTRICTION_KEYS` ＋ `validateRestrictions()`。
+ *     当时全仓 `restrictions` 引用 **0 处** —— 本文件没有被任何请求路径调用。
+ *   · **W1-B（2026-10-15）＝ 判定 ＋ 接线**：新增 `tightenVerdict()`（屏障三的判定核），
+ *     并由 `PermissionsGuard` 在请求路径上调用；`validateRestrictions()` 也终于有了
+ *     **请求路径上的调用方**（`MembershipGuard` 读成员位时校验裸 `Json`，不合格 → 500）。
+ *   ⚠️ **仍未落地**：`requireApprovalForBonusOver` 需要**金额**才判得动，而当前唯一调用方
+ *     拿不到金额（它属 dispatcher 的 payload，`02` §6 尚未落地）—— 该键此刻在 HTTP 路径上
+ *     **不会生效**，这一点有专门的用例钉着（不是"假装在拦"）。
  */
 
 import 'reflect-metadata'
 
 import { plainToInstance } from 'class-transformer'
 import { IsBoolean, IsInt, IsOptional, Min, validateSync } from 'class-validator'
+
+import { stricter, type ActionType, type Role, type Verdict } from './permission-matrix'
 
 /**
  * 允许出现的键 —— **可执行的形状清单**（闸门比对的就是它）。
@@ -114,4 +125,82 @@ export function validateRestrictions(value: unknown): string[] {
   return errors.flatMap((e) =>
     Object.entries(e.constraints ?? {}).map(([rule, message]) => `${e.property}：${message}（${rule}）`)
   )
+}
+
+/**
+ * 屏障三的输入：**被判定的动作** ＋ 会话角色（＋ 金额类限制需要的业务参数）。
+ */
+export interface TighteningInput {
+  action: ActionType
+  /**
+   * 会话角色（`02` §7 的角色模式）。
+   * ★ 与 `Actor.role` **同类型**（含 `'viewer'`）：收紧规则全部挂在 `child` 上，
+   *   而 `viewer` 在矩阵里已一律 `DENY`（它也不可能是任何孩子的成员位 —— `MemberRole`
+   *   只有 guardian / child）—— 于是"给它收紧"这件事不存在，**不成立**比**没有**更准确。
+   *   ⚠️ 若把它窄化成 `Role`，调用方就得在 Guard 里加一次**无意义的类型断言** ——
+   *      那种断言正是将来 `viewer` 真的出现时会被静默骗过去的东西。
+   */
+  role: Role | 'viewer'
+  /** 申请金额（加分：`request_points_bonus`）。拿不到就不判 —— 见 `tightenVerdict()` 的说明。 */
+  amount?: number
+}
+
+/**
+ * 屏障三：成员级收紧的**判定核**（`02` §3 / §9.22）。
+ *
+ *     最终判定 = min(矩阵判定, 成员级限制)      // 严苛度 DENY > REQUIRE_APPROVAL > ALLOW
+ *
+ * ── 方向性由 `stricter()` **结构性**保证 ─────────────────────────────────
+ *   返回值恒为 `stricter(矩阵判定, 限制判定)`，而限制判定从 `ALLOW`（= 不额外收紧）出发，
+ *   之后每次赋值都经由 `stricter(...)` —— 于是「限制**只能更严**」不是一句约定，
+ *   而是这段代码的形状：`matrixVerdict = 'DENY'` 时返回值**必然**是 `DENY`（§9.22）。
+ *   写两句 `memberVerdict = 'X'` 而不用 `stricter` 也能过用例，但那把方向性押在
+ *   "三条规则恰好作用于三个不同的动作"这个**当下成立、将来会变**的巧合上。
+ *
+ * ── 三条规则的适用范围（来自键名本身，不是凭空约定）──────────────────────
+ *   `childCannotUndoCheckIn`  child ＋ `undo_check_in`        ⇒ DENY
+ *       ⚠️ 对**当前**矩阵这**不改变结果**（`undo_check_in.child` 已是 `DENY`）。
+ *          它防的是将来矩阵被放宽 —— 那时这条成员级约定仍然拦得住（这正是 §9.22 的意义）。
+ *   `childCannotAddWish`      child ＋ `add_wish`             ⇒ DENY
+ *       （矩阵里是 `REQUIRE_APPROVAL` ⇒ 这是**真的**收紧：从"要家长点头"变成"不许"）
+ *   `requireApprovalForBonusOver: N`
+ *                             child ＋ `request_points_bonus` ＋ 金额 ⇒ REQUIRE_APPROVAL
+ *       ⚠️ **需要金额**。当前唯一调用方（`PermissionsGuard`）拿不到金额 ⇒ 该键在 HTTP 路径上
+ *          **不生效**。它真正的接入点是 `02` §6 的 dispatcher（把孩子 `adjust_points(delta>0)`
+ *          归一化为 `request_points_bonus` 时会带上金额），由 dispatcher 调本函数并传 `amount`。
+ *          `membership-http.test.ts` 有一条用例**把这个现状钉住**（免得被误读成"已经在拦了"）。
+ *
+ * ★ 为什么取**绝对值**：`amount > N` 在收到负数时会**静默不收紧**（fail-open）——
+ *   而 `02` §3 / Q15 讲的是"超过 N 分"（写作 ±50，指的是**幅度**）。
+ *   用 `Math.abs` 是这里唯一 fail-closed 的写法。
+ */
+export function tightenVerdict(
+  matrixVerdict: Verdict,
+  restrictions: ChildMemberRestrictions,
+  input: TighteningInput
+): Verdict {
+  // 起步 = 不额外收紧；此后**只经由 `stricter()`** 变严。
+  let memberVerdict: Verdict = 'ALLOW'
+
+  if (input.role === 'child') {
+    if (input.action === 'undo_check_in' && restrictions.childCannotUndoCheckIn === true) {
+      memberVerdict = stricter(memberVerdict, 'DENY')
+    }
+
+    if (input.action === 'add_wish' && restrictions.childCannotAddWish === true) {
+      memberVerdict = stricter(memberVerdict, 'DENY')
+    }
+
+    const threshold = restrictions.requireApprovalForBonusOver
+    if (
+      input.action === 'request_points_bonus' &&
+      threshold !== undefined &&
+      input.amount !== undefined &&
+      Math.abs(input.amount) > threshold
+    ) {
+      memberVerdict = stricter(memberVerdict, 'REQUIRE_APPROVAL')
+    }
+  }
+
+  return stricter(matrixVerdict, memberVerdict)
 }

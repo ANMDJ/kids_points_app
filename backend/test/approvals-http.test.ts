@@ -34,11 +34,42 @@ import {
 import { ApprovalsModule } from '../src/approvals/approvals.module'
 import { AUDIT_ACTION_SELF_APPROVED, SELF_APPROVAL_NOT_ALLOWED } from '../src/contracts/approval-policy'
 import { PERMISSION_MATRIX } from '../src/contracts/permission-matrix'
+import type { MembershipLookupRow } from '../src/membership/membership.gate'
+import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 
-const GUARDIAN = { 'x-kp-role': 'guardian', 'x-kp-user-id': 'u-dad' }
-const OTHER_GUARDIAN = { 'x-kp-role': 'guardian', 'x-kp-user-id': 'u-mom' }
-const CHILD = { 'x-kp-role': 'child', 'x-kp-user-id': 'u-kid' }
-const VIEWER = { 'x-kp-role': 'viewer', 'x-kp-user-id': 'u-guest' }
+/**
+ * 孩子上下文（W1-B）：身份头从两个变三个。
+ * 屏障一（成员资格门）问的是 `ChildMember(childId, userId)` —— 没有它，这道门问不出问题，
+ * 所以临时身份 Guard 现在**强制要求** `x-kp-child-id`（缺 ⇒ 401，见其文件头）。
+ */
+const CHILD_ID = 'child-1'
+
+function identity(role: string, userId: string): Record<string, string> {
+  return { 'x-kp-role': role, 'x-kp-user-id': userId, 'x-kp-child-id': CHILD_ID }
+}
+
+const GUARDIAN = identity('guardian', 'u-dad')
+const OTHER_GUARDIAN = identity('guardian', 'u-mom')
+const CHILD = identity('child', 'u-kid')
+const VIEWER = identity('viewer', 'u-guest')
+
+/**
+ * 成员替身（W1-B）：**每一组**都要注入它 —— 否则屏障一在默认装配下返回 501，
+ * 组 A 那组"审批写入未落地 ⇒ 501"的断言就会变成在测**屏障一**，而不是在测审批端口。
+ * ★ 刻意**没有** `u-guest`（viewer）：他不是任何孩子的成员位 —— 这正是 §9.21 的场景。
+ */
+function makeMembershipFake(): MembershipPort {
+  const members: MembershipLookupRow[] = [
+    { childId: CHILD_ID, userId: 'u-dad', role: 'guardian', status: 'active', restrictions: {} },
+    { childId: CHILD_ID, userId: 'u-mom', role: 'guardian', status: 'active', restrictions: {} },
+    { childId: CHILD_ID, userId: 'u-kid', role: 'child', status: 'active', restrictions: {} }
+  ]
+  return {
+    async findMembership(childId, userId) {
+      return members.find((m) => m.childId === childId && m.userId === userId) ?? null
+    }
+  }
+}
 
 interface PortCall {
   method: keyof ApprovalsPort
@@ -132,9 +163,15 @@ async function send(
   return { status: res.status, body }
 }
 
-/** 起一个只装 `ApprovalsModule` 的真服务（`useValue` 可替换仓储；不传 = 默认装配）。 */
+/**
+ * 起一个只装 `ApprovalsModule` 的真服务（`useValue` 可替换仓储；不传 = 默认装配）。
+ * ★ W1-B 起**恒**注入成员替身：`POST /approvals` 的守卫链是「身份 → 屏障一 → 屏障二/三」，
+ *   不注入成员位就停在屏障一的 501 上（那由 `membership-http.test.ts` 组 C 专门测）。
+ */
 async function startApp(repository?: ApprovalsPort): Promise<{ app: INestApplication; url: string }> {
   const builder = Test.createTestingModule({ imports: [ApprovalsModule] })
+    .overrideProvider(MEMBERSHIP_REPOSITORY)
+    .useValue(makeMembershipFake())
   if (repository !== undefined) {
     builder.overrideProvider(APPROVALS_REPOSITORY).useValue(repository)
   }
@@ -295,18 +332,20 @@ describe('判定（§4.5 六条硬约束 / §9.25–§9.27）', () => {
     assert.equal(r.body.code, SELF_APPROVAL_NOT_ALLOWED)
   })
 
-  // ★ 行为变更（W1-A，2026-10-14）：viewer 现在被**屏障二**（`PermissionsGuard`）在更外层
-  //   拦下 → **403 FORBIDDEN**，**不再**走到 policy 层（那里原本会给 400 SELF_APPROVAL_NOT_ALLOWED）。
-  //   这是**更强**的保证（拦得更早），**不是覆盖丢失**：policy 层对 viewer 的 fail-closed 仍由
-  //   `approval-policy.test.ts`（不经 HTTP 的纯函数用例）单独钉着 —— 两层各测各的，
-  //   不要把其中一个当成另一个的证据。
-  it('fail-closed：viewer 提任何请求 → 403（viewer 在矩阵里无列，屏障二在入口就拒绝）', async () => {
+  // ★ 行为变更（W1-B，2026-10-15）：viewer 现在被**屏障一**（`MembershipGuard`）拦下 ——
+  //   `viewer` 不是任何孩子的成员位（`MemberRole` 只有 guardian / child），
+  //   所以 403 的码从 `FORBIDDEN` 变成 **`MEMBER_NOT_FOUND`**。
+  //   这不是"覆盖丢失"，而是**顺序**的设计后果（屏障一先于屏障二，`02` §3）：
+  //   · 「viewer 在矩阵里无列 ⇒ 一律 DENY」仍由 `permission-matrix.test.ts` 的纯函数穷举钉着；
+  //   · 「屏障一先于屏障二」由 `membership-http.test.ts` 组 A 的**顺序**用例钉着。
+  //   ★ W1-A 时同一条用例的码是 FORBIDDEN（当时还没有屏障一）—— 两次改动都有意为之，不是漂移。
+  it('fail-closed：viewer 提任何请求 → 403 MEMBER_NOT_FOUND（他不是任何孩子的成员位）', async () => {
     const r = await send(url, '/approvals', {
       body: { action: 'redeem', autoApprove: true },
       headers: VIEWER
     })
     assert.equal(r.status, 403)
-    assert.equal(r.body.code, 'FORBIDDEN')
+    assert.equal(r.body.code, 'MEMBER_NOT_FOUND')
   })
 })
 
