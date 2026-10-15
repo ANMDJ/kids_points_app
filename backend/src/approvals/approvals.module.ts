@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 
-import { TemporaryRoleHeaderGuard } from '../device-session/temporary-role.guard'
+import { DeviceSessionGuard } from '../device-session/device-session.guard'
+import { DeviceSessionModule } from '../device-session/device-session.module'
 import { MembershipModule } from '../membership/membership.module'
 import { PermissionsModule } from '../permissions/permissions.module'
 import { ApprovalsController } from './approvals.controller'
@@ -38,24 +39,34 @@ import { ApprovalsService } from './approvals.service'
  *     `approval-policy.ts`；用例见 `test/approvals-http.test.ts`（真 HTTP，非直接调 service）。
  *   · 持久化端口 `ApprovalsPort` 的**默认实现是显式 501** —— 落库 / 账本 / 审计属 W1–W3。
  *     即：**判定已上线，写入未落地**，且未落地这件事有可执行断言钉着。
- *   · 身份是**临时口径**（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`** 头，生产 503），
- *     W1 换成 DeviceSession。
+ *   · 身份是**服务端确立的**（W1-C，2026-10-15）：`DeviceSessionGuard` 按
+ *     `x-kp-device-id` ＋ `x-kp-child-id` 查会话 ⇒ 角色/ userId **由会话行给出**
+ *     （客户端自报的 `x-kp-role` / `x-kp-user-id` 已废弃、不被读取）。生产 503
+ *     （设备凭据仍可伪造，见 guard ④）。
  *   · **W1-B（2026-10-15）**：三道屏障在控制器上串成一条链 ——
- *     `@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)`
+ *     `@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)`
  *     （身份 → 资格 → 矩阵＋成员级收紧）。默认装配下屏障一的端口是 501 ⇒
  *     未注入成员替身时**整条路径 fail-closed**（不会"没查就过"）。
  *
  * 验收用例见 02 §9.3 / §9.7 / §9.8 / §9.10 / §9.25–§9.27。
  */
 @Module({
+  // 身份由 DeviceSessionModule 提供（DeviceSessionGuard）—— 这台设备是谁、什么角色。
   // 屏障一由 MembershipModule 提供（MembershipGuard）—— 资格：这个人跟这个孩子有没有关系。
   // 屏障二／三由 PermissionsModule 提供（PermissionsGuard）—— 矩阵 ＋ 成员级收紧。
   // ★ 挂载顺序（身份 → 资格 → 判定）见 approvals.controller.ts 的 @UseGuards。
-  imports: [MembershipModule, PermissionsModule],
+  // ★ 三个模块**都要** import：宿主模块（本文件）负责实例化控制器上的 Guard，
+  //   而 Guard 的依赖由**宿主模块**的注入器解析 —— 光导入 Guard 类、不导入提供它的模块，
+  //   启动时会报 `Nest can't resolve dependencies of the DeviceSessionGuard (?)`。
+  imports: [DeviceSessionModule, MembershipModule, PermissionsModule],
   controllers: [ApprovalsController],
   providers: [
     ApprovalsService,
-    TemporaryRoleHeaderGuard,
+    // ★ 控制器上的 Guard 在**本模块**的注入器里实例化 —— 它的依赖（端口令牌）
+    //   由上面三个模块的 `exports` 提供。漏 export 就崩在启动：
+    //   `Nest can't resolve dependencies of the DeviceSessionGuard (?)`
+    //   （W1-B 在 MembershipModule 上实测过；W1-C 给 DeviceSessionModule 补齐了 exports）。
+    DeviceSessionGuard,
     // ★ 默认实现 = 一律 501（见 approvals.repository.ts 的说明）。
     //   W1/W2 落 Prisma 实现时**只换这一行**，service / controller / 用例都不动。
     { provide: APPROVALS_REPOSITORY, useClass: NotImplementedApprovalsRepository }

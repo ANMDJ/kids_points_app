@@ -37,7 +37,7 @@ import { MEMBERSHIP_REPOSITORY, type MembershipPort } from './membership.reposit
  *   来自成员位（`ChildMember.role`）；先查矩阵再查资格，非成员就会先收到
  *   "角色不被允许"这种**含义错误**的 403。
  *   Nest 的 Guard 顺序：全局 → 控制器 → **同一层级按数组顺序**，故控制器上写
- *   `@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)`。
+ *   `@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)`。
  *
  * ⚠️ 诚实标注（与"已完成"分开记）：本 Guard **接线是真的、判定是真的、403 是真的**，
  *   但**默认装配下读不到库** —— 端口默认实现是 501（见 repository 文件头）。

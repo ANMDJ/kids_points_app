@@ -26,7 +26,7 @@ import { REQUIRED_ACTION_KEY } from './require-action.decorator'
  * ── 五处 fail-closed（每一处都对应一种"看起来在做安全"的失败）────────────
  *   ① **漏标 `@RequireAction` ⇒ 403**，不是放行 —— 「不知道该怎么判」必须落在拒绝一侧；
  *   ② **`kpActor` 缺失 ⇒ 抛错（500）**，不是默认角色 —— 默认 `guardian` 是提权，
- *      默认 `child` 是另一种撒谎（见 temporary-role.guard.ts）；这通常意味着
+ *      默认 `child` 是另一种撒谎（见 device-session.guard.ts）；这通常意味着
  *      **Guard 顺序颠倒**（见下方"顺序"）；
  *   ③ **`viewer` / 未知动作 ⇒ `DENY`** —— 由 `resolveVerdict()` 保证（D6 裁定）；
  *   ④ **`REQUIRE_APPROVAL` 默认也是拒绝（403 `APPROVAL_REQUIRED`）** —— 见下方说明。
@@ -57,7 +57,7 @@ import { REQUIRED_ACTION_KEY } from './require-action.decorator'
  *   `kpActor` 必然还是空的（② 会立刻抛错）。
  *   正确写法是同一层级内按数组顺序（三道屏障的顺序，`02` §3）：
  *
- *       @UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)
+ *       @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
  *
  *   `permissions-guard.test.ts` 里有一条用例覆盖"身份未就绪即响亮失败"，
  *   免得将来有人把它改成全局注册后**静默**退化成 500 噪音。

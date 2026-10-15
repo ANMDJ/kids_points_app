@@ -8,7 +8,7 @@
 | 文档版本 | **v1.0** |
 | 编写日期 | 2026-10-14 |
 | 文档状态 | 初版定稿（随 W0–W9 阶段推进增量修订） |
-| 适用阶段 | W0 已完成 → W1–W9 待执行（见 §11） |
+| 适用阶段 | W0 已完成 → **W1 已落地（W1-A 矩阵 / W1-B 屏障一・三 / W1-C 身份，2026-10-14 ~ 15）** → W2–W9 待执行（见 §11） |
 | 读者 | 产品负责人、双端前端（Flutter / Taro）、后端（NestJS）、测试、法务与合规、运维 |
 
 ### 0.1 本文与设计文档的关系（**权威性声明**）
@@ -641,7 +641,7 @@ User（自然人）
 | 阶段 | 内容 | AI 辅助工期 | 验收门 |
 |---|---|---|---|
 | **W0** | 环境与骨架 | 0.5 w | 环境一键起；schema 迁移成功且可回滚；**CI 诚实性探针通过**（注入必失败项 → 退出码 1） |
-| **W1** | 身份与权限 | 0.5 w | 权限矩阵落地；Guard 单点消费 |
+| **W1** | 身份与权限 | 0.5 w | 权限矩阵落地；Guard 单点消费 **✅ 四件都已接线：身份 `DeviceSessionGuard`（角色由服务端给出，W1-C）＋ 屏障一／二／三（W1-A/B）；**但三个端口（`Approvals` / `Membership` / `DeviceSession`）的持久化实现属 W2**
 | **W2** | 账本内核 | 0.8 w | **I1–I6 全部有自动化测试且全绿**；`REVOKE UPDATE/DELETE` 生效 |
 | **W3** | 审批流 | 0.5 w | 5 个终态全部可达；`autoReason` 5 种均可复现；双击"同意"账本只扣一次 |
 | **W4** | 双端接入 | 0.8 w | 双端同一用例结论一致；断网/超时/401/403/202 均有可读 UI |
@@ -739,7 +739,7 @@ User（自然人）
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
 | 跨语言契约 | ✅ `contracts/permission-matrix.json`（25 动作，由 TS 生成） | `contracts:emit` |
-| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径**：`approval-policy.ts` ＋ `test/approval-policy.test.ts`（10 用例）＋ `test/approvals-http.test.ts`（26 条真 HTTP）；**落库/账本/审计仍未落地（默认 501）** | `npm run test` → 4 个用例文件 / **52 用例全通过**；四条证伪均变红并点名 |
+| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径**：`approval-policy.ts` ＋ `test/approval-policy.test.ts`（10 用例）＋ `test/approvals-http.test.ts`（27 条真 HTTP）；**落库/账本/审计仍未落地（默认 501）** | `npm run test` → 9 个用例文件 / **144 用例全通过**（W1-C 收口时的全套基线；四条证伪均变红并点名） |
 | 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
 | 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **14 步全绿，`CI_EXIT=0`** |
 | 首启空态 + 演示数据守卫 | ✅（E18 收口） | release/profile 构建入口被树摇 |
@@ -749,7 +749,7 @@ User（自然人）
 | 项 | 状态 | 影响 |
 |---|---|---|
 | **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），但**绝大多数端点尚不存在** | W1–W3、W6 的主体工作量 |
-| **RBAC 三道屏障** | ✅ **三道都在请求路径上**（2026-10-15 W1-B）：屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧）。⚠️ 但**成员位来自端口，默认实现是 501**（真库查询属 W2），且**金额阈值键此刻不生效**（属 dispatcher）；actor 仍是**临时头**（`x-kp-role` / `x-kp-user-id` / `x-kp-child-id`） | W1-C（`DeviceSession`）；**别把"三道都接上了"读成"权限体系已完成"** |
+| **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | W2（三个端口的 Prisma 实现）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
 | **审批写入路径的落库部分** | ⚠️ 判定与 HTTP 路径**已上线**（`POST /approvals`、`POST /approvals/:id/decide`）；**落库 / 账本流水 / 审计写入未落地** —— `ApprovalsPort` 默认实现**显式 501**（不静默成功） | W1/W2；别把判定绿灯读成"审批已验收" |
 | **双端接 API** | ❌ 未开始；`AppStore` 仍为**内存态**（重启回到空态） | W4 |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
@@ -760,11 +760,18 @@ User（自然人）
 
 ### 15.3 计划的下一步
 
-按 §11 顺序推进 **W1（身份与权限）→ W2（账本内核）**，
+按 §11 顺序推进：**W1 的三段（W1-A 矩阵 / W1-B 屏障一・三 / W1-C 身份）已在 2026-10-14 ~ 15 落地**
+（见 `design/README` 第 16／17／18 条与 `design/02` §3），**下一步是 W2（账本内核）**，
 并在**第 1 天并行启动 L2 / L4**；W5 的引导与模板需 L5 法务文本到位。
 
-W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费** `backend/src/contracts/approval-policy.ts`（P4），
-不得在 controller / service 里另写一份"谁可以批准"。
+W2 除账本外还包含**三个端口的真实实现**（`Approvals` / `Membership` / `DeviceSession` —— 现在都是
+**显式 501** 的内存替身），W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费**
+`backend/src/contracts/approval-policy.ts`（P4），不得在 controller / service 里另写一份"谁可以批准"。
+
+> **W1-C 的两句真话（别读错）**：① **"角色不再由客户端自选"≠"身份已完成"** ——
+> 会话来源已可信，但**设备凭据（`deviceId`）仍可伪造**，故 `NODE_ENV=production` 一律 503
+> （真正可验证的凭据要等 L2 之后的会话 token）；② **"身份判定已接线"≠"能登录了"** ——
+> 会话查询端口**默认 501**，默认装配下每个请求都会被拒（fail-closed，而不是放行）。
 
 ---
 
@@ -780,6 +787,7 @@ W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费** `back
 | 规则版本（`PointRuleVersion`） | 规则每次变更归档旧版本、只增不删，供历史流水钉住（I3） |
 | 快照（snapshot） | 流水/审计里保存的**当时**标题、条件、频次、分值等，深拷贝 | 
 | 三道屏障 | 成员资格门 → 权限矩阵 → 成员级收紧（只能收紧） |
+| 身份（`DeviceSession`） | 服务端持有的"**这台设备在这份档案上是谁**"：`(deviceId, childId)` → `userId` ＋ `activeRole`；TTL 到期 `guardian` **回落 `child`**（降级而非 401）；角色**不存客户端**（W1-C） |
 | 归一化 | 孩子的 `adjust_points(+N)` 转成 `request_points_bonus` 申请 |
 | 日历门 | 纯等待型依赖（认证、备案），不占工时但卡关键路径 |
 | 假绿 | 检查/CI 实际失败却报成功（D12）；本项目头号反面教材 |

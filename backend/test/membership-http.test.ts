@@ -22,7 +22,8 @@
  * ── ⚠️ 诚实标注（不粉饰）──────────────────────────────────────────────────
  *   ① 成员位来自**内存替身** —— 真 Prisma 查询属 W2（端口默认实现是 501，
  *      组 C 专门钉住"默认装配下不会没查就过"）；
- *   ② `x-kp-child-id` 与 `x-kp-role` 一样是**临时口径**（W1-C 的 `DeviceSession` 取代）；
+ *   ② 身份（角色 + userId）**来自服务端会话**（W1-C，2026-10-15）：客户端只出示
+ *      `x-kp-device-id` ＋ `x-kp-child-id`（会话也是内存替身；真查询属 W2）；
  *   ③ `requireApprovalForBonusOver`（金额阈值）在 HTTP 路径上**尚未生效** —— 组 B 有一条钉住现状；
  *   ④ 更进一步：**三条限制键都不作用于 `request_approval`**，而 `POST /approvals` 的矩阵动作正是它
  *      ⇒ **屏障三在 `/approvals` 上结构性不生效**（它作用于 dispatcher 落地后的
@@ -43,7 +44,13 @@ import {
   type CreateApprovalInput
 } from '../src/approvals/approvals.repository'
 import { ApprovalsModule } from '../src/approvals/approvals.module'
-import { TemporaryRoleHeaderGuard } from '../src/device-session/temporary-role.guard'
+import { DeviceSessionGuard } from '../src/device-session/device-session.guard'
+import { DeviceSessionModule } from '../src/device-session/device-session.module'
+import {
+  DEVICE_SESSION_REPOSITORY,
+  type DeviceSessionPort
+} from '../src/device-session/device-session.repository'
+import type { SessionLookupRow } from '../src/device-session/session.gate'
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MembershipGuard } from '../src/membership/membership.guard'
 import { MembershipModule } from '../src/membership/membership.module'
@@ -56,18 +63,83 @@ import { PermissionsModule } from '../src/permissions/permissions.module'
 import { RequireAction } from '../src/permissions/require-action.decorator'
 
 const CHILD_ID = 'child-1'
+/** 第二个孩子：只用于证明"childId 真的参与判定"。 */
+const OTHER_CHILD_ID = 'child-2'
 
-/** 身份三件套（临时口径）：**谁** ＋ **什么角色** ＋ **对哪个孩子**。 */
-function headers(role: string, userId: string, childId: string = CHILD_ID): Record<string, string> {
-  return { 'x-kp-role': role, 'x-kp-user-id': userId, 'x-kp-child-id': childId }
+/** 设备 ↔ (角色, userId) 的对应关系见 `makeSessionFake()` 的基线表。 */
+const DEV_DAD = 'dev-dad'
+const DEV_MOM = 'dev-mom'
+const DEV_KID = 'dev-kid'
+const DEV_GUEST = 'dev-guest'
+const DEV_REMOVED = 'dev-removed'
+const DEV_STRANGER = 'dev-stranger'
+
+/**
+ * 身份（W1-C 起）：客户端只说「**我是哪台设备**、在**哪个孩子**的档案上」。
+ * 角色与 userId 一律由会话行给出 —— 这正是屏障一与屏障二赖以成立的前提。
+ */
+function headers(deviceId: string, childId: string = CHILD_ID): Record<string, string> {
+  return { 'x-kp-device-id': deviceId, 'x-kp-child-id': childId }
 }
 
-const GUARDIAN = headers('guardian', 'u-dad')
-const OTHER_GUARDIAN = headers('guardian', 'u-mom')
-const CHILD = headers('child', 'u-kid')
-const VIEWER = headers('viewer', 'u-guest')
-/** 没有任何成员位的用户（屏障一必须拦下他）。 */
-const STRANGER = headers('guardian', 'u-stranger')
+const GUARDIAN = headers(DEV_DAD)
+const OTHER_GUARDIAN = headers(DEV_MOM)
+const CHILD = headers(DEV_KID)
+const VIEWER = headers(DEV_GUEST)
+/** 有会话、但**没有任何成员位**的用户（屏障一必须拦下他）。 */
+const STRANGER = headers(DEV_STRANGER)
+
+// ── 内存替身：设备会话（DeviceSessionPort，W1-C）──────────────────────────────
+interface SessionFake extends DeviceSessionPort {
+  rows: Map<string, SessionLookupRow>
+  reset(): void
+  put(row: SessionLookupRow): void
+  /** 把某台设备的会话改成**已过期**（验 §9.19：guardian 过期 ⇒ 回落 child）。 */
+  expire(deviceId: string, childId?: string): void
+}
+
+function sessionKey(deviceId: string, childId: string): string {
+  return `${deviceId}::${childId}`
+}
+
+function makeSessionFake(): SessionFake {
+  const rows = new Map<string, SessionLookupRow>()
+  const future = (): Date => new Date(Date.now() + 5 * 60 * 1000)
+
+  const baseline: SessionLookupRow[] = [
+    { deviceId: DEV_DAD, childId: CHILD_ID, userId: 'u-dad', activeRole: 'guardian', expiresAt: future() },
+    // ★ dev-dad 在**另一个孩子**的档案上也有会话：于是"换个孩子"这条用例
+    //   才能测到**屏障一**（而不是在身份层就 401 了）。身份层的 childId 同源校验
+    //   由 session-gate / device-session-http 两个文件负责。
+    { deviceId: DEV_DAD, childId: OTHER_CHILD_ID, userId: 'u-dad', activeRole: 'guardian', expiresAt: future() },
+    { deviceId: DEV_MOM, childId: CHILD_ID, userId: 'u-mom', activeRole: 'guardian', expiresAt: future() },
+    { deviceId: DEV_KID, childId: CHILD_ID, userId: 'u-kid', activeRole: 'child', expiresAt: future() },
+    { deviceId: DEV_GUEST, childId: CHILD_ID, userId: 'u-guest', activeRole: 'viewer', expiresAt: future() },
+    { deviceId: DEV_REMOVED, childId: CHILD_ID, userId: 'u-removed', activeRole: 'child', expiresAt: future() },
+    { deviceId: DEV_STRANGER, childId: CHILD_ID, userId: 'u-stranger', activeRole: 'guardian', expiresAt: future() }
+  ]
+
+  const fake: SessionFake = {
+    rows,
+    reset() {
+      rows.clear()
+      for (const row of baseline) rows.set(sessionKey(row.deviceId, row.childId), row)
+    },
+    put(row) {
+      rows.set(sessionKey(row.deviceId, row.childId), row)
+    },
+    expire(deviceId, childId = CHILD_ID) {
+      const row = rows.get(sessionKey(deviceId, childId))
+      assert.ok(row !== undefined, `前提变了：${deviceId} 本该有会话`)
+      rows.set(sessionKey(deviceId, childId), { ...row, expiresAt: new Date(Date.now() - 1) })
+    },
+    async findSession(deviceId, childId) {
+      return rows.get(sessionKey(deviceId, childId)) ?? null
+    }
+  }
+  fake.reset()
+  return fake
+}
 
 // ── 内存替身：成员位（MembershipPort）────────────────────────────────────────
 interface MembershipFake extends MembershipPort {
@@ -159,7 +231,7 @@ function makeApprovalsFake(): ApprovalsFake {
  *   探针若挂不同的守卫，它证明的就不是线上那条链。
  */
 @Controller('probe')
-@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
 class ProbeController {
   /** 矩阵 `undo_check_in`：child DENY / guardian ALLOW。 */
   @Get('undo-check-in')
@@ -184,9 +256,9 @@ class ProbeController {
 }
 
 @Module({
-  imports: [ApprovalsModule, MembershipModule, PermissionsModule],
+  imports: [ApprovalsModule, MembershipModule, PermissionsModule, DeviceSessionModule],
   controllers: [ProbeController],
-  providers: [TemporaryRoleHeaderGuard]
+  providers: [DeviceSessionGuard]
 })
 class MembershipProbeModule {}
 
@@ -218,11 +290,16 @@ async function send(
 /**
  * 起一个只装探针模块的真服务。
  * ★ `membership` **不传**时走**默认装配**（端口默认实现 = 501）—— 组 C 靠这个。
+ * ★ 会话替身**恒注入**（W1-C）：身份是这条链的第一道，不喂它整条链会在身份层就断
+ *   （那时组 C 测到的就不是"屏障一没落地"了）。"默认装配下身份层 501"
+ *   由 `device-session-http.test.ts` 组 D 专门钉住。
  */
 async function startApp(
   options: { membership?: MembershipPort; approvals?: ApprovalsPort } = {}
 ): Promise<{ app: INestApplication; url: string }> {
   const builder = Test.createTestingModule({ imports: [MembershipProbeModule] })
+    .overrideProvider(DEVICE_SESSION_REPOSITORY)
+    .useValue(makeSessionFake())
   if (options.membership !== undefined) {
     builder.overrideProvider(MEMBERSHIP_REPOSITORY).useValue(options.membership)
   }
@@ -278,7 +355,7 @@ describe('组 A：屏障一 —— 成员资格门（02 §3 / §9.21）', () => 
     const r = await send(url, '/approvals', {
       method: 'POST',
       body: { action: 'redeem' },
-      headers: headers('guardian', 'u-dad', 'child-2')
+      headers: headers(DEV_DAD, OTHER_CHILD_ID)
     })
     assert.equal(
       r.status,
@@ -292,7 +369,7 @@ describe('组 A：屏障一 —— 成员资格门（02 §3 / §9.21）', () => 
     const r = await send(url, '/approvals', {
       method: 'POST',
       body: { action: 'redeem' },
-      headers: headers('child', 'u-removed')
+      headers: headers(DEV_REMOVED)
     })
     assert.equal(r.status, 403)
     assert.equal(
@@ -323,7 +400,7 @@ describe('组 A：屏障一 —— 成员资格门（02 §3 / §9.21）', () => 
     const r = await send(url, '/approvals', {
       method: 'POST',
       body: { action: 'redeem' },
-      headers: { 'x-kp-role': 'guardian', 'x-kp-user-id': 'u-dad' }
+      headers: { 'x-kp-device-id': DEV_DAD }
     })
     assert.equal(r.status, 401, '缺孩子上下文竟被放行 —— 那次屏障一无从判定，却没人发现')
     assert.equal(r.body.code, 'UNAUTHENTICATED')

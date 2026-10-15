@@ -115,6 +115,12 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
 ```
 请求 / Agent 动作
    │
+   ├─ 身份：设备会话解析（W1-C）
+   │    (deviceId, childId) → DeviceSession 行 → actor{userId, role}
+   │    ✗ → 401 UNAUTHENTICATED（缺头）/ SESSION_NOT_FOUND（无会话）
+   │    过期 guardian → **回落 child**（§9.19；降级而非拒绝）
+   │    作用：回答"我是谁、我在这份档案上是什么角色"（服务端说了算）
+   │
    ├─ 屏障一：成员资格门（Membership Gate）
    │    ChildMember(childId, userId).status === 'active' ？
    │    ✗ → 403 MEMBER_NOT_FOUND / MEMBER_REMOVED
@@ -156,6 +162,7 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
 | 三 · 成员级收紧 | `backend/src/contracts/member-restrictions.ts` 的 `tightenVerdict()`（消费 `stricter()`） | 同上（**同一个** Guard：`stricter(矩阵判定, 限制判定)`） | `test/member-restrictions.test.ts`（含 **§9.22** 穷举）／`membership-http.test.ts` 组 B |
 
 守卫链（**数组顺序即语义**）：`@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)`。
+（★ W1-C 之后：`@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)` —— 见下面的 W1-C 落地注。）
 
 **这一步修掉的两个"看起来在安全"**：
 1. `MembershipModule` 此前是**空壳**（全仓零调用者）—— "这个人跟这个孩子有没有关系"从来没人问过；
@@ -183,8 +190,58 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   HTTP 层用**同一套守卫链**的探针端点验证（组 B）。
 - ⚠️ `POST /approvals/:id/decide` 用的是**请求头里的** childId，尚未与**审批行自己的** childId
   做同源校验（要等 `ApprovalRow` 读模型带上它）—— 即：跨家庭推进审批这条路径**还没堵**。
-- ⚠️ 身份仍是**临时头**（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`**）——
-  **三道屏障都是真的，"我是谁"目前还是假的**（W1-C 的 `DeviceSession` 取代三个头）。
+- ~~⚠️ 身份仍是**临时头**（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`**）——~~
+  ✅ **已由 W1-C 取代（2026-10-15）**：角色与 userId 改由**服务端会话行**给出，
+  `x-kp-role` / `x-kp-user-id` **已废弃且不再被任何代码读取**（见下一节）。
+
+### ✅ W1-C 落地注（2026-10-15）：身份（Identity）**也是真的了**
+
+| 层 | 判定核（唯一实现点） | 请求路径上的消费点 | 用例 |
+|---|---|---|---|
+| 身份 · 会话解析 | `backend/src/device-session/session.gate.ts`（纯函数 `resolveSession()` / `effectiveRole()` / `toSessionActor()`）＋ 端口 `DeviceSessionPort` | `DeviceSessionGuard`（控制器级 `@UseGuards` **第 1 位**） | `test/session-gate.test.ts`（内核，5 组 **22 条**）／`test/device-session-http.test.ts`（真 HTTP，5 组 **22 条**） |
+
+守卫链（**数组顺序即语义**）：`@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)`。
+
+**这一步修掉的核心病：角色/身份由客户端自选**。W1-A/W1-B 之后三道屏障**都是真的**，
+但它们的共同输入 `actor` 来自**客户端自己发的头**：发 `x-kp-role: guardian` 就是家长，
+发谁的 `x-kp-user-id` 就是谁（本文 §7 早已写明"不存客户端"的理由：小程序 storage 可直接改）。
+于是"屏障拦得对不对"**没有人验证过** —— 拦一个**自称**是家长的人，与拦一个**真的**是家长的人，是两件事。
+现在：**客户端只被允许回答「我是哪台设备（`x-kp-device-id`）、在哪个孩子的档案上（`x-kp-child-id`）」。**
+
+**口径（逐字对齐 §7 / §9.19）**：
+
+| 情形 | 结果 | 为什么 |
+|---|---|---|
+| 缺 `x-kp-device-id` 或 `x-kp-child-id`（含重复头/空串） | **401 `UNAUTHENTICATED`** | 身份不完整 ⇒ 后续三道屏障无从判定；**绝不**退化成"按 child 放行" |
+| `(deviceId, childId)` 会话**查不到** | **401 `SESSION_NOT_FOUND`** | 「查不到」≠「匿名放行」——那会让整条权限链变成可选（同屏障一的教训） |
+| 会话 `activeRole = guardian` 且 **已过期** | 角色**回落 `child`**（§9.19） | **降级，不是拒绝**：设备与身份仍有效。过期判 401 会让孩子连"看自己积分"都做不了（把 TTL 变成故障） |
+| 会话行 `childId` ≠ 请求的 `childId` | **500 `SESSION_CHILD_MISMATCH`** | `(deviceId, childId)` 是**查询键**；对不上只可能是适配器**没按 childId 查**（实现问题，不是权限问题） |
+| 会话 `activeRole` 不在 `guardian/child/viewer` 内 | **500 `INVALID_SESSION_ROLE`** | 库里存了枚举外的值 ⇒ **数据**问题；混报 403 会被当权限问题排查很久（同 D3b 纪律） |
+| `expiresAt` 解析不出 | **500 `INVALID_SESSION_EXPIRY`** | `NaN > n` 恒 `false` ⇒ 静默"永不过期"—— 静默的失败最难查 |
+| `NODE_ENV=production` | **503 `IDENTITY_NOT_IMPLEMENTED`** | ★ **故意保留**：角色/身份的**来源**可信了，但**设备凭据仍不可验证**（`x-kp-device-id` 谁都能报 ⇒ 可冒充别人的会话）。解药是 L2 之后的会话 token（§1），届时换成"凭据无效 ⇒ 401" |
+
+**TTL 的边界口径在一处定死**：`expiresAt === now` 即**已过期**（写成 `>=` 还是 `>` 这件事不许两端各理解一种），
+`isSessionActive()` 是唯一实现点，`test/session-gate.test.ts` 组 C 用边界值钉住。
+
+**形状与判定刻意分开**（同屏障一/D3b 的纪律）：会话不存在是 **401**（身份问题），
+形状坏是 **500**（数据/实现问题）—— 混在一起的后果很具体：一个**数据**问题会表现为"你没有权限"。
+
+**两条 fail-closed（都可执行断言）**：
+1. **端口默认实现是显式 501**（`SESSION_LOOKUP_NOT_IMPLEMENTED`）—— 默认装配下每个请求都**拒绝**
+   （比"拦不住"强，但它**也还没有真的查过库**）；`device-session-http.test.ts` 组 D 专门钉住这一条；
+2. **生产闸门 503**（上表最后一行）—— 组 E 钉住，且有一条**反向**用例：拆掉闸门即变红（见 `w1c-canfail.mjs` ⑥）。
+
+**诚实标注（不粉饰，与"已完成"分开记）**：
+- ⚠️ **会话查询的持久化实现未落地**：`DEVICE_SESSION_REPOSITORY` 默认实现是 **501**，
+  真 Prisma 适配器属 **W2**（与 `ApprovalsPort` / `MembershipPort` 同一批）。理由同上：
+  一注入 `PrismaService`，**无库 CI 会在启动阶段就崩**。
+  ⇒ **"身份由服务端确立"说的是机制，不是"已经能登录了"。**
+- ⚠️ **`deviceId` 本身不可验证** ⇒ 生产 503（见上表）。**"身份层已完成"这句话现在还不能说**，
+  能说的是**"角色不再由客户端自选"**。
+- ⚠️ **会话刷新（§7「每次 guardian 操作刷新 TTL」）未实现**：本 Guard **只读**（刷新要写库，属 W2）。
+- ⚠️ **PIN 切换（§7 / §9.18）未实现**：没有"切家长模式"端点，`pinHash` / `pinLockedUntil` 目前无人使用。
+- ⚠️ **`POST /approvals/:id/decide` 的跨家庭推进仍未堵**：它用的是请求里的 childId，
+  与审批行自己的 childId 还没有同源校验（要等 `ApprovalRow` 带上它）—— 会话层的同源校验只解决了**一半**。
 
 **屏障三的形状（`D3b`，已定形 —— 阶段 D-b，2026-10-13）**：上面那三个键的**唯一权威**是
 `backend/src/contracts/member-restrictions.ts` 的 `RESTRICTION_KEYS` ＋ 运行时守卫
@@ -334,11 +391,14 @@ model ApprovalRequest {
 `POST /approvals/:id/decide`（§9.10 的「双击同意 → 409」等），实现见 `backend/src/approvals/`，
 用例见 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**）。
 ⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
-（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不是静默成功；身份是**临时口径**
-（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`** 三个头，缺任一个即 401、角色取值白名单、
-`NODE_ENV=production` → 503），W1-C 的 `DeviceSession` 到位后必须替换
-（`backend/src/device-session/temporary-role.guard.ts`）。
-★ `x-kp-child-id` 是 **W1-B 新增的必需项**：它喂给屏障一（"对这个孩子，你是什么身份"）。
+（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不是静默成功。
+★ 身份口径**已于 W1-C 更换**（2026-10-15）：W1-A/W1-B 时代的
+`x-kp-role` / `x-kp-user-id` / `x-kp-child-id` **三个自报头**已改为
+`x-kp-device-id` / `x-kp-child-id` **两个头 ＋ 服务端会话行**（角色与 userId 由 `DeviceSession` 给出，
+两个自报头**不再被读取**）—— 详见 §3 的「W1-C 落地注」。
+（被删掉的实现是 `backend/src/device-session/temporary-role.guard.ts`，本仓库已无此文件。）
+★ `x-kp-child-id` 是 **W1-B 新增的必需项**：它喂给屏障一（"对这个孩子，你是什么身份"），
+W1-C 之后它同时是**会话查询键的一半**。
 **真装配复验（W1-B，2026-10-15，`tools/_scratch/w1b-live-probe.sh`，真 AppModule ＋ 真 Prisma）**：
 三个头齐全 → **501 `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`**（屏障一已接线，但成员查询端口未落地 ⇒
 fail-closed：此刻**没有人**被放过去）；缺 `x-kp-child-id` → **401**；无身份头 → **401**；
@@ -608,6 +668,21 @@ model DeviceSession {
 **为什么不存客户端**：客户端可被改（小程序 storage 可直接改）。服务端持有 `activeRole` 才能让
 "家长模式"成为一个**真实的权限提升**，而不是一个 UI 开关。
 
+### ✅ W1-C 落地注（2026-10-15）：这张表的"服务端权威"**已经是真的了**
+
+- **落地物**：`backend/src/device-session/` 三件套 —— `session.gate.ts`（纯函数判定核）＋
+  `device-session.repository.ts`（端口 `DeviceSessionPort` / 令牌 / 默认 **501**）＋
+  `device-session.guard.ts`（`DeviceSessionGuard`，控制器级守卫链**第 1 位**）。
+- **读的可信度**：`activeRole` / `userId` 来自**服务端会话行**；客户端只发
+  `x-kp-device-id` ＋ `x-kp-child-id`（选择器），自报 `x-kp-role` / `x-kp-user-id` **不再被读取**
+  （`device-session-http.test.ts` 组 A 专门钉住：自报 `guardian` 仍是 `child`）。
+- **TTL**：`expiresAt === now` 即过期；`guardian` 过期 ⇒ **回落 `child`**（降级不是 401，§9.19）。
+- ⚠️ **仍未落地**（与上表逐行对照）：**切到 `guardian`（PIN 校验） / 5 次锁 15 分钟 / 每次切换写审计 /
+  每次 guardian 操作刷新 TTL** —— 这四行**都还没有端点**，`pinHash` / `pinLockedUntil` 至今无人使用；
+  会话查询的**真 Prisma 适配器**属 W2（默认 501）。**"这张表已经全部实现"是错的**，
+  现在成立的是**读路径**（"服务端说了算"这条原则）＋ **到期回落**。
+- ⚠️ **凭据未认证**：`x-kp-device-id` 可被伪造 ⇒ `NODE_ENV=production` 一律 **503**（禁止上线）。
+
 ---
 
 ## 8. 邀请码（并发安全）
@@ -685,7 +760,7 @@ model InviteCode {
 | 9.16 | 孩子第 4 次申请加分（同日） | 403 CHILD_REQUEST_QUOTA_EXCEEDED |
 | 9.17 | 孩子申请加分 51 分（Q15 = ±50） | 403 AMOUNT_EXCEEDS_LIMIT |
 | 9.18 | PIN 连错 5 次 | 锁定 15 分钟 |
-| 9.19 | `DeviceSession` 到期 | 角色回落 `child` |
+| 9.19 | `DeviceSession` 到期 | 角色回落 `child`（✅ W1-C：内核 `test/session-gate.test.ts` 组 C —— 含 `expiresAt === now` **边界**；真 HTTP `device-session-http.test.ts` 组 B） |
 | 9.20 | 撤回同意（`GuardianConsent`） | 全链路写入停止，导出可下载 |
 | 9.21 | 非成员访问 | 403 MEMBER_NOT_FOUND（✅ W1-B 已有真 HTTP 用例：`membership-http.test.ts` 组 A） |
 | 9.22 | 成员级 `restrictions` 试图放宽矩阵 `DENY` | 被忽略，仍为 DENY（屏障三方向性）（✅ W1-B：内核**穷举** 25×2×6×5 ＋ HTTP 用例） |
@@ -694,4 +769,7 @@ model InviteCode {
 | 9.25 | 家长建 `redeem` 请求并带 `autoApprove: true` | 直接 `approved` ＋ 生成流水；`decidedByUserId == requesterUserId`；审计 `approval.self_approved` |
 | 9.26 | 孩子建 `request_redeem` 并带 `autoApprove: true` | **`400 SELF_APPROVAL_NOT_ALLOWED`**（**不得静默忽略成 `pending`** —— 客户端会以为已批） |
 | 9.27 | **单家长家庭**：唯一家长提交 `redeem`，**不带** `autoApprove` | `pending`（**不自动批准**，先证明死锁已解而特权未扩）；同一家长二次确认 → `approved` |
+| 9.28 | 客户端自报 `x-kp-role: guardian`，而**服务端会话**是 `child` | 仍按 `child` 判定（自报头**被忽略**，不产生任何提权）（✅ W1-C：`device-session-http.test.ts` 组 A / `approvals-http.test.ts`） |
+| 9.29 | 缺 `x-kp-device-id` 或 `x-kp-child-id` | **401 `UNAUTHENTICATED`**（**不**退化成匿名 `child`）（✅ W1-C：`device-session-http.test.ts` 组 A） |
+| 9.30 | 会话查询适配器**忽略** `childId` 参数（返回别人档案的行） | **500 `SESSION_CHILD_MISMATCH`**，**不放行**（✅ W1-C：内核组 D ＋ `w1c-canfail.mjs` ④） |
 

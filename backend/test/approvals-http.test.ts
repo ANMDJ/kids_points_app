@@ -34,24 +34,54 @@ import {
 import { ApprovalsModule } from '../src/approvals/approvals.module'
 import { AUDIT_ACTION_SELF_APPROVED, SELF_APPROVAL_NOT_ALLOWED } from '../src/contracts/approval-policy'
 import { PERMISSION_MATRIX } from '../src/contracts/permission-matrix'
+import {
+  DEVICE_SESSION_REPOSITORY,
+  type DeviceSessionPort
+} from '../src/device-session/device-session.repository'
+import type { SessionLookupRow } from '../src/device-session/session.gate'
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 
 /**
- * 孩子上下文（W1-B）：身份头从两个变三个。
- * 屏障一（成员资格门）问的是 `ChildMember(childId, userId)` —— 没有它，这道门问不出问题，
- * 所以临时身份 Guard 现在**强制要求** `x-kp-child-id`（缺 ⇒ 401，见其文件头）。
+ * 身份（W1-C，2026-10-15）：客户端**不再自报角色**。
+ * 它只说「我是哪台设备（`x-kp-device-id`）、在哪个孩子的档案上（`x-kp-child-id`）」，
+ * 角色与 userId 由**服务端会话行**给出 —— 设备 ↔ 身份的对应见 `makeSessionFake()`。
+ * 屏障一（`ChildMember(childId, userId)`）也依赖同一份身份，故 childId 仍必需。
  */
 const CHILD_ID = 'child-1'
 
-function identity(role: string, userId: string): Record<string, string> {
-  return { 'x-kp-role': role, 'x-kp-user-id': userId, 'x-kp-child-id': CHILD_ID }
+const DEV_DAD = 'dev-dad'
+const DEV_MOM = 'dev-mom'
+const DEV_KID = 'dev-kid'
+const DEV_GUEST = 'dev-guest'
+
+function identity(deviceId: string): Record<string, string> {
+  return { 'x-kp-device-id': deviceId, 'x-kp-child-id': CHILD_ID }
 }
 
-const GUARDIAN = identity('guardian', 'u-dad')
-const OTHER_GUARDIAN = identity('guardian', 'u-mom')
-const CHILD = identity('child', 'u-kid')
-const VIEWER = identity('viewer', 'u-guest')
+const GUARDIAN = identity(DEV_DAD)
+const OTHER_GUARDIAN = identity(DEV_MOM)
+const CHILD = identity(DEV_KID)
+const VIEWER = identity(DEV_GUEST)
+
+/**
+ * 会话替身（W1-C）：`DeviceSession(deviceId, childId)` 的线上替身。
+ * 角色在这里、且**只在这里** —— 这正是本文件「客户端自报角色无效」那条用例的意义。
+ */
+function makeSessionFake(): DeviceSessionPort {
+  const future = (): Date => new Date(Date.now() + 5 * 60 * 1000)
+  const rows: SessionLookupRow[] = [
+    { deviceId: DEV_DAD, childId: CHILD_ID, userId: 'u-dad', activeRole: 'guardian', expiresAt: future() },
+    { deviceId: DEV_MOM, childId: CHILD_ID, userId: 'u-mom', activeRole: 'guardian', expiresAt: future() },
+    { deviceId: DEV_KID, childId: CHILD_ID, userId: 'u-kid', activeRole: 'child', expiresAt: future() },
+    { deviceId: DEV_GUEST, childId: CHILD_ID, userId: 'u-guest', activeRole: 'viewer', expiresAt: future() }
+  ]
+  return {
+    async findSession(deviceId, childId) {
+      return rows.find((r) => r.deviceId === deviceId && r.childId === childId) ?? null
+    }
+  }
+}
 
 /**
  * 成员替身（W1-B）：**每一组**都要注入它 —— 否则屏障一在默认装配下返回 501，
@@ -167,9 +197,13 @@ async function send(
  * 起一个只装 `ApprovalsModule` 的真服务（`useValue` 可替换仓储；不传 = 默认装配）。
  * ★ W1-B 起**恒**注入成员替身：`POST /approvals` 的守卫链是「身份 → 屏障一 → 屏障二/三」，
  *   不注入成员位就停在屏障一的 501 上（那由 `membership-http.test.ts` 组 C 专门测）。
+ * ★ W1-C 起**恒**注入会话替身：身份是链条第一道，不喂它连屏障一都到不了
+ *   （"默认装配下身份层 501" 由 `device-session-http.test.ts` 组 D 专门钉住）。
  */
 async function startApp(repository?: ApprovalsPort): Promise<{ app: INestApplication; url: string }> {
   const builder = Test.createTestingModule({ imports: [ApprovalsModule] })
+    .overrideProvider(DEVICE_SESSION_REPOSITORY)
+    .useValue(makeSessionFake())
     .overrideProvider(MEMBERSHIP_REPOSITORY)
     .useValue(makeMembershipFake())
   if (repository !== undefined) {
@@ -390,26 +424,53 @@ describe('入口闸门与 decide 边界', () => {
     assert.equal(r.status, 400)
   })
 
-  it('身份：缺 `x-kp-role` / `x-kp-user-id` → 401，且**不落库**（绝不默认成 guardian）', async () => {
+  it('身份：缺 `x-kp-device-id` ⇒ 401，且**不落库**（绝不默认成 guardian）', async () => {
     const r = await send(url, '/approvals', { body: { action: 'redeem' }, headers: {} })
     assert.equal(r.status, 401)
     assert.equal(port.calls.length, 0)
   })
 
-  it('身份：角色值不在白名单 → 401', async () => {
+  it('★ 身份：自报 `x-kp-role: guardian` **完全无效** —— 会话是 child ⇒ 仍 400', async () => {
     const r = await send(url, '/approvals', {
-      body: { action: 'redeem' },
-      headers: { 'x-kp-role': 'admin', 'x-kp-user-id': 'u-x' }
+      body: { action: 'request_redeem', autoApprove: true },
+      // 客户端声称自己是家长（W1-A/W1-B 的临时口径）。W1-C 起这些头**不被读取**。
+      headers: { ...CHILD, 'x-kp-role': 'guardian' }
     })
-    assert.equal(r.status, 401)
+    assert.equal(
+      r.status,
+      400,
+      '客户端自报的角色生效了 —— 身份又回到"客户端说了算"（W1-C 的核心回归）'
+    )
+    assert.equal(
+      r.body.code,
+      'SELF_APPROVAL_NOT_ALLOWED',
+      '应当是**孩子**自批被判非法（判定用的是会话里的 child），而不是别的 400'
+    )
+    assert.equal(port.calls.length, 0)
   })
 
-  it('身份：同一请求里塞两个角色值（合并头）→ 401，**不挑一个**（歧义输入不产生权限）', async () => {
+  it('★ 身份：冒用 `x-kp-user-id` 无效 —— 会话是 u-dad ⇒ 自批仍被拒（不是 u-mom 在自批）', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem', autoApprove: true },
+      headers: { ...GUARDIAN, 'x-kp-user-id': 'u-kid' }
+    })
+    assert.equal(r.status, 201, '家长自批本该成功（矩阵与策略都允许显式自批）')
+    const decided = port.calls.filter((c) => c.method === 'createSelfApproved')
+    assert.equal(decided.length, 1)
+    assert.equal(
+      (decided[0].input as { requesterUserId: string }).requesterUserId,
+      'u-dad',
+      '落库的申请人变成了客户端报的那个 —— 身份被请求头覆盖了'
+    )
+  })
+
+  it('身份：设备头里塞两个 deviceId（合并值）⇒ 401，**不挑一个**（歧义输入不产生身份）', async () => {
     const r = await send(url, '/approvals', {
       body: { action: 'redeem' },
-      headers: { 'x-kp-role': 'guardian, child', 'x-kp-user-id': 'u-x' }
+      headers: { 'x-kp-device-id': `${DEV_DAD}, ${DEV_MOM}`, 'x-kp-child-id': CHILD_ID }
     })
     assert.equal(r.status, 401)
+    assert.equal(r.body.code, 'SESSION_NOT_FOUND')
     assert.equal(port.calls.length, 0)
   })
 })

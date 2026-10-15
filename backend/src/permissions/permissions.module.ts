@@ -30,8 +30,9 @@ import { PermissionsGuard } from './permissions.guard'
  *   两条入口各自维护一份 = 必然漂移 = Agent 成为提权通道。
  *
  * ⚠ 仍未落地（都不粉饰）：① **屏障一**（成员资格门 `MembershipModule`）；
- *   ② 屏障三（上面已标）；③ **actor 仍来自临时头**（`x-kp-role`）——
- *   屏障二本身是真的，但它保护的"角色"尚未由服务端确立（W1-C 的 DeviceSession）。
+ *   ② 屏障三（上面已标）；③ **actor 的来源**：W1-C（2026-10-15）起由
+ *   `DeviceSessionGuard` 从**服务端会话表**解析（角色 + userId 均不由客户端自报），
+ *   查询实现到 W2（端口默认 501）。屏障二本身是真的，且它的输入现在也是服务端给的。
  */
 @Module({
   providers: [PermissionsGuard],

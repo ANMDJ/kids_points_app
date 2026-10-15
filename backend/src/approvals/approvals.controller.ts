@@ -9,7 +9,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
-import { TemporaryRoleHeaderGuard } from '../device-session/temporary-role.guard'
+import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { MembershipGuard } from '../membership/membership.guard'
 import type { RequestWithActor } from '../permissions/actor'
 import { PermissionsGuard } from '../permissions/permissions.guard'
@@ -31,9 +31,13 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  *   · `201` 显式自批 → 直接 `approved` ＋ 流水（§9.25）
  *   · `400 SELF_APPROVAL_NOT_ALLOWED` 显式要求自批却没资格（§9.26）
  *   · `200` 批准 / 拒绝成功；`403` 无批准资格；`409 ALREADY_DECIDED` 已决；`404` 没有这条
- *   · `401` 身份头不全（`x-kp-role` / `x-kp-user-id` / `x-kp-child-id`）；`503` 生产环境（身份未落地）
+ *   · `401 UNAUTHENTICATED` 缺 `x-kp-device-id` / `x-kp-child-id`；`401 SESSION_NOT_FOUND` 没会话；
+ *     `503 IDENTITY_NOT_IMPLEMENTED` 生产环境（设备凭据尚不可验）；`501 SESSION_LOOKUP_NOT_IMPLEMENTED` 默认装配
+ *     ★ **W1-C 起角色/身份不再来自请求头**（`x-kp-role` / `x-kp-user-id` 已废弃、不被读取）
  *   · **`403 MEMBER_NOT_FOUND` / `MEMBER_REMOVED`** 屏障一（§9.21，W1-B 起）
  *   · **`500 INVALID_MEMBER_RESTRICTIONS` / `INVALID_MEMBER_ROLE`** 成员位形状坏了（**不是**权限问题）
+ *   · **`500 INVALID_SESSION_ROLE` / `INVALID_SESSION_EXPIRY` / `SESSION_CHILD_MISMATCH`**
+ *     会话行形状坏了（**不是**权限问题，W1-C 起）
  *   · `501 APPROVALS_PERSISTENCE_NOT_IMPLEMENTED` / `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`
  *     **默认装配**下的两个 fail-closed 端口（见各自 repository）
  *
@@ -42,13 +46,13 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  */
 @Controller('approvals')
 // ★ `@UseGuards` 的**数组顺序就是语义** = 三道屏障的顺序（02 §3）：
-//     身份（填 kpActor / kpChildId） → **屏障一**（成员资格门，填 kpMember） → **屏障二/三**（矩阵 ＋ 成员级收紧）
+//     身份（会话解析 → 填 kpActor / kpChildId） → **屏障一**（成员资格门，填 kpMember） → **屏障二/三**（矩阵 ＋ 成员级收紧）
 //   反着写的后果各不相同，但都属于"看起来在安全"：
 //     · 判定在身份之前 ⇒ `PermissionsGuard` 读到空 actor 并**抛错**（刻意响亮，见 guard 类注释）；
 //     · 资格在矩阵之后 ⇒ 非成员先收到"角色不被允许"这种**含义错误**的 403（02 §3 的顺序是有理由的）。
 //   Nest 的执行顺序是「全局 → 控制器 → 方法」，同一层级内按数组顺序 —— 这也是
 //   屏障二**不能**改成 `APP_GUARD` 的原因。
-@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
 export class ApprovalsController {
   constructor(@Inject(ApprovalsService) private readonly service: ApprovalsService) {}
 
@@ -93,7 +97,7 @@ export class ApprovalsController {
   private actorOf(req: RequestWithActor): NonNullable<RequestWithActor['kpActor']> {
     if (req.kpActor === undefined) {
       // 走到这里 = Guard 没执行（装配漏了 @UseGuards）—— 响亮失败，绝不落到默认角色。
-      throw new Error('ApprovalsController 缺少 TemporaryRoleHeaderGuard：请求没有 actor')
+      throw new Error('ApprovalsController 缺少 DeviceSessionGuard：请求没有 actor（身份解析没跑）')
     }
     return req.kpActor
   }

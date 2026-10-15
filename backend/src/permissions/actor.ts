@@ -29,7 +29,7 @@ export interface Actor {
  *
  * · `kpActor` 缺失 = 身份 Guard 没跑（漏挂 / 顺序颠倒）→ 下游**响亮失败**
  *   （见 `ApprovalsController.actorOf`），绝不落到默认角色。
- *   默认 `guardian` 是提权，默认 `child` 是另一种撒谎 —— 见 temporary-role.guard.ts。
+ *   默认 `guardian` 是提权，默认 `child` 是另一种撒谎 —— 见 device-session.guard.ts。
  *
  * · `kpChildId` 是**会话的孩子上下文**（临时口径：`x-kp-child-id` 头；最终由
  *   `DeviceSession.childId` 提供，见 02 §7）。屏障一（资格）与屏障三（成员级收紧）

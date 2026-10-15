@@ -17,9 +17,11 @@
  *   ＋ `02` §2（`viewer` 一律 DENY）。
  *
  * ── ⚠️ 诚实标注（不粉饰，三件事分开记）────────────────────────────────────
- *   ① 本文件里的 actor **仍来自临时头**（`x-kp-role` / `x-kp-user-id` / `x-kp-child-id`）——
- *      屏障二本身是真的，但它保护的"角色"尚未由服务端确立（那要等 W1-C 的 `DeviceSession`）。
- *      即：**屏障二是真的，「我是谁」目前还是假的** —— 不要读成"权限已就绪"。
+ *   ① 本文件里的 actor **来自服务端会话**（W1-C，2026-10-15）：客户端只出示
+ *      `x-kp-device-id` ＋ `x-kp-child-id`，角色与 userId 由 `DeviceSession` 行给出
+ *      （客户端自报的 `x-kp-role` / `x-kp-user-id` 已废弃且**不被读取**）。
+ *      但会话是**内存替身**，且**设备凭据仍可伪造** —— 即
+ *      **屏障二是真的，「角色由服务端确立」也是真的，但「你这台设备真的是你」还不是**。
  *   ② W1-B 起探针链上**多了屏障一**（`MembershipGuard`）：资格判定也是真的，
  *      但成员位来自**内存替身**（真 Prisma 查询属 W2）。
  *   ③ 于是 `viewer` 在本文件所测的链上**永远到不了屏障二**（他不是任何孩子的成员位）——
@@ -35,7 +37,13 @@ import { Test } from '@nestjs/testing'
 import { applyGlobalPipes } from '../src/app.setup'
 import { ApprovalsModule } from '../src/approvals/approvals.module'
 import { PERMISSION_MATRIX } from '../src/contracts/permission-matrix'
-import { TemporaryRoleHeaderGuard } from '../src/device-session/temporary-role.guard'
+import { DeviceSessionGuard } from '../src/device-session/device-session.guard'
+import { DeviceSessionModule } from '../src/device-session/device-session.module'
+import {
+  DEVICE_SESSION_REPOSITORY,
+  type DeviceSessionPort
+} from '../src/device-session/device-session.repository'
+import type { SessionLookupRow } from '../src/device-session/session.gate'
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MembershipGuard } from '../src/membership/membership.guard'
 import { MembershipModule } from '../src/membership/membership.module'
@@ -45,18 +53,46 @@ import { PermissionsModule } from '../src/permissions/permissions.module'
 import { RequireAction } from '../src/permissions/require-action.decorator'
 
 /**
- * 身份三件套（W1-B 起第三个头必需）：谁 ＋ 什么角色 ＋ **对哪个孩子**。
- * 屏障一要拿 childId 去问"这个人跟这个孩子有没有关系"，缺它 ⇒ 401（见临时身份 Guard）。
+ * 身份（W1-C 起）：**客户端不再自报角色** —— 只说「我是哪台设备、在哪个孩子的档案上」。
+ * 角色与 userId 由会话行给出；屏障一要拿 childId 去问"这个人跟这个孩子有没有关系"。
+ * 设备与角色的对应关系见下方 `makeSessionFake()` 的基线表。
  */
 const CHILD_ID = 'child-1'
 
-function identity(role: string, userId: string): Record<string, string> {
-  return { 'x-kp-role': role, 'x-kp-user-id': userId, 'x-kp-child-id': CHILD_ID }
+const DEV_DAD = 'dev-dad'
+const DEV_KID = 'dev-kid'
+const DEV_GUEST = 'dev-guest'
+
+function identity(deviceId: string): Record<string, string> {
+  return { 'x-kp-device-id': deviceId, 'x-kp-child-id': CHILD_ID }
 }
 
-const GUARDIAN = identity('guardian', 'u-dad')
-const CHILD = identity('child', 'u-kid')
-const VIEWER = identity('viewer', 'u-guest')
+const GUARDIAN = identity(DEV_DAD)
+const CHILD = identity(DEV_KID)
+const VIEWER = identity(DEV_GUEST)
+
+/**
+ * 会话替身（W1-C）：`DeviceSession(deviceId, childId)` 的线上替身。
+ * ★ 它决定**角色** —— 这正是本阶段与 W1-A/W1-B 的分界：
+ *   以前 `identity('guardian', 'u-dad')` 是客户端自己说自己是家长；
+ *   现在 `DEV_DAD` 在**服务端**的会话行里是 guardian，客户端改不了。
+ */
+function makeSessionFake(): DeviceSessionPort {
+  const rows: SessionLookupRow[] = [
+    { deviceId: DEV_DAD, childId: CHILD_ID, userId: 'u-dad', activeRole: 'guardian', expiresAt: farFuture() },
+    { deviceId: DEV_KID, childId: CHILD_ID, userId: 'u-kid', activeRole: 'child', expiresAt: farFuture() },
+    { deviceId: DEV_GUEST, childId: CHILD_ID, userId: 'u-guest', activeRole: 'viewer', expiresAt: farFuture() }
+  ]
+  return {
+    async findSession(deviceId, childId) {
+      return rows.find((r) => r.deviceId === deviceId && r.childId === childId) ?? null
+    }
+  }
+}
+
+function farFuture(): Date {
+  return new Date(Date.now() + 5 * 60 * 1000)
+}
 
 /**
  * 成员替身（W1-B）：探针链上现在有三道屏障，屏障一的端口必须喂进来 ——
@@ -84,7 +120,7 @@ function makeMembershipFake(): MembershipPort {
 @Controller('probe')
 // ★ 守卫链与实际业务端点（`/approvals`）**完全一致**：身份 → 屏障一 → 屏障二/三。
 //   若这里少挂一道，本文件证明的就不是线上那条链（那正是"看起来在测权限"的失败形态）。
-@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
 class ProbeController {
   /** 矩阵 `view_child_points`：两种角色都 ALLOW。 */
   @Get('allow')
@@ -115,9 +151,9 @@ class ProbeController {
 }
 
 @Module({
-  imports: [PermissionsModule, ApprovalsModule, MembershipModule],
+  imports: [PermissionsModule, ApprovalsModule, MembershipModule, DeviceSessionModule],
   controllers: [ProbeController],
-  providers: [TemporaryRoleHeaderGuard]
+  providers: [DeviceSessionGuard]
 })
 class GuardProbeModule {}
 
@@ -155,6 +191,9 @@ before(async () => {
     // 成员替身：屏障一的端口（不注入 ⇒ 501，整条链在屏障一就断了）
     .overrideProvider(MEMBERSHIP_REPOSITORY)
     .useValue(makeMembershipFake())
+    // 会话替身：身份解析的端口（不注入 ⇒ 501，整条链在**身份**就断了）
+    .overrideProvider(DEVICE_SESSION_REPOSITORY)
+    .useValue(makeSessionFake())
     .compile()
   app = moduleRef.createNestApplication()
   applyGlobalPipes(app) // 与 main.ts 同一函数：测的是**真装配**，不是测试自己搭的
@@ -247,6 +286,18 @@ describe('组 B：fail-closed 四处', () => {
   it('身份 Guard 先于屏障二：缺身份头 ⇒ 401（不是 403，也不是 500）', async () => {
     const r = await send(url, '/probe/allow')
     assert.equal(r.status, 401, '身份缺失必须由第一道 Guard 拦下；403/500 说明顺序或职责错了')
+    assert.equal(r.body.code, 'UNAUTHENTICATED')
+  })
+
+  it('★ 客户端自报角色已**无效**：只发 `x-kp-role: guardian` 而不发设备会话 ⇒ 401', async () => {
+    const r = await send(url, '/probe/allow', {
+      headers: { 'x-kp-role': 'guardian', 'x-kp-user-id': 'u-dad', 'x-kp-child-id': CHILD_ID }
+    })
+    assert.equal(
+      r.status,
+      401,
+      'W1-A/W1-B 的三个头仍然能进 —— 身份又变回"客户端说了算"了（W1-C 的核心回归）'
+    )
     assert.equal(r.body.code, 'UNAUTHENTICATED')
   })
 })

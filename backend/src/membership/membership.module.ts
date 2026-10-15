@@ -18,7 +18,7 @@ import {
  *
  * ✅ **已接线（2026-10-15，W1-B）**：`MembershipGuard` ＋ 端口 `MembershipPort`
  *   ＋ 纯内核 `resolveMembership()`；挂载点是**控制器级**
- *   `@UseGuards(TemporaryRoleHeaderGuard, MembershipGuard, PermissionsGuard)` ——
+ *   `@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)` ——
  *   数组顺序即语义（身份 → 资格 → 矩阵），理由见 guard 文件头「顺序」。
  *   用例：`test/membership-gate.test.ts`（纯内核）＋ `test/membership-http.test.ts`（真 HTTP）。
  *
