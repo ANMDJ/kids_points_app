@@ -36,7 +36,10 @@ import { WishesModule } from './wishes/wishes.module'
     PrismaModule,
     MembershipModule,
     PermissionsModule,
-    LedgerModule,
+    // ★ 动态模块（W2-B）：有 DATABASE_URL ⇒ 绑 PrismaLedgerRepository（真查库）；
+    //   没有 ⇒ 绑 NotImplementedLedgerRepository（六个方法全抛 501，响亮失败而非静默 no-op）。
+    //   这里**不传参**＝按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
+    LedgerModule.register(),
     RulesModule,
     HabitsModule,
     WishesModule,

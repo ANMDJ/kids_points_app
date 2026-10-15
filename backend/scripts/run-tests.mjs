@@ -41,6 +41,16 @@ import { dirname, join, relative, resolve } from 'node:path'
 
 const HERE = resolve(import.meta.dirname, '..') // backend/
 const TEST_DIR = resolve(HERE, process.env.KP_TEST_DIR ?? 'test')
+/**
+ * ★ `KP_TEST_SUFFIX`（W2-B 新增）：默认 `.test.ts` —— **无库用例**。
+ *   真库套件（`test-db/*.dbtest.ts`）走它自己的入口 `scripts/run-db-tests.mjs`，
+ *   由那里把本变量设成 `.dbtest.ts`。为什么不干脆放进同一个目录：
+ *   `npm run ci` 是**无库**跑的，"要活库的用例"一旦混进来，CI 就必须在
+ *   "跳过（假绿）"与"必红（噪音）"之间二选一 —— 分目录 + 分入口才是唯一诚实的形状。
+ *   守卫本身不变（空目录仍然红、源文件数与产物数仍要一一对应），只是匹配的后缀变了。
+ */
+const SUFFIX = process.env.KP_TEST_SUFFIX ?? '.test.ts'
+const COMPILED_SUFFIX = SUFFIX.replace(/\.ts$/, '.js')
 const BUILD_DIR = resolve(HERE, '.tmp_test_build')
 const SHOWN = relative(HERE, TEST_DIR) || TEST_DIR
 
@@ -66,10 +76,10 @@ function collect(dir, suffix) {
   return found
 }
 
-// ── 守卫 ①：源目录里必须真的有 `*.test.ts` ────────────────────────────────────
-const sources = collect(TEST_DIR, '.test.ts')
+// ── 守卫 ①：源目录里必须真的有 `*<SUFFIX>` ────────────────────────────────────
+const sources = collect(TEST_DIR, SUFFIX)
 if (sources.length === 0) {
-  console.error(`FAIL  在 ${SHOWN} 下没有发现任何 *.test.ts`)
+  console.error(`FAIL  在 ${SHOWN} 下没有发现任何 *${SUFFIX}`)
   console.error('      0 个用例**不算通过** —— 这正是本包装器要拦的假绿（见文件头的实测记录）')
   process.exit(1)
 }
@@ -98,12 +108,14 @@ try {
 
 // ── 守卫 ③：源码文件与编译产物必须**一一对应**（少一个 ⇒ 那个文件静默没跑）──────
 const COMPILED_DIR = resolve(BUILD_DIR, relative(HERE, TEST_DIR))
-const compiled = collect(COMPILED_DIR, '.test.js')
+const compiled = collect(COMPILED_DIR, COMPILED_SUFFIX)
 if (compiled.length !== sources.length) {
   const missing = sources
     .map((f) => relative(TEST_DIR, f).replace(/\.ts$/, '.js'))
     .filter((f) => !compiled.some((c) => c.endsWith(f)))
-  console.error(`FAIL  源码有 ${sources.length} 个 *.test.ts，编译产物只有 ${compiled.length} 个 *.test.js`)
+  console.error(
+    `FAIL  源码有 ${sources.length} 个 *${SUFFIX}，编译产物只有 ${compiled.length} 个 *${COMPILED_SUFFIX}`
+  )
   console.error(`      没编译出来的：${missing.join('、') || '（无法逐一点名，但数量不等）'}`)
   process.exit(1)
 }

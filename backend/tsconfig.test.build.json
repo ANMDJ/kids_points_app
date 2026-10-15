@@ -11,5 +11,7 @@
     "sourceMap": false,
     "declaration": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  // ★ W2-B：真库套件（`test-db/*.dbtest.ts`）也一起编译 —— 于是它在**无库 CI** 里
+  //   照样过类型检查（`typecheck:tests`），只是不跑；跑它要 `npm run test:db`。
+  "include": ["src/**/*.ts", "test/**/*.ts", "test-db/**/*.ts"]
 }

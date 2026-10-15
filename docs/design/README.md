@@ -457,6 +457,157 @@
    与审批行自己的 childId 尚未同源校验）—— 会话层只解决了**一半**。
    **下一步**：W2（账本内核 ＋ 三个端口的 Prisma 实现：`Approvals` / `Membership` / `DeviceSession`）。
 
+19. ~~**账本只有前端一份语义（后端没有内核）**~~ → ✅ **已落地（2026-10-15，阶段 W2-A）**：
+    A1 / A4 / B6 / B7 / B8 这几条**前端**已修好的账本缺陷（见上表「前端可控制缺陷」），
+    在**后端**一直没有对应物：评分、扣分、兑换、撤销的语义只活在
+    `kids_points_mp/src/data/store.ts` 与 `lib/data/app_store.dart` 里，
+    后端连一个"这一笔该记多少分"的判定都没有。后果不是"少个功能"，而是
+    **同一条语义在两处各写一遍、迟早漂移 —— 而漂移的地方正好是账目**：
+    前端不再用 `Math.abs` 抹平符号、后端若自己再实现一遍就又会抹平；
+    前端拒绝余额不足、后端若改成截断就又会出现 `Σ流水 ≠ 余额`。
+    **落地物**：`backend/src/ledger/` —— `ledger.gate.ts`（**纯函数**判定内核：
+    `signedDelta()` / `resolveBalanceAfter()` / `buildRecordDraft()` / `reverseRecordDraft()` /
+    `findSnapshotMismatches()` / `assertSnapshotMatchesVersion()` / `verifyBalanceChain()`）
+    ＋ `ledger.repository.ts`（端口 `LedgerPort` ＋ 令牌 ＋ 默认 **501**）
+    ＋ `ledger.module.ts`（真装配，导出令牌）＋ `test/ledger-gate.test.ts`（**组 A–G，9 个 suite / 59 条用例**）。
+    **内核不碰 HTTP / DB / Prisma 客户端实例**（只借 Prisma 的**枚举类型**）⇒ 可以**离线穷举**
+    （余额恰好扣到 0、规则方向是 `penalty`、原记录已被冲正过、同一毫秒的两笔……），
+    且 `verifyBalanceChain()` / `findSnapshotMismatches()` 这两把尺子**W2-B 的真库套件直接复用**
+    —— 同一个尺子两处用，才不会出现"写入时校验一套、验证时另一套"。
+    **修的五条病（逐条对上前端的同编号）**：① **A1** —— 符号**只有一个来源**
+    （`direction × points`，**绝不用 `Math.abs`**）；负分规则若被调用方按 `+Math.abs(points)` 记，
+    直接拒绝（`DELTA_RULE_MISMATCH`），**不猜**；② **A4** —— 流水记**真实**操作人
+    （`operatorUserId` / `operatorRole`），且 `child_self` 必须是孩子、`guardian` 必须是家长；
+    `system` 来源**不许**带操作人（"系统干的"与"某人干的"必须分得开）；
+    ③ **B6** —— 余额不足**拒绝**（`INSUFFICIENT_POINTS`），**绝不截断到 0**
+    （旧实现 `if (points < 0) points = 0` 会让余额照改、流水照记 ⇒ 账本再也对不上）；
+    ④ **B7** —— 撤销写**冲正**记录（`source='correction'` ＋ `reversesRecordId` ＋ 金额取反），
+    原记录**完全不动** ⇒ 流水条数 **+1 而非 −1**；⑤ **B8** —— `titleSnapshot` **完整不截断**
+    （截断只允许发生在渲染层）、兑换必须带 `costSnapshot`（心愿被删后这笔扣分仍解释得清）。
+    **落地的不变量（`02` §5.7）**：**I4**（快照 == 版本行的对应值）—— 双用：
+    写侧 `assertSnapshotMatchesVersion()` 落库前不一致即拒（宁可 500），读侧
+    `findSnapshotMismatches()` 给真库套件逐行点名到「哪个孩子、哪条记录、哪一列、期望多少、实际多少」；
+    且**由构造保证**：传了版本行时快照字段一律取自版本行，调用方**无法**自己拼标题。
+    **I6**（撤销 = 冲正）见上；**I2**（`balanceAfter` 链自洽）—— `verifyBalanceChain()`
+    返回**人类可读的违例句**（空数组 = 自洽），并**逐处**点亮断裂（不是第一处就收工）。
+    **两条 fail-closed（都可执行断言）**：① 端口默认实现**显式 501**
+    （`LEDGER_PERSISTENCE_NOT_IMPLEMENTED`：**读余额 / 读原记录 / 读已冲正集合 / 读版本行 /
+    追加一笔 / 读整条链** 六个方法全拒）⇒ 默认装配下**任何走账本的路径都是 501** ——
+    假装写成功会让积分"看起来扣了却根本没落库"，那是本仓库最贵的病；
+    ② **错误分型**（与 `session.gate.ts` 同纪律）：数据/装配坏了 ⇒ `LedgerShapeError`（**500**），
+    正常业务分支（积分不够 / 重复冲正 / 记 0 分）⇒ `LedgerDeniedError`（**400/409**）
+    —— **数据问题不许被当成"用户操作不对"**。
+    ★ **枚举白名单用 `Record<Prisma枚举, true>`** 提供**编译期穷举**：Prisma 枚举加值时这里编译报错
+    ⇒ **被迫做决定**（而不是静默把新值当 `praise` 放行）。
+    > **实测基线（收口时跑的，非推断）**：`npm run test` → **10 个用例文件 / 203 个用例全部通过**
+    > （W1-C 之后是 9 / 144；新增 `ledger-gate.test.ts` **59 条**，逐文件数字取自
+    > `node --test <单个产物文件>` 的汇总行：**9 个 suite / 59 条**，相加 **= 203**，与 runner 汇总一致）；
+    > ★ **踩过一次的坑（记下来给 W2-B）**：`node --test .tmp_test_build/test/xxx.test.js` 读的是**磁盘上现成的产物** ——
+    > 若上一次跑的是 `npm run test:canfail`（它会在**变异后**编译、跑完再把源码还原），
+    > 产物就是**变异版**的。实测：直接这么数 `ledger-gate.test.js` 得到 **57/59（2 红）**，
+    > 而 `npm run test` **同一条代码 59/59 全绿** —— 那是**假红**，不是回归。
+    > 纪律：**取逐文件数字前先 `npm run test`（或 `npm run build`）刷新产物**。
+    > `npm run ci` → **`CI_EXIT=0`（14 步）**；**六条证伪**（`tools/_scratch/w2a-canfail.mjs`，
+    > 改完即还原、逐条 `sha256` 复原，`ALL PASS`）：
+    > ① 让 `signedDelta` 用 `Math.abs` 抹平符号（**A1 原病**）→「负分规则被抹平」**红**；
+    > ② 让余额不足**截断到 0** 而不是拒绝（**B6 原病**）→「静默截断」**红**；
+    > ③ 让操作人硬编码成"家长"（**A4 原病**）→「操作人必须是真实操作人」**红**；
+    > ④ 让"已被冲正过"的记录**再冲一次**（幂等保护失效）→「`ALREADY_REVERSED`」**红**；
+    > ⑤ 让端口默认实现**假装写成功**（返回假记录）→「默认装配 fail-closed」**红**；
+    > ⑥ 让 I2 对账器不再核对 `balanceAfter`（比较条件改成永假）→「F 组・中部断裂」**红**。
+    > ★ ⑥ 的点名走的是**用例名**而非断言消息：关掉对账器后它先在"违例条数"那步就红了，
+    > 根本走不到"期望多少、实际多少" —— **点名要跟着实际红在哪儿走**（与 W1-C ④ 同一条纪律）。
+    > ★ **真库陷阱（本轮实测记录，W2-B 必须处理）**：PostgreSQL 的 `now()` 在**同一事务内是同一个值**
+    > ⇒ 同事务写入的两条记录 `createdAt` **完全相同** ⇒ 单靠 `(childId, createdAt)` **无法定序**，
+    > `balanceAfter` 滚动求和就**没有唯一解**。因此 `verifyBalanceChain()` 遇到同一孩子的并列时间戳时
+    > **报「I2 顺序不可判」而不是报「断裂」** —— 换个排序就可能自洽，那属于**报假病**（比不报更糟）；
+    > 修法在**写入侧**（时间戳必须严格递增：显式传 `createdAt` 或加序列表），**不是让尺子猜顺序**。
+    > ★ 另记一条**尺子的可见边界**（写进用例，免得被当真）：链"自洽但余额为负"（−5 ⇒ −5，−5 ⇒ −10）
+    > **I2 判不出来** —— I2 只管 `Σ流水 == balanceAfter`，管不了"余额本身是否合法"；
+    > 后者由写入侧拒绝（B6）＋ 真库层面再加一把尺子（`Child.pointsBalance >= 0`，属 W2-B）共同守。
+    **仍未落地（不粉饰，与"已完成"分开记）**：① **真 Prisma 适配器** ——
+    `LEDGER_REPOSITORY` 默认实现是 **501**，**没有任何写入路径是通的**
+    ⇒ **"账本内核已落地"说的是判定语义，不是"积分已经能记账了"**（同一取舍：一注入 `PrismaService`，
+    无库 CI 会在启动阶段就崩）；② ~~**I1 / I3 / I5 三条不变量仍未有代码**（逐字段 diff /
+    复合外键命中 / `REVOKE`）~~ → ✅ **已由 W2-B 的真库套件交付**（组 C / 组 D / 组 G）；
+    ③ `idempotencyKey` 的**重放保护尚未接线**（`IdempotencyRecord` 表 ＋ 请求体哈希），
+    内核这一层只负责把**空白串归一成 `null`**（"看起来给了键"的假键不许成立）。
+    **下一步**：W2-B（`LedgerRepository` 的 Prisma 实现 ＋ 三个端口的真实现 ＋ 真库不变量套件，
+    先解决上面的 `createdAt` 定序陷阱）。
+
+    **W2-B 进展（2026-10-15；必须与上面的「仍未落地」合起来读，别只看这一段）**：
+    ① `backend/src/ledger/ledger.prisma.repository.ts`（`PrismaLedgerRepository`）—— 六个方法全实现，
+    `append()` 在**单事务**内：`SELECT … FOR UPDATE` 锁住余额行 → 取库钟与最新时间戳 → 余额 **CAS**
+    （`WHERE pointsBalance = 期望值`；陈旧草稿 ⇒ 409 `LEDGER_BALANCE_CHANGED`）→ `INSERT`；
+    `mapWriteError`：`P2002` → `LEDGER_DUPLICATE_IDEMPOTENCY_KEY`（**库层唯一约束**拦重放）、
+    `P2003` → `LEDGER_RULE_VERSION_MISSING`（⇒ **I3 由复合外键强制**，不靠"应用记得检查"）；
+    ★ 另有一条**只能靠真库发现**的结论：`PointRecord.reversedAt` **永远是 `null`**（应用角色对它没有
+    `UPDATE` 权限，I5）⇒「已被冲正」**只能**从新记录反查（`readReversedIds()`）——
+    任何按 `reversedAt` 判断"冲正过没有"的代码都会**永远认为没被冲正过**。
+    ② `backend/test-db/ledger-db.dbtest.ts`（**组 A–I / 9 个 suite / 16 条**；W2-C 又加了组 J ⇒ 现为 **A–J / 10 个 suite / 17 条**）：I1（改规则后老记录**逐字段**
+    不变 ＋ 仍指向旧版本）、I2（滚动求和自洽 ＋ `createdAt` **严格递增** ＋ 库钟不许抄调用方的 `now`）、
+    I3（全库扫孤儿引用 = 0 ＋ **反向证明**：直接写一条指向空版本的记录 ⇒ 库自己拒绝 `P2003`）、
+    I4（逐行跑 `findSnapshotMismatches()`，含负分规则；并用"喂一份被改过的版本行必须有输出"证明**尺子有牙齿**）、
+    I5（`UPDATE` / `DELETE` / Prisma 客户端 `update` 全被拒 —— 按 **SQLSTATE 42501** 判定，
+    **不能**按英文文案断言：本机 PG 报的是中文）、I6（冲正后原记录**逐字段不动**、条数 **+1**、
+    余额复原、二次冲正与"撤销的撤销"分别被 `ALREADY_REVERSED` / `CANNOT_REVERSE_REVERSAL` 拒）、
+    并发（两笔基于同一余额 ⇒ **恰好一笔**成功、另一笔 409）、幂等键重复 ⇒ 409 且**整笔回滚**
+    （第二次是重新读余额构造的草稿，拦住它的**只有**唯一约束）、以及 B6 红线（全库**无负余额** ＋
+    余额不足时零记录、余额不变）。
+    ③ **`createdAt` 定序的实现口径**（上面那条"W2-B 必须处理"的陷阱）：严格递增由**写入侧**保证 ——
+    库钟取 `clock_timestamp()`（**同一事务内会变**，`now()` 不会）＋ `MAX(createdAt)`，
+    并列或回退时取 `latest + 1ms`；**调用方的 `now` 只用于业务语义，绝不写进 `createdAt`**
+    （用例把调用方时钟设成 2020 年，钉住这一点）。**不改 schema、不加序列表。**
+    > ★ **真库当场抓到第二个离线用例永远抓不到的 bug（形态值得记住）**：`PointRecord.createdAt` 是
+    > **`timestamp without time zone`**，而 `clock_timestamp()` 是 **`with time zone`** ——
+    > 直接塞进 naive 列会被 PG 按**会话时区**换算（本机 `Asia/Shanghai`）⇒ 全部流水"来自 **8 小时后的未来**"，
+    > 而**读回来处处自洽**：链仍严格递增、求和仍对得上、类型也全对。**只在"和真实时间比"时才露馅。**
+    > 修法 `(clock_timestamp() AT TIME ZONE 'UTC')`（naive 列存 UTC 墙钟，与 Prisma 自己写 `Date` 的约定一致），
+    > 并把判据**留在真库套件里**（组 A：`|createdAt − 现在| < 60s`）——
+    > 这类"静默偏移一个时区"的病，纯语义的离线用例**结构上证明不了**。
+    > 记这条的用处：它解释了「为什么 W2-B 非要有真库套件不可」，比任何口号都具体。
+    **仍未落地（W2-B 时段的状态；① 已由 W2-C 结清，见紧下面那一段）**：① ~~**没接进装配** ——
+    `LEDGER_REPOSITORY` 仍是 501（一注入 `PrismaService`，无库 CI 会在启动阶段就崩 ⇒
+    需要一个"没有 `DATABASE_URL` 也不炸"的装配口径，这才是那块拼图）~~；② 真库套件**故意不做全库 I2 扫描**
+    （它自己就会造并列/未来时间戳的脏行），只做计数类红线（负余额、孤儿版本）；
+    且账本表 `DELETE` 被 REVOKE ＋ `Child` 是 `onDelete: Restrict` ⇒ **夹具写进去的数据删不掉**，
+    只能用随机 `RUN` 前缀隔离 —— 读这份套件的人先知道这一点，才不会以为它污染了库；
+    ③ `Approvals` / `Membership` / `DeviceSession` 三个端口**仍是 501**（与上面第 15／16／18 条同一笔账）；
+    ④ `idempotencyKey` 的重放保护仍**未接线**到 HTTP（库里已能拦，但**没有任何请求路径在用它**）。
+    **下一步**：把 `PrismaLedgerRepository` 接进 `LedgerModule`（先解决无库 CI 的装配口径），
+    再逐个替换三个端口的 501，并同步改掉那些**钉住 501 现状**的用例（它们现在钉的是"还没接"，
+    接线后必须改成钉"真的查了库"）。
+
+    **W2-C 进展（2026-10-15）：`PrismaLedgerRepository` 接进装配 —— 上一段的"下一步"第一句已兑现**
+
+    ① `backend/src/prisma/database-enabled.ts` ⇒ `hasDatabaseUrl()`：**全仓唯一的"有没有库"判据**
+    （`DATABASE_URL` 存在且 `trim()` 后非空）。它**刻意比 `PrismaService` 严一档**（空白串也算"没有"）：
+    `PrismaService` 缺库时在构造函数里**抛错**，所以危险方向只有"装配说有、它说没有" ⇒
+    把严的那一侧放在装配上，这个方向就永远不可能出现。
+    ② `ledger.module.ts` 改成**动态模块**：`LedgerModule.register({ hasDatabase? })` ——
+    **有库** ⇒ 绑 `PrismaLedgerRepository` ＋ `imports: [PrismaModule]`（共用全仓唯一的连接池，**不另开连接**）；
+    **无库** ⇒ 绑 `NotImplementedLedgerRepository` ＋ **不导入** `PrismaModule`（六个方法全 501）。
+    Nest 会**急切地**实例化被导入模块的 provider ⇒ "要不要导入 `PrismaModule`"必须在**装配时**定下来 ——
+    这就是上面第 ① 条那个卡点，静态 `imports` 无解。`app.module.ts` 用 `LedgerModule.register()`（不传参 ⇒ 按环境推断）。
+    ③ **两个世界各有各的响亮**，没有"看起来一样"的中间态：有库 ⇒ 查不到孩子报 **404**
+    （**不是**"余额 0"兜底）；无库 ⇒ 每个方法 501（可执行断言）。
+    **被明确排除的第三种做法**：无库时静默跳过记账 —— 那是 B6（扣分被静默截断）的同类病。
+    ④ 用例**两端各守一半**：`backend/test/ledger-wiring.test.ts`（离线 8 条，不含库）守"装配**声明**了什么" ——
+    判据纯函数、绑定的类、`imports` 里有没有 `PrismaModule`、用**替身 `PrismaService`** 证明端口用的是**注入的**客户端
+    （不是工厂里自己 `new` —— 那会绕过唯一连接池）、无库时六个方法**全 501**；
+    `backend/test-db/ledger-db.dbtest.ts` **组 J** 守"真图上**真的**查了库" —— 真 `register()` 建图 →
+    从注入器取端口 → 写一笔、读回来、**再换一条连接复核**。
+    ★ 缺一不可：只有离线用例时**接反了也全绿**（组 A–I 全是手工 `new` 实例，装到 501 上照样绿）；
+    只有真库用例时**没人看无库那条路**（而那正是 CI 的默认路）。
+    ⑤ 基线：`npm run ci` ⇒ **11 个用例文件 / 211 条全绿**；`npm run ci:db` ⇒ **1 个用例文件 / 17 条**（10 个 suite）全绿。
+    ⑥ **证伪**（`tools/_scratch/w2b-canfail.mjs`，临时物不入库）：5 条变异各自被点名 ——
+    分叉接反 ⇒ 离线组 A 红；无库也硬导 `PrismaModule` ⇒ 无库用例整体起不来（点名 `DATABASE_URL`）；
+    `register()` 忽略传参 ⇒ "绑定跟着 options 走"红；判据放宽到空串也算有库 ⇒ "空串 ⇒ 无库"红；
+    查不到孩子时返回 0 兜底 ⇒ "404 不是 0"红。
+    **仍未落地**：`Approvals` / `Membership` / `DeviceSession` 三个端口**仍是 501**（与第 15／16／18 条同一笔账）；
+    `idempotencyKey` 的重放保护仍**未接线**到 HTTP（库层已能拦，但**没有请求路径在用它**）。
+
+
 ### 文档缺陷修正记录
 
 **上一轮（自查发现）**
@@ -519,12 +670,19 @@
 npm run ci
 = prisma:validate → typecheck → typecheck:tests → typecheck:tools → honesty:probe
   → defects:check → templates:check → icons:check → relation:check → restrictions:check
-  → test → test:canfail → build → contracts:emit          （共 14 步）
+  → test → test:canfail → test:canfail:db → build → contracts:emit          （共 15 步）
+
+npm run ci:db            # 要**活库**；刻意**不在** `ci` 里（无库 CI 不许为了它变成「跳过」或「必红」）
+= db:verify → test:db → test:canfail:db
 ```
-> **勘误（2026-10-14 补齐）**：上面这一行原写于 W0（9 步），此后 D-a 加 `relation:check`、D-b 加 `restrictions:check`、
+> **勘误（2026-10-15 补齐）**：上面这一行原写于 W0（9 步），此后 D-a 加 `relation:check`、D-b 加 `restrictions:check`、
 > 阶段 B1 加 `typecheck:tests` / `test` / `test:canfail` —— 只有待办条目被更新，**这行代码块没跟上**。
 > 现已按 `backend/package.json` 的 `ci` 脚本**逐字重抄**。凡是"链式命令写在文档里"的地方，都会这样漂移 ——
 > 所以真实基线**以 `npm run ci` 的输出为准**，不以本行为准。
+> **再勘误（2026-10-15，W2-B）**：同一行**又**漂了一次 —— 本轮加 `test:canfail:db`（**14 → 15 步**），
+> 并把真库侧单独定成 `ci:db`。分界理由是**能不能没有数据库**：
+> `test:canfail:db` 只证明"守卫会拦人"、**不连库**（用的是打不通的假连接串），所以它能待在无库的 `ci` 里；
+> `test:db` 会**写入真实流水**，必须留在 `ci:db`。
 
 其中 `honesty:probe` 自带 4 项检查（A/B 是**注入式诚实性对照**，C/D 是结构性守卫）：
 
@@ -553,7 +711,10 @@ npm run ci
 ```
 npm run test             # = node scripts/run-tests.mjs（遍历 test/**/*.test.ts → tsc 真编译 → 跑**产物**）
 npm run typecheck:tests  # = tsc --noEmit -p tsconfig.test.json（转译器**不做类型检查**，必须单独 typecheck）
-npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真的会红」）
+npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真的会红」；无需数据库）
+npm run test:db          # = node scripts/run-db-tests.mjs（**要活库**：test-db/**/*.dbtest.ts；三道守卫见下）
+npm run test:canfail:db  # = node scripts/test-can-fail-db.mjs（证明真库入口的三道守卫**真的会拦**；无需数据库）
+npm run ci:db            # = db:verify → test:db → test:canfail:db（真库侧的完整验收）
 ```
 
 选型依据是**实测**（Node v26.10.0，2026-10-14），不是偏好：
@@ -590,21 +751,42 @@ npm run test:canfail     # = node scripts/test-can-fail.mjs（证明「测试真
    要求 runner 退出码非 0 **且点名夹具里的两条失败用例**（防「红在别的理由上」—— D-a 阶段踩过）；
    再把入口指向空目录 `scripts/__fixtures__/empty-test-dir/`，要求它**退出码非 0**。
    `--test-concurrency=1` 是**刻意**的：共享状态（数据库 / 构建产物）不许并发 —— W2 的库不变量用例必须串行。
+3. **真库套件单独一个入口**（W2-B 新增）：`npm run test:db` → `scripts/run-db-tests.mjs` 跑
+   `test-db/**/*.dbtest.ts`。**为什么不跟离线用例放一起、也没有 `skip` 分支**：
+   `npm run ci` 是**无库**跑的，混进来之后 CI 只能在「跳过（假绿）」与「必红（噪音）」里二选一 ——
+   而本仓库的纪律是「**没验证 ≠ 通过了**」，所以缺 `DATABASE_URL` 时**退出码 1** 并说明
+   「这一整套不变量**一条都没被验证**」，绝不打印成绿色。三道守卫全 fail-closed：
+   ① `NODE_ENV=production` 直接拒（套件会**写入**流水，而 `PointRecord` 的 `DELETE` 被 REVOKE（I5）
+   ⇒ 写进去**删不掉**）；② 缺 `DATABASE_URL` 红；③ 套件目录里 0 个 `*.dbtest.ts` 红。
+   它们**不是"写完就算"**：`npm run test:canfail:db`（`scripts/test-can-fail-db.mjs`，**不连库**）
+   逐条证明这三道守卫**真的会拦**，且都拦在**写入之前**（判据是运行横幅没出现，而不是"退出码非 0"就完事；
+   后者可能是红在别的毛病上），另带一条**正向控制**：守卫全过时必须真的把手交给 runner（横幅必须出现），
+   而没有活库时整体退出码仍须 ≠ 0。**没有这条正向控制，前面全绿也可能是「入口永远红」—— 那种守卫一样没用。**
+   `KP_TEST_SUFFIX` / `KP_DB_TEST_DIR` 两个覆盖变量的**唯一**用途，就是让上面的证伪能把入口指向**空目录**。
 
-> **实测基线（2026-10-15，W1-C 收口时复跑；不是推断）**：`npm run ci` → `CI_EXIT=0`（**14 步**全绿，末尾
+> **实测基线（2026-10-15，W2-C 收口时复跑；W2-B 时的数字括注在同一行里；不是推断）**：`npm run ci` → `CI_EXIT=0`（**15 步**全绿，末尾
 > `contracts:emit` 输出「已生成 contracts/permission-matrix.json（25 个动作）」且生成物 **`git status` 无 diff** ⇒ 幂等）；
-> `npm run test` → **9 个用例文件 / 144 个用例全部通过**（W1-C 之后；跑的是 `.tmp_test_build/` 里的产物。
-> W1-B 之后是 **7 / 98**、W1-A 时是 **5 / 68**）；`npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），
-> 其附注行**当场复现**了第 ① 条守卫的依据：runner 自己对空目录是「退出码=0，用例数=0」。
-> 各阶段自己的**证伪**另跑三处：`tools/_scratch/w1a-canfail.mjs` → **6 条 ALL PASS**、
+> `npm run test` → **11 个用例文件 / 211 个用例全部通过**（W2-C 之后；跑的是 `.tmp_test_build/` 里的产物。
+> W2-B 时是 **10 / 203**、W1-C 之后是 **9 / 144**、W1-B 是 **7 / 98**、W1-A 时是 **5 / 68**）；
+> `npm run test:canfail` → **4/4 ALL PASS**（`CANFAIL_EXIT=0`），其附注行**当场复现**了第 ① 条守卫的依据：
+> runner 自己对空目录是「退出码=0，用例数=0」；
+> **真库侧**：`npm run test:db` → **`DB_EXIT=0`，1 个用例文件 / 17 个用例全部通过**
+> （`ℹ suites 10 / pass 17 / fail 0`；W2-C 加组 J 之前是 `9 / 16`）；`npm run test:canfail:db` → **11 项 ALL PASS**（`CFDB_EXIT=0`）。
+> 各阶段自己的**证伪**另跑五处：`tools/_scratch/w1a-canfail.mjs` → **6 条 ALL PASS**、
 > `tools/_scratch/w1b-canfail.mjs` → **6 条 ALL PASS**、`tools/_scratch/w1c-canfail.mjs` → **6 条 ALL PASS**
-> （每条都「退出码≠0 ＋ 点名预期用例 ＋ `sha256` 复原」，见上面第 16／17／18 条）。
+> （见上面第 16／17／18 条）、`tools/_scratch/w2a-canfail.mjs` → **5 条 ALL PASS**（内核／尺子）、
+> `tools/_scratch/w2b-canfail.mjs` → **5 条 ALL PASS**（装配分叉；见第 19 条的 W2-C 段）
+> —— 每条都「退出码≠0 ＋ 点名预期用例/断言 ＋ `sha256` 复原」。
 > 另：**编译不过就不许跑测试**这条守卫**在三轮里各被真实触发过一次** —— W1-A 是一个"看起来无害"的变异
 > （`if (false && …)`）因破坏类型收窄报 `TS18048`；W1-B 是在 guard 的判定分支上加 `&& verdict.code !== …`
 > 破坏了 `verdict` 的类型收窄（`DENY` 分支没有 `.row`）报 `TS2339`；W1-C 又踩了同一条：
 > `if (false && row.childId !== requestedChildId)` 把 `row` 的非空收窄短路掉，报 **`TS18047`**。
 > 三次 runner 都直接拒绝执行（这正是我们要的行为：宁可红在编译，也不要红在"跑了一个不是要上线的产物"）。
-> ★ 三次的**教训一致**：写证伪变异时**先确认它能编译**，否则"没点名"会被误读成脚本坏了（见第 17／18 条）。
+> ★ 四次踩的是**同一类**教训：写证伪变异时**先确认它能编译**，否则"没点名"会被误读成脚本坏了（见第 17／18 条）。
+> W2-C 换了个形态（不是类型收窄，是"代码不见了"）：把真适配器从分叉里**删掉**是最自然的变异，
+> 但那会让它的 `import` 变成**未使用** ⇒ 撞 `noUnusedLocals` ⇒ 编译不过 ⇒ runner 拒绝跑 ⇒ 又一次"没点名"。
+> 改用**两条分支对调**（两个 `import` 都仍在用）就立刻变红。
+> 经验：**变异要挑那条"既编译得过、又正是要防的形态"** —— 二者缺一，证伪就变成了自欺。
 
 **完整流水线**（命令已就绪；**尚未接入 CI 平台** —— 选定平台后写成 workflow 文件即可）：
 

@@ -601,6 +601,101 @@ rec#1 的 (ruleId, ruleVersion) 指向空
 > 在部署时从环境变量注入（阶段 B2，2026-10-14）；`npm run db:verify` 另有 P1–P3 三条口令判据
 > （非空 / 非占位值 / 长度下限 · 不与所有者口令复用 · 用户名必须分离）。
 
+**落地注（W2-A，2026-10-15）：I2 / I4 / I6 已有代码，且**用的是同一把尺子****
+
+| 不变量 | 落地物（`backend/src/ledger/ledger.gate.ts`） | 用例（`backend/test/ledger-gate.test.ts`） |
+|---|---|---|
+| **I4** 快照 == 版本行 | **双用尺子**：写侧 `assertSnapshotMatchesVersion()`（不一致即抛 ⇒ 500）、读侧 `findSnapshotMismatches()`（返回点名列的问题清单）；**并由构造保证** —— `buildRecordDraft()` 传了版本行时，快照字段一律取自版本行，调用方自己拼标题会被拒 | 组 D（**8 条**）＋ 组 C / C2（构造侧，共 12 条） |
+| **I6** 撤销 ⇒ 新增冲正记录 | `reverseRecordDraft()`：`source='correction'` ＋ `reversesRecordId` ＋ 金额取反 ＋ **继承 `ruleId/ruleVersion`** ＋ 原记录**完全不动** | 组 E（11 条） |
+| **I2** `balanceAfter` 链自洽 | `verifyBalanceChain()`：返回**人类可读的违例句**（空数组 = 自洽），**逐处**点亮断裂 | 组 F（9 条） |
+
+- **同一个尺子两处用**是本条的设计要点：`findSnapshotMismatches()` / `verifyBalanceChain()`
+  既在写入路径上把关，又是 W2-B 真库套件逐行跑的那把 —— 否则会出现
+  "写入时校验一套、验证时另一套"，两边都绿而数据是错的。
+- **I2 的起点是 0**（"该孩子的账本从空开始，且每一次余额变动都经账本"）。
+  将来若引入**期初余额 / 数据迁移**，**必须改函数签名显式传起点** ——
+  悄悄改起点等于让尺子说谎。
+- ⚠️ **I2 的可见边界**：链条"自洽但余额为负"（−5 ⇒ −5，再 −5 ⇒ −10）它**判不出来** ——
+  I2 只管 `Σ流水 == balanceAfter`，不管"余额本身是否合法"。后者由**写入侧拒绝**
+  （`INSUFFICIENT_POINTS`，B6）＋ **真库层面再加一把尺子**（`Child.pointsBalance >= 0`，属 W2-B）共同守。
+- ★★ **真库陷阱（W2-A 实测记录，W2-B 必须先处理）**：PostgreSQL 的 `now()` 在**同一事务内是同一个值**
+  ⇒ 同事务写入的两条记录 `createdAt` **完全相同** ⇒ 单靠 `(childId, createdAt)` **无法定序**，
+  本不变量（"滚动求和 == `balanceAfter`"）就**没有唯一解**。
+  故 `verifyBalanceChain()` 遇并列时间戳时报 **`I2 顺序不可判：…`** 而**不**报"断裂"
+  （换个排序就可能自洽 —— 那属于**报假病**，比不报更糟）。
+  **修法在写入侧**：时间戳必须严格递增（显式传 `createdAt`，或加序列表 / 单调序），
+  **不是**让校验器去猜顺序。
+- **I4 的例外**：`source='correction'` 的冲正记录**继承** `ruleId/ruleVersion`（回答"哪一版规则产生了这笔分、
+  又被谁撤销"），但 `titleSnapshot` 刻意是 `撤销：…` —— 拿它跟版本标题比**必然会红**。
+  因此冲正记录**只校验 `(ruleId, ruleVersion)` 成对与指向，不比内容快照**。
+- **诚实边界（不在本层冒充）**：**I1**（改规则后逐字段 diff 为空）／**I3**（`(ruleId, ruleVersion)`
+  必须命中）／**I5**（`REVOKE`）**需要真库**，本层一行都没写 —— 它们随 W2-B 的真库套件交付
+  （`npm run db:verify` 目前只覆盖 I5 的那一半）。另：账本持久化端口
+  （`LEDGER_REPOSITORY`）**默认实现是 501**（`LEDGER_PERSISTENCE_NOT_IMPLEMENTED`）——
+  **"账本内核已落地"说的是判定语义，不是"积分已经能记账了"**。
+  > ★ **W2-C 修订**：这句在**无库**时仍然成立，但**有库**时已换成真实现（见下文"接线注"）——
+  > "501 还是真适配器"由**装配时**按 `hasDatabaseUrl()` 决定，不再是一句静态结论。
+
+**落地注（W2-B，2026-10-15）：I1 / I3 / I5 由真库套件交付；I2 的定序口径已定**
+
+| 不变量 | 落地物 | 真库用例（`backend/test-db/ledger-db.dbtest.ts`） |
+|---|---|---|
+| **I1** 改规则不改历史 | 规则版本**追加式**写入（`PointRuleVersion`）＋ 记录里的 `ruleId/ruleVersion` 不外键级联删改 | 组 C：规则升到 v2 后，老记录**逐字段**不变、仍指向 v1 |
+| **I3** `(ruleId, ruleVersion)` 必须命中 | **复合外键**（`PrismaLedgerRepository.mapWriteError`：`P2003` → `LEDGER_RULE_VERSION_MISSING`）⇒ 不靠"应用记得检查" | 组 D：全库**孤儿引用 = 0** ＋ **反向证明**（直接写一条指向空版本的记录 ⇒ 库自己拒绝） |
+| **I5** 账本不可改删 | `prisma/sql/900_ledger_revoke.sql`（`REVOKE UPDATE/DELETE`） | 组 G：`UPDATE` / `DELETE` / Prisma 客户端 `update` 全被拒（判据是 **SQLSTATE 42501** —— 本机 PG 报中文，**不能**断言英文文案） |
+| **I2** 链自洽 ＋ **可定序** | 写入侧保证 `createdAt` **严格递增**（见下） | 组 A：滚动求和自洽 ＋ 严格递增 ＋ 不照抄调用方时钟；组 B：并列时报「顺序不可判」 |
+| **I6** 撤销 ⇒ 冲正 | `reverseRecordDraft()` 的落库形态 | 组 F：原记录**逐字段不动**、条数 **+1**、余额复原、二次冲正与"撤销的撤销"被拒 |
+| **B6** 余额不许被截断 | 写入侧拒绝（`INSUFFICIENT_POINTS`）＋ 负数红线 | 组 I：全库**无负余额** ＋ 余额不足时**零记录**、余额不变 |
+
+> 用例分布（`npm run test:db` → `1 个用例文件 / 17 个用例`，`ℹ suites 10`）：
+> 组 A 2 ／ B 1 ／ C 1 ／ D 3 ／ E 2 ／ F 1 ／ G 1 ／ H 3 ／ I 2 ／ **J 1** = **17**
+> （**J** 是 W2-C 补上的\"装配\"用例 —— 走真 DI 取端口，见下文\"接线注\"）。
+
+- **`createdAt` 定序口径（上面那条"W2-B 必须先处理"的答案）**：严格递增由**写入侧**保证 ——
+  `append()` 在单事务内 `SELECT … FOR UPDATE` → 取**库钟** ＋ `MAX(createdAt)` → 并列或回退时取
+  `latest + 1ms`。库钟必须是 **`clock_timestamp()`**（同一事务内**会变**；`now()` 不会 ⇒ 同事务两笔会并列），
+  **不是** `now()`。**调用方的 `now` 只用于业务语义，绝不写进 `createdAt`**
+  （用例把调用方时钟设成 **2020 年**钉住这一点）。**不改 schema、不加序列表。**
+- ⚠️ **真库当场抓到的第二个坑（离线用例结构上证明不了，记牢）**：`PointRecord.createdAt` 是
+  **`timestamp without time zone`**，而 `clock_timestamp()` 是 **`with time zone`** —— 直接塞进 naive 列
+  会被 PG 按**会话时区**换算（本机 `Asia/Shanghai`）⇒ 全部流水"**来自 8 小时后的未来**"，
+  而**读回来处处自洽**：链仍严格递增、滚动求和仍对得上、类型也全对。
+  修法：`(clock_timestamp() AT TIME ZONE 'UTC')`（naive 列存 **UTC 墙钟**，与 Prisma 自己写 `Date` 的约定一致）；
+  并把判据**留在真库套件里**（组 A：`|createdAt − 现在| < 60s`）。
+- ⚠️ **I5 的直接后果（不是设计选择）**：应用角色对 `PointRecord` 没有 `UPDATE` 权限 ⇒
+  `PointRecord.reversedAt` **永远是 `null`**。所以"这笔被冲正过没有"**只能**从新记录反查
+  （`readReversedIds()`）；任何按 `reversedAt` 判断的代码都会**永远认为没被冲正过**。
+- ⚠️ **I2 在真库套件里的可见边界**：套件**故意不做全库 I2 扫描** —— 它自己就会造"并列 / 未来时间戳"的脏行，
+  全库扫必红。真库侧只做**计数类红线**（全库无负余额、孤儿版本引用 = 0），
+  逐笔滚动求和只对**每个用例自己新建的孩子**做。
+- **仍未落地**：三个端口的真实现（`Approvals` / `Membership` / `DeviceSession`）**仍是 501**。
+  `LEDGER_REPOSITORY` 那一半已于 **W2-C** 接好（见下）。
+  另外：真库套件会**写入真实流水且删不掉**（`DELETE` 被 REVOKE、`Child` 是 `onDelete: Restrict`），
+  故用随机 `RUN` 前缀隔离，且入口有 `NODE_ENV=production` 拒跑的守卫。
+
+**接线注（W2-C，2026-10-15）：上面那句\"真适配器已写出、但未接进装配\"已经过期**
+
+- `LedgerModule` 改成**动态模块**：`register()` 按 `hasDatabaseUrl()`
+  （`backend/src/prisma/database-enabled.ts`，**判据只有一处**）分叉 ——
+  **有** `DATABASE_URL` ⇒ `PrismaLedgerRepository`（真查库，**并导入 `PrismaModule`** 共用全仓唯一连接池）；
+  **没有** ⇒ `NotImplementedLedgerRepository`（六个方法全抛 501，**响亮兜底**）。
+  `app.module.ts` 里是 `LedgerModule.register()`（不传参 ⇒ 按环境推断；`main.ts` 第一行已加载 dotenv）。
+- **为什么必须动态**（这就是当初那个卡点）：`PrismaService` 的构造函数在缺 `DATABASE_URL` 时**刻意**抛错，
+  而 Nest 会**急切地**实例化被导入模块的全部 provider ⇒ 静态 `imports: [PrismaModule]` 会让
+  `npm run test`（无库）在**装配阶段**就崩，连\"501 是默认行为\"这条用例都跑不到。
+  所以\"要不要导入 `PrismaModule`\"必须在**装配时**就有答案。
+- **两个世界各有各的响亮**，没有\"看起来一样\"的中间态：
+  · 有库 ⇒ 第一次查库连不上就炸；查不到孩子 ⇒ **404**（不是\"余额 0\"兜底）；
+  · 无库 ⇒ 每个方法 501（可执行断言）。
+  **被明确排除的第三种做法**：无库时静默跳过记账 —— 那正是 B6（扣分被静默截断）的同类病。
+- **用例两端各守一半**（缺一不可）：
+  · 离线 `backend/test/ledger-wiring.test.ts`（**组 A–C / 8 条**）：判据纯函数、装配声明、
+    以及用**替身 `PrismaService`** 证明\"有库时端口走的是**注入的**客户端\"（不是工厂里自己 `new` 一个 —— 那会绕过唯一连接池）；
+  · 真库 `backend/test-db/ledger-db.dbtest.ts` **组 J**：用真 `register()` 建图、从注入器取端口，
+    **读写的是真库**，并换一条连接复核（防止\"只是返回对象好看\"）。
+    ★ 这条补的正是\"组 A–I 全是手工 `new` 实例 ⇒ 装到 501 上也会**全部照绿**\"的漏洞。
+
+
 ---
 
 ## 6. 孩子 `adjust_points` 的归一化（dispatcher 层）
