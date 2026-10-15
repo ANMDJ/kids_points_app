@@ -36,7 +36,7 @@ import type {
  *   任何一个读到"事务外"的副本，都会造出"判定时的世界"与"落库时的世界"不一致。
  *   放在同一端口上，实现才有机会把它们塞进同一个事务。
  *
- * ✅ 目前的真实状态（W2-B 第二阶段）：真适配器 `PrismaLedgerRepository` 已写出**并已接进装配** ——
+ * ✅ 目前的真实状态（W2-C）：真适配器 `PrismaLedgerRepository` 已写出**并已接进装配** ——
  *    `LedgerModule.register()` 按 `hasDatabaseUrl()` 分叉（有库 ⇒ 真实现 / 无库 ⇒ 501 兜底）。
  *    I1–I6 真库套件见 `test-db/ledger-db.dbtest.ts`（组 J：走真 DI 取端口读写真库）。
  * ⚠️ 仍为 501 的三条腿：`Approvals` / `Membership` / `DeviceSession` 三个端口。
@@ -80,7 +80,7 @@ export interface LedgerPort {
 /**
  * 「**没有数据库**」时的兜底实现：**一律 501**。
  *
- * ── 它现在的位置（W2-B 第二阶段接线之后）──────────────────────────────────
+ * ── 它现在的位置（W2-C 接线之后）──────────────────────────────────
  *   `LedgerModule.register()` 按 `hasDatabaseUrl()` 分叉：**有** `DATABASE_URL` ⇒
  *   `PrismaLedgerRepository`（真查库）；**没有** ⇒ 本类。所以它不再是"唯一装配"，
  *   而是"这台机器上没有库"时的**响亮兜底**（离线用例、还没配 `.env` 的临时环境）。

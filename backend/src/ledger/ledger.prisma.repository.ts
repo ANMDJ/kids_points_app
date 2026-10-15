@@ -28,7 +28,7 @@ import type { LedgerPort } from './ledger.repository'
  *   ③ **并发**：`SELECT … FOR UPDATE` 锁住该孩子的余额行 ＋ 余额 **CAS**
  *      （`WHERE pointsBalance = 期望值`）—— 两笔并发扣分不会都成功。
  *
- * ── ✅ 接线状态（W2-B 第二阶段，2026-10-15 已接）──────────────────────────────
+ * ── ✅ 接线状态（W2-C，2026-10-15 已接）──────────────────────────────
  *   `LedgerModule` 已是**动态模块**：`register()` 按 `hasDatabaseUrl()`（`prisma/database-enabled.ts`，
  *   判据只有一处）分叉 —— 有库 ⇒ 本文件（真查库）；无库 ⇒ `NotImplementedLedgerRepository`（**显式 501**）。
  *   `app.module.ts` 里是 `LedgerModule.register()`（不传参 ⇒ 按环境推断；`main.ts` 第一行已加载 dotenv）。

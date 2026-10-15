@@ -1,5 +1,5 @@
 /**
- * ledger-wiring.test.ts —— **装配口径**的用例（W2-B 第二阶段，2026-10-15）
+ * ledger-wiring.test.ts —— **装配口径**的用例（W2-C，2026-10-15）
  *
  * ── 这个文件回答的问题，与 `ledger-gate.test.ts` 完全不同 ────────────────────
  *   `ledger-gate.test.ts` 管「判定语义对不对」（纯函数、离线穷举）；
