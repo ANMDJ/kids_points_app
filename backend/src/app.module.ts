@@ -11,6 +11,7 @@ import { NotificationsModule } from './notifications/notifications.module'
 import { OnboardingModule } from './onboarding/onboarding.module'
 import { PermissionsModule } from './permissions/permissions.module'
 import { PrismaModule } from './prisma/prisma.module'
+import { ReadModule } from './read/read.module'
 import { RulesModule } from './rules/rules.module'
 import { WishesModule } from './wishes/wishes.module'
 
@@ -49,6 +50,9 @@ import { WishesModule } from './wishes/wishes.module'
     //   DeviceSessionModule / MembershipModule（同一个 hasDatabase 只有一个来源）。
     //   不传参 ⇒ 按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
     ApprovalsModule.register(),
+    // ★ W4-A（2026-10-18）：只读入口 `GET /home` / `GET /records`。
+    //   有库 ⇒ PrismaReadRepository；无库 ⇒ 501（不返回空数据冒充成功）。
+    ReadModule.register(),
     OnboardingModule,
     InvitesModule,
     // ★ 动态模块（W2-D，2026-10-16）：有库 ⇒ PrismaDeviceSessionRepository

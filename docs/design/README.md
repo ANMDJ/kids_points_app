@@ -3,7 +3,7 @@
 > 本目录是**可评审的设计事实源**，所有条目均以现有代码中的真实方法/调用点为依据，非推测。
 
 > **需求侧文档**（面向「做什么、为什么做、做到什么程度算完成」）见 [`../PRD.md`](../PRD.md) ——
-> 它整合本目录 `01`–`12` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
+> 它整合本目录 `01`–`13` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
@@ -19,16 +19,19 @@
 | [`10-d1b-handoff.md`](./10-d1b-handoff.md) | **阶段 D-a 交接单**（`D1b` `relation` 升枚举 `RelationKind`）：**三处手抄契约 ＋ Prisma 默认 `DROP+ADD` 会静默清列这个坑**、落地清单、**新增闸门 `relation:check` 的 5 项检查**、**证伪 15 例（含 3 控制例）**、**三条自我纠正**、遗留（`D3b` / 首启引导 / 闸门 ④ 目前"无字面量可查"） | ✅ D-a 已收口 |
 | [`11-d3b-handoff.md`](./11-d3b-handoff.md) | **阶段 D-b 交接单**（`D3b` `ChildMember.restrictions` 裸 `Json` 定形）：**为什么定形只能落在应用层（Prisma 表达不了 `Json` 内部形状）**、权威源 ↔ 两处手抄的三处对账、落地清单、**新增闸门 `restrictions:check` 的 6 项检查**、**证伪 17 例（14 反例：每例"红且只点名自己" ＋ 3 控制例）**、**`02` §3 去掉开放标记 `...` 的口径修正**、遗留（写入路径未开工 / 闸门此刻"无字面量可查"） | ✅ D-b 已收口 |
 | [`12-w3c-handoff.md`](./12-w3c-handoff.md) | **阶段 W3-C 交接单**（审批链路收尾）：**4 执行器 / 5 种 `autoReason` / `expireDue()` 后台扫描 / `Idempotency-Key`**、真库证据与可复跑基线、**`add_wish` 无流水 / 加分流水不带 `ruleId` / 幂等响应缓存不在业务事务**等 8 条防复发坑、W4 接手顺序与仍未落地边界 | ✅ W3-C 已收口 |
+| [`13-w4a-handoff.md`](./13-w4a-handoff.md) | **阶段 W4-A 交接单**（只读后端 `GET /home` / `GET /records`）：**端口/适配器/映射/三道屏障**、`goodHabitCount` 与 `rewardCount` 的历史口径、`limit + 1` 分页、三层证据（离线 HTTP / 装配 / 真库）、**真库抓到的 `/records` 对已删孩子返回空页**、仍未落地的写端点边界 | ✅ W4-A 已收口 |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
 
 > ⚠️ **读法**：以下按阶段留档，**后面的阶段会推翻前面的结论**。当前（2026-10-18）最关键的一条：
+> 后端**已有只读入口** —— **W4-A** 起 `GET /home` / `GET /records` 有库时是真 Prisma 查询（无库仍 501），
+> 双端不必再只靠内存种子；写端点（规则 / 习惯 / 心愿 / 邀请）仍未建。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
-> **W2-D 当时**的事实；以本目录最后三段（W3-A / W3-B / W3-C）为准。
+> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A）为准。
 
 ### ✅ 已完成并验证
 
@@ -783,6 +786,42 @@
     规则 / 习惯 / 心愿 / 邀请等**其它业务模块端点**仍未建（不在 W3 范围）；
     加分的「每天 3 条 / 同因去重」仍属 §6 dispatcher（单笔 ≤50 已落实）。
     交接单：[`12-w3c-handoff.md`](./12-w3c-handoff.md)。
+
+
+**W4-A 进展（2026-10-18）：只读后端 `GET /home` / `GET /records` —— 双端可以不只靠种子了**
+
+    ① **两个只读端点**（`ReadController`，与 `/approvals` 同一 Guard 顺序
+    `DeviceSessionGuard → MembershipGuard → PermissionsGuard`）：
+    `GET /home` 消费矩阵 `view_child_points`，`GET /records` 消费 `view_records`（两角色均 ALLOW）。
+    `childId` **只来自 `req.kpChildId`**（会话）。`/records` 的查询 DTO 只白名单
+    `category` / `limit`，传 `childId` 等未知键一律 `400`；`/home` 不接受查询参数，传了也不采信。
+    ② **端口 + 适配器**：`ReadPort` / `PrismaReadRepository`；无库装配绑
+    `NotImplementedReadRepository`（`loadHome` / `listRecords` 都 501，**绝不返回空快照**）。
+    `ReadModule.register()` 沿用 `LedgerModule` 的做法：有库才 import `PrismaModule`。
+    ③ **口径（容易读错的三条）**：
+    · `goodHabitCount` = 表扬流水中 `source != correction` 且 `reversedBy: none` —— 冲正后要**回落**；
+    · `rewardCount` = `Wish.redeemed: true` 的条数（A5：手动加分不算兑换）；软删的已兑换心愿
+      仍计入累计，但不进首页 `wishes` 列表；
+    · 规则 `points` 在库里恒为正，mapper 按 `direction == penalty` 输出**负分**（A1）。
+    ④ **`/records`**：`orderBy (createdAt desc, id desc)`；`limit` 默认 50、范围 1–200；
+    适配器 `take = limit + 1` 判 `hasMore`；`category` 只接受 `praise / exchange / adjust`。
+    **孩子不存在或已软删时两个端点都 404 `CHILD_NOT_FOUND`**（`listRecords` 先查 `Child` 行，
+    不返回「还没有任何记录」的空页）。
+    ⑤ **三层证据**（缺一层就有假绿）：
+    · `backend/test/read-http.test.ts` —— 真 HTTP、假端口：屏障/拒绝/入参封闭/映射；
+    · `backend/test/read-wiring.test.ts` —— 真装配、假 Prisma：`where` / `take` / `orderBy` 到底交了什么；
+    · `backend/test-db/read-db.dbtest.ts` —— 真库 + 真 `AppModule` + 真 `fetch`：软删、冲正、
+      跨孩子、分页都以最终 JSON 为准。
+    ⑥ **真库抓到离线用例抓不到的 bug（值得记住）**：`/records` 起初只按 `childId` 查流水，
+    对一个 `status=deleted` 的孩子返回 **200 + 空数组**，而 `/home` 对同一孩子返回 404 ——
+    两个端点互相矛盾。修法是把「孩子仍 active」的检查放进 `listRecords`（端口返回 `null`），
+    service 统一翻成 404；并在装配用例里加了一条「找不到孩子就**不查**流水」的反回退断言。
+    ⑦ 真跑基线（2026-10-18）：`npm test` → **16 文件 / 286 条**；
+    `npm run test:db` → **6 文件 / 91 条**；`npm run ci` → **`CI_EXIT=0`（15 步）**；`npm run build` → 0。
+    本阶段**没有新增迁移**（读的字段 W0 schema 已有）。
+    ⑧ 仍不粉饰：规则 / 习惯 / 心愿 / 邀请的**写端点未建**；双端 `AppStore` 仍用内存种子
+    （W4-B 起才逐个替换）；设备凭据仍不可验证（生产 503）。
+    交接单：[`13-w4a-handoff.md`](./13-w4a-handoff.md)。
 
 
 ### 文档缺陷修正记录
