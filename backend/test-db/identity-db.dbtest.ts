@@ -30,11 +30,8 @@ import { Test } from '@nestjs/testing'
 import { Prisma } from '@prisma/client'
 
 import { ApprovalsModule } from '../src/approvals/approvals.module'
-import {
-  APPROVALS_REPOSITORY,
-  NotImplementedApprovalsRepository,
-  type ApprovalsPort
-} from '../src/approvals/approvals.repository'
+import { APPROVALS_REPOSITORY, type ApprovalsPort } from '../src/approvals/approvals.repository'
+import { PrismaApprovalsRepository } from '../src/approvals/approvals.prisma.repository'
 import { DeviceSessionGuard } from '../src/device-session/device-session.guard'
 import { DeviceSessionModule } from '../src/device-session/device-session.module'
 import { PrismaDeviceSessionRepository } from '../src/device-session/device-session.prisma.repository'
@@ -395,7 +392,7 @@ describe('组 D：装配口径 —— DI 取到的端口真的查库（真 `regi
     }
   })
 
-  it('★ `ApprovalsModule.register()`（不传参）：世界转发给两个子模块；审批端口**仍是** 501', async () => {
+  it('★ `ApprovalsModule.register()`（不传参）：世界转发给三个子模块，审批端口也是**真适配器**', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [ApprovalsModule.register()]
     }).compile()
@@ -411,12 +408,12 @@ describe('组 D：装配口径 —— DI 取到的端口真的查库（真 `regi
         '`ApprovalsModule.register()` 没把"有库"转发给 MembershipModule'
       )
 
-      // 诚实的那一半：审批端口**没有**真实现，仍是显式 501
-      //（别把"能建图"读成"审批能用了"—— 那正是 W3 的活）。
+      // W3-A 起审批端口不再是 501：不传参 ⇒ 由 `DATABASE_URL` 推断“有库”，
+      // 绑的必须是真适配器（旧断言停在“仍是 NotImplemented”上，已经过期）。
       const approvals = moduleRef.get<ApprovalsPort>(APPROVALS_REPOSITORY)
       assert.ok(
-        approvals instanceof NotImplementedApprovalsRepository,
-        `审批端口变成了 ${approvals.constructor.name} —— 若真实现了，本行要一起改成"已验证实现"`
+        approvals instanceof PrismaApprovalsRepository,
+        `审批端口变成了 ${approvals.constructor.name} —— 没把“有库”转发给审批模块，W3-A 的连接就断了`
       )
 
       // 宿主模块实例化的守卫必须真的解得开（端口没被 exports 出来时，这一行会抛依赖解析错误）。

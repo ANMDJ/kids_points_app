@@ -1,16 +1,30 @@
-import { DynamicModule, Module } from '@nestjs/common'
+import { DynamicModule, Module, type Type } from '@nestjs/common'
 
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { MembershipModule } from '../membership/membership.module'
 import { PermissionsModule } from '../permissions/permissions.module'
 import { hasDatabaseUrl } from '../prisma/database-enabled'
+import { PrismaModule } from '../prisma/prisma.module'
 import { ApprovalsController } from './approvals.controller'
+import { PrismaApprovalsRepository } from './approvals.prisma.repository'
 import {
   APPROVALS_REPOSITORY,
-  NotImplementedApprovalsRepository
+  NotImplementedApprovalsRepository,
+  type ApprovalsPort
 } from './approvals.repository'
 import { ApprovalsService } from './approvals.service'
+
+/**
+ * 审批端口的实现选择（**唯一分叉点**，与 `resolveMembershipRepositoryClass` 同一手法）。
+ *
+ * 有库 ⇒ 真 Prisma 适配器（批准即同事务写流水/余额/审计）；
+ * 无库 ⇒ 显式 501（`npm test` 不需要库，也**不许**假装写入成功）。
+ */
+export function resolveApprovalsRepositoryClass(hasDatabase: boolean): Type<ApprovalsPort> {
+  return hasDatabase ? PrismaApprovalsRepository : NotImplementedApprovalsRepository
+}
+
 
 /**
  * 审批（docs/design/02 §4）
@@ -38,10 +52,12 @@ import { ApprovalsService } from './approvals.service'
  * 状态（2026-10-14 阶段 B4）：
  *   · **HTTP 路径已建**（`POST /approvals`、`POST /approvals/:id/decide`），判定**真实消费**
  *     `approval-policy.ts`；用例见 `test/approvals-http.test.ts`（真 HTTP，非直接调 service）。
- *   · 持久化端口 `ApprovalsPort` 的**默认实现是显式 501**（★ **有库也是** 501：本模块只转发世界，
- *     不给审批端口选实现）—— 落库 / 账本 / 审计尚未落地
- *     （下一段工作 ＝「审批的同事务写入路径」，见 `ledger.prisma.repository.ts` 文件头 ★）。
- *     即：**判定已上线，写入未落地**，且未落地这件事有可执行断言钉着。
+ *   · 持久化端口 `ApprovalsPort` 的默认实现是显式 501（**无库装配**）；
+ *   · **W3-A（2026-10-18）已接真库**：有库 ⇒ `PrismaApprovalsRepository` ——
+ *     批准 / 自批在**同一事务**里写 `ApprovalRequest` 终态 ＋ `PointRecord` 流水 ＋
+ *     `Child.pointsBalance` ＋ `AuditLog`；无库 ⇒ 仍显式 501（不假装写入成功）。
+ *     即：**有库时\"批准\"真的会扣分**，且双击只扣一次（乐观锁 + 幂等键）。
+ *     ⚠️ 执行器目前只覆盖 `redeem`（兑换心愿）；其余动作建请求时 400，不做\"永远批不动的 pending\"。
  *   · 身份是**服务端确立的**（W1-C，2026-10-15）：`DeviceSessionGuard` 按
  *     `x-kp-device-id` ＋ `x-kp-child-id` 查会话 ⇒ 角色/ userId **由会话行给出**
  *     （客户端自报的 `x-kp-role` / `x-kp-user-id` 已废弃、不被读取）。生产 503
@@ -96,6 +112,9 @@ export class ApprovalsModule {
     return {
       module: ApprovalsModule,
       imports: [
+        // 只有\"有库\"的世界才把 PrismaModule 拉进图：`PrismaService` 在缺 DATABASE_URL 时
+        // **刻意**抛错，静态导入会让离线 `npm test` 在装配阶段就炸（同 MembershipModule）。
+        ...(hasDatabase ? [PrismaModule] : []),
         // ★ 同一个 `hasDatabase` 往下传（W2-D）：两个子模块的装配分叉由此**只有一个来源**。
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
@@ -109,9 +128,13 @@ export class ApprovalsModule {
         //   `Nest can't resolve dependencies of the DeviceSessionGuard (?)`
         //   （W1-B 在 MembershipModule 上实测过；W1-C 给 DeviceSessionModule 补齐了 exports）。
         DeviceSessionGuard,
-        // ★ 默认实现 = 一律 501（见 approvals.repository.ts 的说明）。
-        //   落 Prisma 实现时**只换这一行**，service / controller / 用例都不动。
-        { provide: APPROVALS_REPOSITORY, useClass: NotImplementedApprovalsRepository }
+        // ★ W3-A（2026-10-18）：**有库 ⇒ 真实现**（同事务写 ApprovalRequest + PointRecord +
+        //   Child.pointsBalance + AuditLog）；无库 ⇒ 显式 501（不假装写入成功）。
+        //   service / controller 一行都不用改 —— 这正是端口存在的意义。
+        {
+          provide: APPROVALS_REPOSITORY,
+          useClass: resolveApprovalsRepositoryClass(hasDatabase)
+        }
       ]
     }
   }

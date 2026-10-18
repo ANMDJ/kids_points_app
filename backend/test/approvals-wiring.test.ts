@@ -2,8 +2,9 @@
  * approvals-wiring.test.ts —— `ApprovalsModule` 的**世界转发**用例（W2-D，2026-10-16）
  *
  * ── 这个文件只回答一个问题：「在哪个世界」有没有**第二个来源**──────────────────
- *   `ApprovalsModule` 自己**不选实现**（`APPROVALS_REPOSITORY` 仍是显式 501 —— 那是 W3 的活）。
- *   它做的是把 `hasDatabase` **向下传**给 `DeviceSessionModule` / `MembershipModule`。
+ *   `ApprovalsModule` 现在**自己选实现**（W3-A：有库 ⇒ `PrismaApprovalsRepository`），
+ *   同时把 `hasDatabase` **向下传**给 `DeviceSessionModule` / `MembershipModule`。
+ *   两件事都必须只有一个来源，否则\"审批连真库、身份连假库\"这种半真半假最难发现。
  *   这件事为什么值得单独一个文件（不是整齐）：
  *     · 那两个子模块**按环境推断**，而用例挂在 `ApprovalsModule` 这张图上时**够不着**
  *       它们的 `register()` 参数 ⇒ `ApprovalsModule.register({ hasDatabase })` 是**唯一**
@@ -13,8 +14,9 @@
  *
  * ── 两半证据 ─────────────────────────────────────────────────────────────
  *   离线（本文件）：转发后的**装配声明** —— 谁被绑上、两个子模块是不是同一个世界、
- *                   审批端口是不是**两个世界都**还诚实地说 501；
- *   真库（`test-db/identity-db.dbtest.ts` 组 D）：同一张图里**端口真的读得到库里的行**。
+ *                   审批端口在**无库**时仍诚实地说 501、有库时**确实是真适配器**
+ *                   （不是「声明了 hasDatabase 却仍然 501」）；
+ *   真库（`test-db/approvals-db.dbtest.ts` 组 E/F）：同一张图里端口真的**写进库**。
  *
  * 证伪脚本：`tools/_scratch/w2d-canfail.mjs`（其中一条就是"让转发失效"）。
  */
@@ -25,6 +27,7 @@ import type { DynamicModule } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 
 import { ApprovalsModule } from '../src/approvals/approvals.module'
+import { PrismaApprovalsRepository } from '../src/approvals/approvals.prisma.repository'
 import {
   APPROVALS_REPOSITORY,
   NotImplementedApprovalsRepository,
@@ -141,14 +144,20 @@ describe('组 A：世界转发 —— 两个子模块必须是同一个世界，
     }
   })
 
-  it('★ 审批端口**两个世界都**是显式 501（"能建图" ≠ "审批能用了"）', () => {
-    for (const flag of [true, false]) {
-      assert.equal(
-        boundClassOf(ApprovalsModule.register({ hasDatabase: flag }), APPROVALS_REPOSITORY),
-        NotImplementedApprovalsRepository,
-        `hasDatabase=${flag} 时审批端口不是显式 501 —— 真实现了就把本条改成"已验证实现"（别让它悄悄溜过去）`
-      )
-    }
+  it('★ 审批端口：无库 ⇒ 显式 501；有库 ⇒ 真适配器', () => {
+    const off = ApprovalsModule.register({ hasDatabase: false })
+    assert.equal(
+      boundClassOf(off, APPROVALS_REPOSITORY),
+      NotImplementedApprovalsRepository,
+      '无库时审批端口不是显式 501 —— 离线用例会以为批准成功了，而库里什么都没有'
+    )
+    const on = ApprovalsModule.register({ hasDatabase: true })
+    assert.equal(
+      boundClassOf(on, APPROVALS_REPOSITORY),
+      PrismaApprovalsRepository,
+      '有库时审批端口仍是 501 —— W3-A 的同事务写入根本没接上（看起来装好了、其实没人写）'
+    )
+    assert.notEqual(off.providers, on.providers, '世界变了但审批端口没跟着变 —— 分叉没有生效')
   })
 })
 

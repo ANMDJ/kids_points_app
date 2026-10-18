@@ -12,8 +12,10 @@ import type { ActionType, Role } from '../contracts/permission-matrix'
  *   ② 端口的默认实现是**显式 501**（见文件末尾）：W1 之前它**不许**假装成功。
  *      这样「审批写入还没落地」是一个**可执行断言**，而不是注释里的一句话。
  *
- * ⚠️ 目前的真实状态：**没有任何实现**（默认实现只会抛 501）。
- *    真正的 Prisma 实现属于 W1/W2/W3（还要同时写 `PointRecord` 流水 + `AuditLog`）。
+ * ⚠️ 目前的真实状态（W3-A，2026-10-18）：**有库时**由 `PrismaApprovalsRepository`
+ *    实现（同事务写 `ApprovalRequest` + `PointRecord` + 余额 + `AuditLog`）；
+ *    本类只用于**无库装配**（`npm test` / 未配 DATABASE_URL 的进程）—— 显式 501，
+ *    绝不假装写入成功。判据只有一处：`prisma/database-enabled.ts` 的 `hasDatabaseUrl()`。
  */
 
 /** Nest 注入令牌（用 unique symbol 避免字符串撞名）。 */
@@ -30,10 +32,27 @@ export interface ApprovalRow {
   decidedByUserId: string | null
   /** 批准执行后产生的账本记录（`02` §4.3 的 `executedRecordId`，单向表达）。 */
   executedRecordId: string | null
+  /**
+   * 仅 `invalidated` 时有值（`02` §4.2）：**前提消失**的系统理由。
+   * 与 `rejected`（人的决定）必须分得开 —— UI 上「家长不同意」与「心愿已被删」
+   * 是两句完全不同的话，混在一起家长就\"莫名其妙背锅\"。
+   * 可选出现在的端口里：W2 的读模型没有它，W3 的真实现有。
+   */
+  autoReason?: string | null
 }
 
 /** 建请求的入参（**只含**落库需要的字段）。 */
 export interface CreateApprovalInput {
+  /**
+   * 这条审批**属于哪个孩子**（屏障一的结论，**不是**请求体里的值）。
+   *
+   * ★ 为什么必须由上层传下来：`ApprovalRequest.childId` 是外键，而端口只拿到
+   *   身份（`requesterUserId`）。让孩子 id 由适配器\"猜\"（比如从 targetId 反查）
+   *   会在\"心愿属于另一个孩子\"时把请求挂错人 —— 权限校验过的是 A 孩子，
+   *   落库却挂到 B 孩子，是最糟的一类越权。所以判据只在上层（`x-kp-child-id`
+   *   经屏障一），这里原样落库。
+   */
+  childId: string
   action: ActionType
   targetId?: string
   requesterUserId: string
@@ -44,6 +63,12 @@ export interface DecideApprovalInput {
   id: string
   outcome: 'approved' | 'rejected'
   decidedByUserId: string
+  /**
+   * 批准人的**会话角色**（身份层给的，不是请求头报的）。
+   * ★ 为什么要传：`PointRecord.operatorRole` 必须记\"真实操作人\"（A4）——
+   *   端口自己去 `ChildMember` 再查一遍会多一份真相，而两份迟早不一致。
+   */
+  decidedByRole: Role | 'viewer'
 }
 
 export interface ApprovalsPort {
@@ -79,8 +104,9 @@ export class NotImplementedApprovalsRepository implements ApprovalsPort {
     throw new NotImplementedException({
       code: 'APPROVALS_PERSISTENCE_NOT_IMPLEMENTED',
       message:
-        `审批写入路径尚未落地（W1/W2）：${String(method)} 没有实现。` +
-        '自批的**判定**已可用（src/contracts/approval-policy.ts），但落库 + 账本流水 + 审计属于 W1/W2。'
+        `审批写入路径在本装配里不可用（无数据库）：${String(method)} 没有实现。` +
+        '无库时一律 501（fail-closed），绝不返回编造的成功响应。' +
+        '有 DATABASE_URL 的进程走 PrismaApprovalsRepository（同事务写流水 + 审计）。'
     })
   }
 

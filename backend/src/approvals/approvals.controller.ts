@@ -70,7 +70,7 @@ export class ApprovalsController {
     @Req() req: RequestWithActor,
     @Res({ passthrough: true }) res: { status(code: number): unknown }
   ): Promise<unknown> {
-    const result = await this.service.createRequest(dto, this.actorOf(req))
+    const result = await this.service.createRequest(dto, this.actorOf(req), this.childIdOf(req))
     ApprovalsController.applyStatus(res, result.statusCode)
     return result.body
   }
@@ -100,5 +100,20 @@ export class ApprovalsController {
       throw new Error('ApprovalsController 缺少 DeviceSessionGuard：请求没有 actor（身份解析没跑）')
     }
     return req.kpActor
+  }
+
+  /**
+   * 同理：`kpChildId` 由身份 Guard 写、屏障一验过（成员关系就是对着它查的）。
+   *
+   * ★ 为什么不能从 `dto.targetId` / 请求体里取孩子 id：那等于让客户端决定
+   *   「这条审批挂谁」，而权限校验的是会话里的另一个孩子 —— 最糟的一类越权。
+   */
+  private childIdOf(req: RequestWithActor): string {
+    if (req.kpChildId === undefined) {
+      throw new Error(
+        'ApprovalsController 缺少 DeviceSessionGuard：请求没有 kpChildId（孩子上下文没解析）'
+      )
+    }
+    return req.kpChildId
   }
 }

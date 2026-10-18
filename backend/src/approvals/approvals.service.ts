@@ -38,7 +38,10 @@ function toBody(row: ApprovalRow): Record<string, unknown> {
     status: row.status,
     requesterUserId: row.requesterUserId,
     decidedByUserId: row.decidedByUserId,
-    executedRecordId: row.executedRecordId
+    executedRecordId: row.executedRecordId,
+    // `02` §4.2：`invalidated` 必须能说出**是哪条前提消失了**，否则 UI 只能写
+    // 「审批无效」，与「家长拒绝」长得一样（家长莫名背锅）。其余状态恒为 null。
+    autoReason: row.autoReason ?? null
   }
 }
 
@@ -63,8 +66,16 @@ export class ApprovalsService {
 
   /**
    * `POST /approvals` —— 建一条审批请求（`02` §9.3 / §9.25 / §9.26 / §9.27）。
+   *
+   * `childId` 来自**屏障一**（`MembershipGuard` 验过的 `x-kp-child-id`），
+   * **不来自请求体** —— 审批必须挂在"校验过的那个孩子"上，否则会出现
+   * 「权限校验的是 A、落库挂到 B」的越权（见 `CreateApprovalInput.childId`）。
    */
-  async createRequest(dto: CreateApprovalRequestDto, actor: Actor): Promise<ServiceResult> {
+  async createRequest(
+    dto: CreateApprovalRequestDto,
+    actor: Actor,
+    childId: string
+  ): Promise<ServiceResult> {
     const outcome = decideRequestOutcome({
       action: dto.action,
       requesterRole: actor.role,
@@ -85,22 +96,28 @@ export class ApprovalsService {
 
       case 'PENDING': {
         const row = await this.port.createPending({
+          childId,
           action: dto.action,
           targetId: dto.targetId,
           requesterUserId: actor.userId,
           requesterRole: actor.role
         })
+        this.assertTerminalWithoutExecution(row)
         return { statusCode: HttpStatus.ACCEPTED, body: toBody(row) }
       }
 
       case 'SELF_APPROVED': {
         // ★ 硬约束 5：与「他人批准」**同一套**执行路径（端口承诺同一事务 + 同一流水）。
         const row = await this.port.createSelfApproved({
+          childId,
           action: dto.action,
           targetId: dto.targetId,
           requesterUserId: actor.userId,
           requesterRole: actor.role
         })
+        // 自批也要面对「前提在落库那一刻已经消失」：端口会落成 `invalidated`
+        // （积分不足等），这里必须 409 而不是回 201 —— 回 201 等于谎报"已兑换"。
+        this.assertTerminalWithoutExecution(row)
         return {
           statusCode: HttpStatus.CREATED,
           body: {
@@ -149,8 +166,10 @@ export class ApprovalsService {
     const decided = await this.port.decide({
       id,
       outcome: dto.decision,
-      decidedByUserId: actor.userId
+      decidedByUserId: actor.userId,
+      decidedByRole: actor.role
     })
+    this.assertTerminalWithoutExecution(decided)
     const selfApproved = isSelfApproved(decided)
     return {
       statusCode: HttpStatus.OK,
@@ -159,6 +178,38 @@ export class ApprovalsService {
         selfApproved,
         auditAction: selfApproved ? AUDIT_ACTION_SELF_APPROVED : null
       }
+    }
+  }
+
+  /**
+   * 把「**已提交但没执行**」的终态翻成 409。
+   *
+   * ── 为什么由 service 翻，而不是端口自己抛（这条别改回去）──────────────────
+   *   `invalidated` / `expired` 是**要留下的历史**：家长点「同意」时心愿已被删，
+   *   这条请求必须永远显示「因心愿已删而无效」，而不是保持 `pending` 等人再点一次。
+   *   若端口在事务里 `throw`，事务会回滚 —— 那条 `invalidated` 就没了，客户端下次
+   *   重试还会看到 `pending`（死循环）。所以端口**先提交终态、再把行返回**，
+   *   由这一层翻成 HTTP 409。判据只看状态，不重复业务判定（§4.2 / §4.4）。
+   */
+  private assertTerminalWithoutExecution(row: ApprovalRow): void {
+    if (row.status === 'invalidated') {
+      throw new ConflictException({
+        code: 'APPROVAL_INVALIDATED',
+        message:
+          `这条审批的前提已消失（${row.autoReason ?? 'unknown'}），请求已置为 invalidated —— ` +
+          '不是被谁拒绝，请不要重试（02 §4.2）。',
+        approvalId: row.id,
+        status: row.status,
+        autoReason: row.autoReason ?? null
+      })
+    }
+    if (row.status === 'expired') {
+      throw new ConflictException({
+        code: 'APPROVAL_EXPIRED',
+        message: `这条审批已超过有效期（02 §4.3 的 72h TTL），不能再批准或拒绝。`,
+        approvalId: row.id,
+        status: row.status
+      })
     }
   }
 }
