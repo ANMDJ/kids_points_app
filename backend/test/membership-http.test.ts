@@ -20,10 +20,11 @@
  *   ／§9.22（限制不能放宽矩阵的 DENY）。
  *
  * ── ⚠️ 诚实标注（不粉饰）──────────────────────────────────────────────────
- *   ① 成员位来自**内存替身** —— 真 Prisma 查询属 W2（端口默认实现是 501，
- *      组 C 专门钉住"默认装配下不会没查就过"）；
+ *   ① 成员位来自**内存替身** —— 真 Prisma 查询**已由 W2-D 交付**（有库绑定
+ *      `PrismaMembershipRepository`）；本文件世界钉死**无库**，故组 C 验的是
+ *      无库兜底（501），以及"**不会没查就过**"；
  *   ② 身份（角色 + userId）**来自服务端会话**（W1-C，2026-10-15）：客户端只出示
- *      `x-kp-device-id` ＋ `x-kp-child-id`（会话也是内存替身；真查询属 W2）；
+ *      `x-kp-device-id` ＋ `x-kp-child-id`（会话在本文件里是内存替身；真查询已由 W2-D 交付）；
  *   ③ `requireApprovalForBonusOver`（金额阈值）在 HTTP 路径上**尚未生效** —— 组 B 有一条钉住现状；
  *   ④ 更进一步：**三条限制键都不作用于 `request_approval`**，而 `POST /approvals` 的矩阵动作正是它
  *      ⇒ **屏障三在 `/approvals` 上结构性不生效**（它作用于 dispatcher 落地后的
@@ -256,7 +257,18 @@ class ProbeController {
 }
 
 @Module({
-  imports: [ApprovalsModule, MembershipModule, PermissionsModule, DeviceSessionModule],
+  // ★ 全部显式 `hasDatabase: false`（W2-D 起这两个子模块是**动态**的）：本文件是**离线**用例 ——
+  //   不传参就会按环境推断，导出过 `DATABASE_URL` 的机器上会在装配阶段导入 `PrismaModule`
+  //   并连上真库，而组 C 期望的 501 会变成"真查询之后的 401"（同一份用例两副面孔）。
+  //   ★ `ApprovalsModule` 也必须传同一个值：它内部注册的子模块与本文件这几行**必须是同一个世界**
+  //     —— Nest 对"token 相同的动态模块"会折叠，对"options 不同的"**不会**，
+  //     于是同一份用例里会出现两套注册（谁生效取决于导入顺序，静默且难查）。
+  imports: [
+    ApprovalsModule.register({ hasDatabase: false }),
+    MembershipModule.register({ hasDatabase: false }),
+    PermissionsModule,
+    DeviceSessionModule.register({ hasDatabase: false })
+  ],
   controllers: [ProbeController],
   providers: [DeviceSessionGuard]
 })
@@ -289,9 +301,9 @@ async function send(
 
 /**
  * 起一个只装探针模块的真服务。
- * ★ `membership` **不传**时走**默认装配**（端口默认实现 = 501）—— 组 C 靠这个。
+ * ★ `membership` **不传**时走**无库装配**（`NotImplementedMembershipRepository` = 501）—— 组 C 靠这个。
  * ★ 会话替身**恒注入**（W1-C）：身份是这条链的第一道，不喂它整条链会在身份层就断
- *   （那时组 C 测到的就不是"屏障一没落地"了）。"默认装配下身份层 501"
+ *   （那时组 C 测到的就不是"屏障一没落地"了）。"无库装配下身份层 501"
  *   由 `device-session-http.test.ts` 组 D 专门钉住。
  */
 async function startApp(
@@ -558,8 +570,8 @@ describe('组 B：屏障三 —— 成员级收紧（02 §3 / §9.22）', () => 
   })
 })
 
-// ── 组 C：默认装配 —— 「成员查询未落地」必须是**可执行断言** ─────────────────
-describe('组 C：默认装配（不注入成员替身）：屏障一 fail-closed ⇒ 501，不得放行', () => {
+// ── 组 C：无库装配 —— 「成员查询未落地」必须是**可执行断言** ─────────────────
+describe('组 C：无库装配（不注入成员替身）：屏障一 fail-closed ⇒ 501，不得放行', () => {
   let app!: INestApplication
   let url = ''
 

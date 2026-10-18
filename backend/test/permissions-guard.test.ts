@@ -23,7 +23,7 @@
  *      但会话是**内存替身**，且**设备凭据仍可伪造** —— 即
  *      **屏障二是真的，「角色由服务端确立」也是真的，但「你这台设备真的是你」还不是**。
  *   ② W1-B 起探针链上**多了屏障一**（`MembershipGuard`）：资格判定也是真的，
- *      但成员位来自**内存替身**（真 Prisma 查询属 W2）。
+ *      但成员位来自**内存替身**（真 Prisma 查询**已由 W2-D 交付**；本文件仍用替身）。
  *   ③ 于是 `viewer` 在本文件所测的链上**永远到不了屏障二**（他不是任何孩子的成员位）——
  *      "viewer ⇒ DENY" 这条判据的 HTTP 形态因此变成 `MEMBER_NOT_FOUND`，
  *      而矩阵层面的那一条仍由 `permission-matrix.test.ts` 的纯函数用例钉着。
@@ -151,7 +151,16 @@ class ProbeController {
 }
 
 @Module({
-  imports: [PermissionsModule, ApprovalsModule, MembershipModule, DeviceSessionModule],
+  // ★ 四个都显式 `hasDatabase: false`（W2-D 起两个子模块是**动态**的）：本文件是**离线**用例，
+  //   必须把"无库世界"钉死 —— 否则导出过 `DATABASE_URL` 的机器会在装配阶段导入 `PrismaModule`
+  //   并连上真库（虽然端口都被替身覆盖、不会红，但"离线用例碰了真库"本身就是假的绿）。
+  //   ★ `ApprovalsModule` 内部注册的子模块也必须与本文件这几行同世界（见 membership-http 同一注）。
+  imports: [
+    PermissionsModule,
+    ApprovalsModule.register({ hasDatabase: false }),
+    MembershipModule.register({ hasDatabase: false }),
+    DeviceSessionModule.register({ hasDatabase: false })
+  ],
   controllers: [ProbeController],
   providers: [DeviceSessionGuard]
 })

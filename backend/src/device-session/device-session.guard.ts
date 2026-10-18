@@ -88,11 +88,14 @@ export const CHILD_ID_HEADER = 'x-kp-child-id'
  *   `permissions.guard.ts` 的"顺序"一节）。
  *
  * ⚠️ 仍未落地（与"已完成"分开记）：
- *   · **会话刷新**（`02` §7「每次 guardian 操作刷新 TTL」）**未实现** —— 本 Guard **只读**
- *     （刷新要写库，属 W2；现在写不进去，因为适配器都还没有）；
+ *   · **会话刷新**（`02` §7「每次 guardian 操作刷新 TTL」）**未实现** —— 本 Guard **只读**；
+ *     写 TTL 需要一个"抬升/刷新"的端点，那是后续阶段（`expiresAt` 目前连**写的一方**都还没有）；
  *   · **PIN 切换**（`02` §7 / §9.18「连错 5 次锁 15 分钟」）**未实现** ——
  *     没有"切到家长模式"的端点，`ChildMember.pinHash` / `pinLockedUntil` 目前无人使用；
- *   · 会话查询的**真 Prisma 适配器**属 W2（端口默认实现是 501）。
+ *   · 会话查询的**真 Prisma 适配器** ✅ 已落地（W2-D，见 `device-session.prisma.repository.ts`，
+ *     由 `DeviceSessionModule.register()` 在有库时绑定）—— 但随之而来的诚实标注是：
+ *     `x-kp-device-id` 仍**没有可验证性**（谁都能报别人的 deviceId），所以生产 503 那条闸门
+ *     继续保留 —— **"能查库了"不等于"没人能冒充了"**。
  */
 @Injectable()
 export class DeviceSessionGuard implements CanActivate {

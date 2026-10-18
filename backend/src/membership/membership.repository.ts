@@ -11,8 +11,11 @@ import type { MembershipLookupRow } from './membership.gate'
  *   ② 端口的默认实现是**显式 501**（见文件末尾）：W1 之前它**不许**假装读得到。
  *      这样「成员查询未落地」是一个**可执行断言**，不是注释里的一句话。
  *
- * ⚠️ 目前的真实状态：**没有任何实现**（默认实现只会抛 501）。
- *    真 Prisma 适配器属 W2（与 `ApprovalsPort` 的 Prisma 实现同一批，见 05 §2）。
+ * ✅ **真实现已落地（W2-D，2026-10-16）**：同目录 `membership.prisma.repository.ts`
+ *    （`PrismaMembershipRepository`），由 `MembershipModule.register()` 在**有库**时绑定。
+ * ⚠️ 本文件末尾的 501 实现**仍然有用**：无 `DATABASE_URL` 的装配（CI / `npm test`）走它 ⇒
+ *    "屏障一还没查过库"在那种世界里依然是一个**可执行断言**，而不是注释里的一句话。
+ *    `ApprovalsPort` 的真实现仍未落地（见 05 §2）。
  */
 
 /** Nest 注入令牌（用 unique symbol 避免字符串撞名）。 */
@@ -30,18 +33,18 @@ export interface MembershipPort {
 }
 
 /**
- * 默认实现：**一律 501**。
+ * **无库装配**时的实现：**一律 501**。
  *
- * ── 为什么默认不是"直接读 Prisma"（W1-B 的取舍，写清楚免得被误读）────────────
- *   ① **会让无库环境在启动阶段就崩**：`MembershipModule` 一旦注入 `PrismaService`，
- *      则任何装配了审批模块的测试（含无 `.env` 的 CI）都会在 `PrismaService` 的
- *      构造函数里因缺 `DATABASE_URL` 而抛错（那里是**刻意**失败的，见其文件头）。
- *      而本仓库的 HTTP 用例是**无库**跑的（仓储一律用内存替身）。
- *   ② 与 `NotImplementedApprovalsRepository` 同一口径：未落地的路径**必须响亮**。
+ * ── 为什么它现在还在（W2-D 之后，写清楚免得被当成"忘了删"）────────────────────
+ *   ① **有库时不再走它**：`MembershipModule.register()` 在 `hasDatabaseUrl()` 为真时绑
+ *      `PrismaMembershipRepository`（见 `membership.prisma.repository.ts`）；
+ *   ② **无库时必须走它**：`PrismaService` 的构造函数在缺 `DATABASE_URL` 时**刻意**抛错，
+ *      所以无库装配**不能**硬导 `PrismaModule`（否则任何离线用例在装配阶段就崩，
+ *      而本仓库的 HTTP 用例全部是**无库**跑的：仓储一律用内存替身）；
+ *   ③ 与 `NotImplementedApprovalsRepository` 同一口径：未落地的路径**必须响亮**。
  *
- * ⚠️ 代价同样写清楚（不粉饰）：**默认装配下，屏障一会对每个请求返回 501**
- *    （fail-closed —— 比"拦不住"强，但它也**还没有真的查过库**）。
- *    真 Prisma 适配器 ＋ "非成员 → 403 `MEMBER_NOT_FOUND`"的**真库**验证属 W2。
+ * ⚠️ 代价同样写清楚（不粉饰）：**无库装配下，屏障一会对每个请求返回 501**
+ *    （fail-closed —— 比"拦不住"强；但也别把这条当成"屏障一已完成"）。
  */
 @Injectable()
 export class NotImplementedMembershipRepository implements MembershipPort {
@@ -49,10 +52,10 @@ export class NotImplementedMembershipRepository implements MembershipPort {
     throw new NotImplementedException({
       code: 'MEMBERSHIP_QUERY_NOT_IMPLEMENTED',
       message:
-        `成员位查询尚未落地（W2）：findMembership(${childId}, ${userId}) 没有实现。` +
-        '屏障一**已接线**（顺序、403 语义、restrictions 形状校验都有用例），' +
-        '但"谁是这个孩子的成员"目前读不到 —— 所以这里**拒绝**而不是放行：' +
-        '放行等于把成员资格判定整个跳过（fail-closed）。'
+        `当前进程没有 DATABASE_URL（无库装配）⇒ 成员位查询不可用：findMembership(${childId}, ${userId}) 没有实现。` +
+        '屏障一**已接线**（顺序、403 语义、restrictions 形状校验都有用例）；' +
+        '有库装配走的是 PrismaMembershipRepository（真查 ChildMember）；' +
+        '这里**拒绝**而不是放行：放行等于把成员资格判定整个跳过（fail-closed）。'
     })
   }
 

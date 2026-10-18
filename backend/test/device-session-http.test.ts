@@ -22,11 +22,13 @@
  *   ／§9.19（TTL 到期 ⇒ 回落 child）。
  *
  * ── ⚠️ 诚实标注（不粉饰）──────────────────────────────────────────────────
- *   ① 会话来自**内存替身**：真 Prisma 查询属 W2（端口默认实现是 501，组 D 钉住这件事）；
+ *   ① 本文件的会话**来自内存替身**（验的是接线 / 顺序 / 403 / 500）；**真 Prisma 查询**的两半
+ *      证据在别处：`test/device-session-wiring.test.ts`（装配分叉 ＋ 适配器读路径，离线）
+ *      与 `test-db/identity-db.dbtest.ts`（真库）。组 D 钉的是**无库装配**下必须 501；
  *   ② **设备凭据仍可伪造**：`x-kp-device-id` 谁都能报 ⇒ **角色的来源可信了，但"这台设备是你"还不可信**。
  *      生产因此仍 503（组 E 钉住）；真正的解药是 L2 之后的会话 token；
  *   ③ **会话刷新**（§7「每次 guardian 操作刷新 TTL」）与 **PIN 切换 / 锁 15 分钟**（§9.18）
- *      **都未实现**（属 W2）—— 本文件测的是**读侧**的 TTL 口径，不是写侧的续期。
+ *      **都未实现**（属 W2 的**写路径**；W2-D 只交付了读路径）—— 本文件测的是**读侧**的 TTL 口径，不是写侧的续期。
  */
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, it } from 'node:test'
@@ -179,7 +181,15 @@ class ProbeController {
 }
 
 @Module({
-  imports: [DeviceSessionModule, MembershipModule, PermissionsModule],
+  // ★ 显式 `hasDatabase: false`（W2-D 起子模块是动态的）：本文件是**离线**用例，
+  //   要把"无库世界"钉死 —— 不传参就会按环境推断（开发机上若导出过 DATABASE_URL，
+  //   装配阶段就会导入 PrismaModule 并连上真库），那时组 D 期望的 501 会变成
+  //   "真查询后的 401"，同一份用例在两台机器上验的是两件事。
+  imports: [
+    DeviceSessionModule.register({ hasDatabase: false }),
+    MembershipModule.register({ hasDatabase: false }),
+    PermissionsModule
+  ],
   controllers: [ProbeController],
   providers: [DeviceSessionGuard]
 })
@@ -208,7 +218,9 @@ async function send(
 
 /**
  * 起一个只装探针模块的真服务。
- * ★ `injectSession: false` ⇒ 走**默认装配**（端口默认实现 = 501）—— 组 D 靠这个。
+ * ★ `injectSession: false` ⇒ 走**无库装配**（`NotImplementedDeviceSessionRepository` = 501）——
+ *   组 D 靠这个钉住"没有实现时必须响亮"。本文件的探针模块已显式
+ *   `DeviceSessionModule.register({ hasDatabase: false })`，所以组 D 不依赖本机环境。
  * ★ 会话替身**恒**注入（除非显式关掉）：不喂它，任何用例都会停在身份层，
  *   那时测到的就不是"接线对不对"了。
  */
@@ -439,8 +451,8 @@ describe('组 C：会话行形状坏 ⇒ 500（不是 401/403）', () => {
   })
 })
 
-// ── 组 D：默认装配（不注入替身）⇒ 501，且**不是**"没查就过" ────────────────────
-describe('组 D：默认装配下身份层 fail-closed（端口默认实现 = 501）', () => {
+// ── 组 D：无库装配（不注入替身）⇒ 501，且**不是**"没查就过" ────────────────────
+describe('组 D：无库装配下身份层 fail-closed（NotImplementedDeviceSessionRepository = 501）', () => {
   let app!: INestApplication
   let url = ''
 
@@ -453,11 +465,11 @@ describe('组 D：默认装配下身份层 fail-closed（端口默认实现 = 50
 
   it('★ 没有会话查询实现 ⇒ 501 SESSION_LOOKUP_NOT_IMPLEMENTED（不是 200，也不是 403）', async () => {
     const r = await send(url, '/probe/whoami', GUARDIAN)
-    assert.equal(r.status, 501, '默认装配放行了 —— 那意味着"身份层没落地"这件事在运行时是不可见的')
+    assert.equal(r.status, 501, '无库装配放行了 —— 那意味着"身份层没落地"这件事在运行时是不可见的')
     assert.equal(
       r.body.code,
       'SESSION_LOOKUP_NOT_IMPLEMENTED',
-      '默认装配下身份层没拦住：请求越到了下一道屏障的 501（`MEMBERSHIP_QUERY_NOT_IMPLEMENTED`）—— ' +
+      '无库装配下身份层没拦住：请求越到了下一道屏障的 501（`MEMBERSHIP_QUERY_NOT_IMPLEMENTED`）—— ' +
         '未落地的身份层必须**在最前面**响亮，否则"谁是谁"就没被查过'
     )
   })

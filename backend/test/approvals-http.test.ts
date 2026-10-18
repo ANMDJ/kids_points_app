@@ -15,8 +15,10 @@
  *
  * ── 覆盖的判据来源 ──────────────────────────────────────────────────────────
  *   `02` §4.5 六条硬约束 + §9.3 / §9.10 / §9.25 / §9.26 / §9.27。
- *   仓储用**内存替身**（`ApprovalsPort` 的实现）—— 真实的 Prisma 实现属 W1/W2；
- *   默认装配（不注入替身）那一组断言的是 **501 fail-closed**，不是「成功」。
+ *   仓储用**内存替身**（`ApprovalsPort` 的实现）—— 真实的 Prisma 实现**仍未落地**
+ *   （`ApprovalsPort` 有库也是 501，见 W2-D）；**不注入替身**那一组断言的是 **501 fail-closed**，不是「成功」。
+ *   ★ 本文件的世界**显式钉死**在无库（`ApprovalsModule.register({ hasDatabase: false })`，W2-D）——
+ *   所以"默认装配"在这里的含义是**审批端口未注入**，与本机有没有 `.env` 无关。
  */
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, it } from 'node:test'
@@ -84,7 +86,7 @@ function makeSessionFake(): DeviceSessionPort {
 }
 
 /**
- * 成员替身（W1-B）：**每一组**都要注入它 —— 否则屏障一在默认装配下返回 501，
+ * 成员替身（W1-B）：**每一组**都要注入它 —— 否则屏障一在**无库装配**下返回 501，
  * 组 A 那组"审批写入未落地 ⇒ 501"的断言就会变成在测**屏障一**，而不是在测审批端口。
  * ★ 刻意**没有** `u-guest`（viewer）：他不是任何孩子的成员位 —— 这正是 §9.21 的场景。
  */
@@ -194,14 +196,25 @@ async function send(
 }
 
 /**
- * 起一个只装 `ApprovalsModule` 的真服务（`useValue` 可替换仓储；不传 = 默认装配）。
+ * 起一个只装 `ApprovalsModule` 的真服务（`useValue` 可替换仓储；`repository` 不传 = **审批端口**
+ * 保持默认的 501 实现 —— 组 A 靠这个）。
+ * ★ 装配世界**钉死**在"无库"（`ApprovalsModule.register({ hasDatabase: false })`，W2-D）：
+ *   子模块是动态的 ⇒ 不传参就会按环境推断，而本文件是离线用例。
  * ★ W1-B 起**恒**注入成员替身：`POST /approvals` 的守卫链是「身份 → 屏障一 → 屏障二/三」，
  *   不注入成员位就停在屏障一的 501 上（那由 `membership-http.test.ts` 组 C 专门测）。
  * ★ W1-C 起**恒**注入会话替身：身份是链条第一道，不喂它连屏障一都到不了
- *   （"默认装配下身份层 501" 由 `device-session-http.test.ts` 组 D 专门钉住）。
+ *   （"**无库装配**下身份层 501" 由 `device-session-http.test.ts` 组 D 专门钉住 ——
+ *   该文件同样把世界写死成 `hasDatabase: false`）。
  */
 async function startApp(repository?: ApprovalsPort): Promise<{ app: INestApplication; url: string }> {
-  const builder = Test.createTestingModule({ imports: [ApprovalsModule] })
+  const builder = Test.createTestingModule({
+    // ★ 显式 `hasDatabase: false`（W2-D 起 `ApprovalsModule` 会把世界转发给两个子模块）：
+    //   本文件是**离线**用例 —— 不传参就会按环境推断，导出过 `DATABASE_URL` 的机器上
+    //   会导入 `PrismaModule` 并连上真库（组 A 的三个端口都被替身覆盖，所以它不会红，
+    //   只会变慢 ＋ 碰真数据）。世界必须钉死，"默认装配"在这份文件里的含义是
+    //   **审批端口未注入**，而不是"脚手架里没有库"。
+    imports: [ApprovalsModule.register({ hasDatabase: false })]
+  })
     .overrideProvider(DEVICE_SESSION_REPOSITORY)
     .useValue(makeSessionFake())
     .overrideProvider(MEMBERSHIP_REPOSITORY)
@@ -216,7 +229,10 @@ async function startApp(repository?: ApprovalsPort): Promise<{ app: INestApplica
   return { app, url: await app.getUrl() }
 }
 
-// ── 组 A：默认装配 —— 「写入路径未落地」必须是**可执行断言** ─────────────────────
+// ── 组 A：审批端口保持默认（501）—— 「写入路径未落地」必须是**可执行断言** ─────────
+// ★ 组名里的"无替身"指的是**审批端口**没有替身（`startApp()` 不传 repository）；
+//   身份与资格**恒**是替身（见 `startApp()` 的两条 override）—— 它们是链条的前两道，
+//   不喂就永远到不了审批端口，那时这里测的就不是"写入未落地"了。
 describe('默认装配（无替身）：审批写入路径未落地 ⇒ 必须 501，不得假装成功', () => {
   let app!: INestApplication
   let url = ''

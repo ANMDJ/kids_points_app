@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common'
+import { DynamicModule, Module } from '@nestjs/common'
 
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { MembershipModule } from '../membership/membership.module'
 import { PermissionsModule } from '../permissions/permissions.module'
+import { hasDatabaseUrl } from '../prisma/database-enabled'
 import { ApprovalsController } from './approvals.controller'
 import {
   APPROVALS_REPOSITORY,
@@ -37,7 +38,9 @@ import { ApprovalsService } from './approvals.service'
  * 状态（2026-10-14 阶段 B4）：
  *   · **HTTP 路径已建**（`POST /approvals`、`POST /approvals/:id/decide`），判定**真实消费**
  *     `approval-policy.ts`；用例见 `test/approvals-http.test.ts`（真 HTTP，非直接调 service）。
- *   · 持久化端口 `ApprovalsPort` 的**默认实现是显式 501** —— 落库 / 账本 / 审计属 W1–W3。
+ *   · 持久化端口 `ApprovalsPort` 的**默认实现是显式 501**（★ **有库也是** 501：本模块只转发世界，
+ *     不给审批端口选实现）—— 落库 / 账本 / 审计尚未落地
+ *     （下一段工作 ＝「审批的同事务写入路径」，见 `ledger.prisma.repository.ts` 文件头 ★）。
  *     即：**判定已上线，写入未落地**，且未落地这件事有可执行断言钉着。
  *   · 身份是**服务端确立的**（W1-C，2026-10-15）：`DeviceSessionGuard` 按
  *     `x-kp-device-id` ＋ `x-kp-child-id` 查会话 ⇒ 角色/ userId **由会话行给出**
@@ -45,32 +48,72 @@ import { ApprovalsService } from './approvals.service'
  *     （设备凭据仍可伪造，见 guard ④）。
  *   · **W1-B（2026-10-15）**：三道屏障在控制器上串成一条链 ——
  *     `@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)`
- *     （身份 → 资格 → 矩阵＋成员级收紧）。默认装配下屏障一的端口是 501 ⇒
- *     未注入成员替身时**整条路径 fail-closed**（不会"没查就过"）。
+ *     （身份 → 资格 → 矩阵＋成员级收紧）。
+ *   · **W2-D（2026-10-16）**：身份与资格**两个端口已接真库** ⇒ 本模块 `imports` 里那两行
+ *     改成 `register()`：有库 ⇒ 真 Prisma 适配器（会话行给身份/角色，成员位给资格）；
+ *     无库 ⇒ 显式 501，整条路径仍然 fail-closed（不会"没查就过"）。
+ *     即：**有库时这三道屏障的输入全部来自库**——`x-kp-role` / `x-kp-user-id` 早已不被读取，
+ *     现在连"有没有这个会话""是不是这个孩子的成员"也都是查出来的。
+ *   · **W2-D（2026-10-16，第二处）**：本模块**也**改成动态模块（`register({ hasDatabase? })`）。
+ *     它自己**不选实现**（`ApprovalsPort` 仍是显式 501），它做的是把"在哪个世界"这个决定
+ *     **向下传递**：同一个 `hasDatabase` 交给 `DeviceSessionModule` / `MembershipModule`。
+ *     ★ 为什么非传不可（这不是整齐，是**可复现性**）：那两个子模块按环境推断，
+ *     而 `Test.createTestingModule({ imports: [ApprovalsModule] })` 的用例**够不着**它们的
+ *     options ⇒ 谁在本机导出了 `DATABASE_URL`，谁跑的离线用例就会在装配阶段把 `PrismaModule`
+ *     拉进图里、**悄悄连上真库**（三个端口都被替身覆盖，所以它不会红，只会变慢 ＋ 碰真数据）。
+ *     那与本仓库"同一份用例不许在两台机器上验两件事"的口径直接冲突。
+ *     现在用例写 `ApprovalsModule.register({ hasDatabase: false })` 就把世界钉死了。
  *
  * 验收用例见 02 §9.3 / §9.7 / §9.8 / §9.10 / §9.25–§9.27。
  */
-@Module({
-  // 身份由 DeviceSessionModule 提供（DeviceSessionGuard）—— 这台设备是谁、什么角色。
-  // 屏障一由 MembershipModule 提供（MembershipGuard）—— 资格：这个人跟这个孩子有没有关系。
-  // 屏障二／三由 PermissionsModule 提供（PermissionsGuard）—— 矩阵 ＋ 成员级收紧。
-  // ★ 挂载顺序（身份 → 资格 → 判定）见 approvals.controller.ts 的 @UseGuards。
-  // ★ 三个模块**都要** import：宿主模块（本文件）负责实例化控制器上的 Guard，
-  //   而 Guard 的依赖由**宿主模块**的注入器解析 —— 光导入 Guard 类、不导入提供它的模块，
-  //   启动时会报 `Nest can't resolve dependencies of the DeviceSessionGuard (?)`。
-  imports: [DeviceSessionModule, MembershipModule, PermissionsModule],
-  controllers: [ApprovalsController],
-  providers: [
-    ApprovalsService,
-    // ★ 控制器上的 Guard 在**本模块**的注入器里实例化 —— 它的依赖（端口令牌）
-    //   由上面三个模块的 `exports` 提供。漏 export 就崩在启动：
-    //   `Nest can't resolve dependencies of the DeviceSessionGuard (?)`
-    //   （W1-B 在 MembershipModule 上实测过；W1-C 给 DeviceSessionModule 补齐了 exports）。
-    DeviceSessionGuard,
-    // ★ 默认实现 = 一律 501（见 approvals.repository.ts 的说明）。
-    //   W1/W2 落 Prisma 实现时**只换这一行**，service / controller / 用例都不动。
-    { provide: APPROVALS_REPOSITORY, useClass: NotImplementedApprovalsRepository }
-  ]
-})
-export class ApprovalsModule {}
+/**
+ * 装配选项。**用例必须显式传值**（只有生产代码才允许省略、走环境推断）：
+ * CI 机器上多半没有 `DATABASE_URL`、开发机上多半有 —— 靠环境推断的话，
+ * 同一份用例在两台机器上验的其实是两件事（而"CI 绿了"会被当成"验过了"）。
+ * ★ 与 `LedgerAssemblyOptions` / `DeviceSessionAssemblyOptions` 同名同义，只是**转发**给子模块。
+ */
+export interface ApprovalsAssemblyOptions {
+  /** 转发给 `DeviceSessionModule` / `MembershipModule`；省略 ⇒ `hasDatabaseUrl()`。 */
+  hasDatabase?: boolean
+}
+
+@Module({})
+export class ApprovalsModule {
+  /**
+   * 建图。`app.module.ts` 调**不带参数**的版本（按环境推断；`main.ts` 第一行已加载 dotenv）；
+   * 用例调带参数的版本（把"在哪个世界"钉死 —— 理由见文件头 W2-D 的第二处）。
+   *
+   * ★ 三个子模块**都要** import：宿主模块（本文件）负责实例化控制器上的 Guard，
+   *   而 Guard 的依赖由**宿主模块**的注入器解析 —— 光导入 Guard 类、不导入提供它的模块，
+   *   启动时会报 `Nest can't resolve dependencies of the DeviceSessionGuard (?)`。
+   *     · 身份 → `DeviceSessionModule`（DeviceSessionGuard）：这台设备是谁、什么角色；
+   *     · 屏障一 → `MembershipModule`（MembershipGuard）：资格（这人跟这孩子有没有关系）；
+   *     · 屏障二／三 → `PermissionsModule`（PermissionsGuard）：矩阵 ＋ 成员级收紧。
+   *   挂载顺序（身份 → 资格 → 判定）见 approvals.controller.ts 的 @UseGuards。
+   */
+  static register(options: ApprovalsAssemblyOptions = {}): DynamicModule {
+    const hasDatabase = options.hasDatabase ?? hasDatabaseUrl()
+    return {
+      module: ApprovalsModule,
+      imports: [
+        // ★ 同一个 `hasDatabase` 往下传（W2-D）：两个子模块的装配分叉由此**只有一个来源**。
+        DeviceSessionModule.register({ hasDatabase }),
+        MembershipModule.register({ hasDatabase }),
+        PermissionsModule
+      ],
+      controllers: [ApprovalsController],
+      providers: [
+        ApprovalsService,
+        // ★ 控制器上的 Guard 在**本模块**的注入器里实例化 —— 它的依赖（端口令牌）
+        //   由上面三个模块的 `exports` 提供。漏 export 就崩在启动：
+        //   `Nest can't resolve dependencies of the DeviceSessionGuard (?)`
+        //   （W1-B 在 MembershipModule 上实测过；W1-C 给 DeviceSessionModule 补齐了 exports）。
+        DeviceSessionGuard,
+        // ★ 默认实现 = 一律 501（见 approvals.repository.ts 的说明）。
+        //   落 Prisma 实现时**只换这一行**，service / controller / 用例都不动。
+        { provide: APPROVALS_REPOSITORY, useClass: NotImplementedApprovalsRepository }
+      ]
+    }
+  }
+}
 

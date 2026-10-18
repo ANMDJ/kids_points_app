@@ -749,8 +749,8 @@ User（自然人）
 | 项 | 状态 | 影响 |
 |---|---|---|
 | **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），但**绝大多数端点尚不存在** | W1–W3、W6 的主体工作量 |
-| **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | W2（三个端口的 Prisma 实现）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
-| **审批写入路径的落库部分** | ⚠️ 判定与 HTTP 路径**已上线**（`POST /approvals`、`POST /approvals/:id/decide`）；**落库 / 账本流水 / 审计写入未落地** —— `ApprovalsPort` 默认实现**显式 501**（不静默成功） | W1/W2；别把判定绿灯读成"审批已验收" |
+| **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但~~**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）~~ → **W2-D（2026-10-16）已结清：有库真查库、无库才是 501**、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | W2（三个端口的 Prisma 实现；`Membership` / `DeviceSession` ✅ 已由 **W2-D** 交付，**`Approvals` 仍未**）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
+| **审批写入路径的落库部分** | ⚠️ 判定与 HTTP 路径**已上线**（`POST /approvals`、`POST /approvals/:id/decide`）；**落库 / 账本流水 / 审计写入未落地** —— `ApprovalsPort` 默认实现**显式 501**（不静默成功；★ **有库也是**，已由真库 × 真 HTTP 用例端到端证实） | W1/W2；别把判定绿灯读成"审批已验收" |
 | **双端接 API** | ❌ 未开始；`AppStore` 仍为**内存态**（重启回到空态） | W4 |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
 | **通知 / 推送** | ❌ 无依赖、无凭据（L3） | W6 |
@@ -764,14 +764,16 @@ User（自然人）
 （见 `design/README` 第 16／17／18 条与 `design/02` §3），**下一步是 W2（账本内核）**，
 并在**第 1 天并行启动 L2 / L4**；W5 的引导与模板需 L5 法务文本到位。
 
-W2 除账本外还包含**三个端口的真实实现**（`Approvals` / `Membership` / `DeviceSession` —— 现在都是
-**显式 501** 的内存替身），W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费**
+W2 除账本外还包含**三个端口的真实实现**（`Approvals` / `Membership` / `DeviceSession` ——
+W1 时期三个都是**显式 501** 的内存替身；**W2-D（2026-10-16）之后 `Membership` / `DeviceSession`
+已接真库，`Approvals` 仍是 501（有库也是）**），W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费**
 `backend/src/contracts/approval-policy.ts`（P4），不得在 controller / service 里另写一份"谁可以批准"。
 
 > **W1-C 的两句真话（别读错）**：① **"角色不再由客户端自选"≠"身份已完成"** ——
 > 会话来源已可信，但**设备凭据（`deviceId`）仍可伪造**，故 `NODE_ENV=production` 一律 503
 > （真正可验证的凭据要等 L2 之后的会话 token）；② **"身份判定已接线"≠"能登录了"** ——
-> 会话查询端口**默认 501**，默认装配下每个请求都会被拒（fail-closed，而不是放行）。
+> 会话查询端口**在无库装配下**仍是 **501**（有库时 W2-D 起真查库，查不到即 401 `SESSION_NOT_FOUND`），
+> **每个请求都会被拒**（fail-closed，而不是放行）。
 
 ---
 

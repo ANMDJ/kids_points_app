@@ -31,15 +31,15 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  *   · `201` 显式自批 → 直接 `approved` ＋ 流水（§9.25）
  *   · `400 SELF_APPROVAL_NOT_ALLOWED` 显式要求自批却没资格（§9.26）
  *   · `200` 批准 / 拒绝成功；`403` 无批准资格；`409 ALREADY_DECIDED` 已决；`404` 没有这条
- *   · `401 UNAUTHENTICATED` 缺 `x-kp-device-id` / `x-kp-child-id`；`401 SESSION_NOT_FOUND` 没会话；
- *     `503 IDENTITY_NOT_IMPLEMENTED` 生产环境（设备凭据尚不可验）；`501 SESSION_LOOKUP_NOT_IMPLEMENTED` 默认装配
+ *   · `401 UNAUTHENTICATED` 缺 `x-kp-device-id` / `x-kp-child-id`；`401 SESSION_NOT_FOUND` 没会话（有库时由真适配器回答）；
+ *     `503 IDENTITY_NOT_IMPLEMENTED` 生产环境（设备凭据尚不可验）；`501 SESSION_LOOKUP_NOT_IMPLEMENTED` **仅无库装配**
  *     ★ **W1-C 起角色/身份不再来自请求头**（`x-kp-role` / `x-kp-user-id` 已废弃、不被读取）
- *   · **`403 MEMBER_NOT_FOUND` / `MEMBER_REMOVED`** 屏障一（§9.21，W1-B 起）
+ *   · **`403 MEMBER_NOT_FOUND` / `MEMBER_REMOVED`** 屏障一（§9.21，W1-B 起；W2-D 起有库时真查 `ChildMember`）
  *   · **`500 INVALID_MEMBER_RESTRICTIONS` / `INVALID_MEMBER_ROLE`** 成员位形状坏了（**不是**权限问题）
  *   · **`500 INVALID_SESSION_ROLE` / `INVALID_SESSION_EXPIRY` / `SESSION_CHILD_MISMATCH`**
  *     会话行形状坏了（**不是**权限问题，W1-C 起）
- *   · `501 APPROVALS_PERSISTENCE_NOT_IMPLEMENTED` / `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`
- *     **默认装配**下的两个 fail-closed 端口（见各自 repository）
+ *   · `501 APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`（★ **有库、无库都是** 501）/
+ *     `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`、`SESSION_LOOKUP_NOT_IMPLEMENTED`（**仅无库装配**）
  *
  * ★ 响应状态码随「判定结果」变化，故由 service 带出来、controller 落到 `res.status()`；
  *   这里**不做任何 if (role …) 判断**（判定只有一处，见 service 头注释）。

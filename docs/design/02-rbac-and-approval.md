@@ -178,10 +178,13 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   ★ D3b 的 `validateRestrictions()` 至此才有了**请求路径上的**调用方（此前只有离线闸门在调）。
 
 **诚实标注（不粉饰，与"已完成"分开记）**：
-- ⚠️ **成员位来自端口，默认实现是 501**（`MEMBERSHIP_QUERY_NOT_IMPLEMENTED`）：
+- ~~⚠️ **成员位来自端口，默认实现是 501**（`MEMBERSHIP_QUERY_NOT_IMPLEMENTED`）：
   真装配下**没有人**被放过去（fail-closed），但它也**还没有真的查过库** ——
   真 Prisma 适配器属 W2。理由写在该文件的文件头：`MembershipModule` 一注入 `PrismaService`，
-  **无库 CI 会在启动阶段就崩**（`PrismaService` 构造时缺 `DATABASE_URL` 即抛），而本仓库的 HTTP 用例是无库跑的。
+  **无库 CI 会在启动阶段就崩**（`PrismaService` 构造时缺 `DATABASE_URL` 即抛），而本仓库的 HTTP 用例是无库跑的。~~
+  → ✅ **W2-D（2026-10-16）已结清**：**有库** ⇒ `PrismaMembershipRepository`（真查 `ChildMember`，
+  复合唯一键 `(childId, userId)`）；**无库** ⇒ 仍 501。原先"注入就崩"的卡点由**动态模块**
+  （有库才 `imports: [PrismaModule]`）消掉 —— 与 `LedgerModule`（W2-C）同一口径，见 §3 的「W2-D 接线注」。
 - ⚠️ `requireApprovalForBonusOver`（**金额**阈值）**在 HTTP 路径上不生效** ——
   金额属 dispatcher 的 payload（§6 未落地），当前唯一调用方拿不到它。
   `membership-http.test.ts` 组 B 有一条**把这个现状钉住**的用例（而不是假装它在拦）。
@@ -193,6 +196,38 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
 - ~~⚠️ 身份仍是**临时头**（`x-kp-role` / `x-kp-user-id` / **`x-kp-child-id`**）——~~
   ✅ **已由 W1-C 取代（2026-10-15）**：角色与 userId 改由**服务端会话行**给出，
   `x-kp-role` / `x-kp-user-id` **已废弃且不再被任何代码读取**（见下一节）。
+
+**接线注（W2-D，2026-10-16）：屏障一与身份层从"接线"到"真查库"**（上面第一条账在这里结清）
+
+- `MembershipModule` / `DeviceSessionModule` 改成**动态模块**：`register({ hasDatabase? })` 按**同一个**判据
+  （`backend/src/prisma/database-enabled.ts` 的 `hasDatabaseUrl()`，**全仓唯一**）分叉 ——
+  **有** `DATABASE_URL` ⇒ `PrismaMembershipRepository` / `PrismaDeviceSessionRepository`
+  （并 `imports: [PrismaModule]`，共用全仓唯一连接池）；**没有** ⇒ 两个 `NotImplemented*Repository`
+  （**显式 501**，且 `PrismaService` **不会被实例化**）。`app.module.ts` 仍用 `register()`（不传参 ⇒ 按环境推断）。
+- **`ApprovalsModule` 也变成动态模块，但它只做转发**：`options.hasDatabase ?? hasDatabaseUrl()` 之后
+  **原样**交给上述两个子模块；它**自己不选实现** ⇒ **`ApprovalsPort` 仍是 501（★ 有库也是）** ——
+  三个端口里**唯一**还留在账上的那个。
+- **为什么非转发不可**（不是整齐，是**可复现性**）：两个子模块若各自按环境推断，
+  `Test.createTestingModule({ imports: [ApprovalsModule] })` 的离线用例**够不着**它们的 options ——
+  本机导出过 `DATABASE_URL` 的人会在装配阶段**悄悄连上真库**（三个端口都被替身覆盖 ⇒ **不会红**，
+  只会变慢 ＋ 碰真数据），CI 上同一份用例验的却是另一件事。现在 HTTP 用例显式写
+  `register({ hasDatabase: false })` 把世界钉死（`approvals-http` / `membership-http` / `device-session-http` 全部）。
+- **两个世界各有各的响亮**：有库 ⇒ 成员位不存在 **403 `MEMBER_NOT_FOUND`**、`status='removed'`
+  **403 `MEMBER_REMOVED`**、会话查不到 **401 `SESSION_NOT_FOUND`**（三者**不同**，靠"有没有那一行"分）；
+  无库 ⇒ 501（可执行断言）。适配器**只读不判**：`select` 恰好五列，TTL 回落 / 角色白名单
+  仍只在 `session.gate.ts` **一处**。★ 以上三条 2026-10-17 **已实测**（真库 ＋ 真 HTTP；见 `test-db/approvals-db.dbtest.ts`），不再是"预期"。
+- ★ **"无库装配"只在子模块/用例层面存在**：真 `AppModule` **恒** `imports: [PrismaModule]`（全局模块）⇒
+  空 `DATABASE_URL` 时应用**起不来**（`PrismaService` 构造即抛错，点名 `DATABASE_URL`）。生产因此**不会**
+  静默落进 501 世界；"无库世界"的入口只有用例里的 `register({ hasDatabase: false })`。
+- **证据两端各一半**：离线 `test/membership-wiring.test.ts` / `test/device-session-wiring.test.ts`
+  （＋ `test/approvals-wiring.test.ts` 的转发）守"装配**声明**了什么"；真库
+  `test-db/identity-db.dbtest.ts` 组 A–D 守"复合键**真的**各读各的"（同一设备对两个孩子各一行、
+  `@@unique` 的 **P2002** 真的会拦、过期行照样读得出、组 D 用真 `register()` 建图取端口读真库）。
+- ★ **第三半（2026-10-17 补）**：`test-db/approvals-db.dbtest.ts` —— **真库 × 真 HTTP**（真 `AppModule` ＋ 真守卫链 ＋
+  真 `fetch`）。前两半都够不着这一格：离线 HTTP 用例把世界钉在无库、真库用例只验适配器**不发请求**；
+  于是"有库时最终状态码是什么"此前只有**预期**。现在 12 条把它钉住（含"`ApprovalsPort` 有库也是 501"的端到端证据）。
+- **仍未落地**：`ApprovalsPort`（有库也是 501）、§7 四行**写路径**（PIN／锁／审计／TTL 刷新）、
+  `deviceId` 的**凭据认证**（生产 **503**，未变）。
 
 ### ✅ W1-C 落地注（2026-10-15）：身份（Identity）**也是真的了**
 
@@ -227,18 +262,24 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
 形状坏是 **500**（数据/实现问题）—— 混在一起的后果很具体：一个**数据**问题会表现为"你没有权限"。
 
 **两条 fail-closed（都可执行断言）**：
-1. **端口默认实现是显式 501**（`SESSION_LOOKUP_NOT_IMPLEMENTED`）—— 默认装配下每个请求都**拒绝**
-   （比"拦不住"强，但它**也还没有真的查过库**）；`device-session-http.test.ts` 组 D 专门钉住这一条；
+1. **无库装配的端口默认实现是显式 501**（`SESSION_LOOKUP_NOT_IMPLEMENTED`）—— 无库时每个请求都**拒绝**
+   （比"拦不住"强）；`device-session-http.test.ts` 组 D 专门钉住这一条。
+   ★ **有库**世界（W2-D 起）**不再走它**：`PrismaDeviceSessionRepository` 真查库，查不到即 **401 `SESSION_NOT_FOUND`**
+   （`device-session-http.test.ts` 组 D 的用例全把世界钉在**无库**，所以它们验的仍是 501）；
 2. **生产闸门 503**（上表最后一行）—— 组 E 钉住，且有一条**反向**用例：拆掉闸门即变红（见 `w1c-canfail.mjs` ⑥）。
 
 **诚实标注（不粉饰，与"已完成"分开记）**：
-- ⚠️ **会话查询的持久化实现未落地**：`DEVICE_SESSION_REPOSITORY` 默认实现是 **501**，
+- ~~⚠️ **会话查询的持久化实现未落地**：`DEVICE_SESSION_REPOSITORY` 默认实现是 **501**，
   真 Prisma 适配器属 **W2**（与 `ApprovalsPort` / `MembershipPort` 同一批）。理由同上：
-  一注入 `PrismaService`，**无库 CI 会在启动阶段就崩**。
-  ⇒ **"身份由服务端确立"说的是机制，不是"已经能登录了"。**
+  一注入 `PrismaService`，**无库 CI 会在启动阶段就崩**。~~
+  → ✅ **W2-D（2026-10-16）已结清**：**有库** ⇒ `PrismaDeviceSessionRepository`（真查 `DeviceSession`，
+  复合唯一键 `(deviceId, childId)`）；**无库** ⇒ 仍 501。
+  ★ **`ApprovalsPort` 不在这笔账里** —— 它**仍是 501（有库也是）**（W2-D 的模块只把世界转发给另两个子模块）。
+  ⇒ **"身份由服务端确立"说的是机制，不是"已经能登录了"**（`deviceId` 仍不可验证 ⇒ 生产 503，见下一条）。
 - ⚠️ **`deviceId` 本身不可验证** ⇒ 生产 503（见上表）。**"身份层已完成"这句话现在还不能说**，
   能说的是**"角色不再由客户端自选"**。
-- ⚠️ **会话刷新（§7「每次 guardian 操作刷新 TTL」）未实现**：本 Guard **只读**（刷新要写库，属 W2）。
+- ⚠️ **会话刷新（§7「每次 guardian 操作刷新 TTL」）未实现**：本 Guard **只读**
+  （刷新要**写库** —— W2-D 只交付了**读路径**，写路径仍未落地）。
 - ⚠️ **PIN 切换（§7 / §9.18）未实现**：没有"切家长模式"端点，`pinHash` / `pinLockedUntil` 目前无人使用。
 - ⚠️ **`POST /approvals/:id/decide` 的跨家庭推进仍未堵**：它用的是请求里的 childId，
   与审批行自己的 childId 还没有同源校验（要等 `ApprovalRow` 带上它）—— 会话层的同源校验只解决了**一半**。
@@ -392,6 +433,11 @@ model ApprovalRequest {
 用例见 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**）。
 ⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
 （`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不是静默成功。
+★ **W2-D（2026-10-16）之后这条仍在，且是三个端口里唯一的那个**：本模块已改成**动态模块**并把
+`hasDatabase` **转发**给身份层 / 屏障一两个子模块，但它**自己不选实现** ⇒ **有库世界也仍是 501**。
+即：现在（有库时）"你是谁 / 是不是这个孩子的成员"都**真的查过库**了，而"这条审批有没有落库"**仍然没有**。
+★ ✅ **2026-10-17 端到端实测**：合法 guardian 的 `POST /approvals` 与 `POST /approvals/:id/decide` 都返回
+**501 `APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`**（此前守卫全过、真库读通）—— 见 `test-db/approvals-db.dbtest.ts` 组 E。
 ★ 身份口径**已于 W1-C 更换**（2026-10-15）：W1-A/W1-B 时代的
 `x-kp-role` / `x-kp-user-id` / `x-kp-child-id` **三个自报头**已改为
 `x-kp-device-id` / `x-kp-child-id` **两个头 ＋ 服务端会话行**（角色与 userId 由 `DeviceSession` 给出，
@@ -402,9 +448,16 @@ W1-C 之后它同时是**会话查询键的一半**。
 **真装配复验（W1-B，2026-10-15，`tools/_scratch/w1b-live-probe.sh`，真 AppModule ＋ 真 Prisma）**：
 三个头齐全 → **501 `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`**（屏障一已接线，但成员查询端口未落地 ⇒
 fail-closed：此刻**没有人**被放过去）；缺 `x-kp-child-id` → **401**；无身份头 → **401**；
-`{action:'redeem', foo:1}` → **501**（★ Guard 在管道**之前**，所以屏障一的 501 会盖住管道的 400 ——
-成员查询落地后这条会回到 400；这是顺序使然，不是管道坏了）。
+`{action:'redeem', foo:1}` → **501**（★ Guard 在管道**之前**，所以屏障一的 501 会盖住管道的 400）。
 启动日志含 `Mapped {/approvals/:id/decide, POST}` 与 `数据库已连接`。
+> ⚠️ **W2-D 修订（2026-10-16）：上面这段是"无库装配"世界的结论，原样成立**；
+> **有库**世界里屏障一已真查库 ⇒ 那两个 501 分别变成 **403 `MEMBER_NOT_FOUND`**（成员位不存在）
+> 与 **400**（成员位存在 ⇒ 管道照常生效）。★ 旧句"成员查询落地后这条会回到 400"**只在成员位存在时成立**；
+> ✅ **有库这一半已实测（2026-10-17）**：`tools/_scratch/w2d-live-probe.mjs`（真 `dist/main.js` ＋ 真库 ＋ 真 HTTP）
+> **12/12** —— 未登记设备 ⇒ 401 `SESSION_NOT_FOUND`、无成员位 ⇒ 403 `MEMBER_NOT_FOUND`、
+> `removed` ⇒ 403 `MEMBER_REMOVED`、多余键 ⇒ **400**（`statusCode:400`，无业务 code）、
+> 合法 guardian ⇒ **501 `APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`**。同一矩阵已入库为
+> `backend/test-db/approvals-db.dbtest.ts`（12 条，`npm run test:db`；含"空 `DATABASE_URL` ⇒ 真 AppModule 起不来"一条）。
 
 ---
 
@@ -668,8 +721,8 @@ rec#1 的 (ruleId, ruleVersion) 指向空
 - ⚠️ **I2 在真库套件里的可见边界**：套件**故意不做全库 I2 扫描** —— 它自己就会造"并列 / 未来时间戳"的脏行，
   全库扫必红。真库侧只做**计数类红线**（全库无负余额、孤儿版本引用 = 0），
   逐笔滚动求和只对**每个用例自己新建的孩子**做。
-- **仍未落地**：三个端口的真实现（`Approvals` / `Membership` / `DeviceSession`）**仍是 501**。
-  `LEDGER_REPOSITORY` 那一半已于 **W2-C** 接好（见下）。
+- **仍未落地（W2-D 之后收窄）**：三个端口里**只剩一个** —— `ApprovalsPort` **仍是 501（★ 有库也是）**；
+  `LEDGER_REPOSITORY` 那一半已于 **W2-C** 接好、`Membership` / `DeviceSession` 两个端口已于 **W2-D** 接真库（见下）。
   另外：真库套件会**写入真实流水且删不掉**（`DELETE` 被 REVOKE、`Child` 是 `onDelete: Restrict`），
   故用随机 `RUN` 前缀隔离，且入口有 `NODE_ENV=production` 拒跑的守卫。
 
@@ -774,8 +827,10 @@ model DeviceSession {
 - **TTL**：`expiresAt === now` 即过期；`guardian` 过期 ⇒ **回落 `child`**（降级不是 401，§9.19）。
 - ⚠️ **仍未落地**（与上表逐行对照）：**切到 `guardian`（PIN 校验） / 5 次锁 15 分钟 / 每次切换写审计 /
   每次 guardian 操作刷新 TTL** —— 这四行**都还没有端点**，`pinHash` / `pinLockedUntil` 至今无人使用；
-  会话查询的**真 Prisma 适配器**属 W2（默认 501）。**"这张表已经全部实现"是错的**，
-  现在成立的是**读路径**（"服务端说了算"这条原则）＋ **到期回落**。
+  ~~会话查询的**真 Prisma 适配器**属 W2（默认 501）~~ → ✅ **W2-D 已交付读路径的真适配器**
+  （有库查库、无库 501；见 §3 的「W2-D 接线注」）。
+  **"这张表已经全部实现"仍然是错的**：现在成立的是**读路径**（"服务端说了算"这条原则）＋ **到期回落**；
+  四行**写路径**（PIN／锁／审计／TTL 刷新）**一行都没做**。
 - ⚠️ **凭据未认证**：`x-kp-device-id` 可被伪造 ⇒ `NODE_ENV=production` 一律 **503**（禁止上线）。
 
 ---

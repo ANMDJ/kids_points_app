@@ -40,8 +40,10 @@ import { MEMBERSHIP_REPOSITORY, type MembershipPort } from './membership.reposit
  *   `@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)`。
  *
  * ⚠️ 诚实标注（与"已完成"分开记）：本 Guard **接线是真的、判定是真的、403 是真的**，
- *   但**默认装配下读不到库** —— 端口默认实现是 501（见 repository 文件头）。
- *   真库查询 ＋ "非成员 → 403"的真库验证属 W2。
+ *   且（W2-D，2026-10-16）**查询也已经是真的** —— `MembershipModule.register()` 在有库时
+ *   绑定 `PrismaMembershipRepository`（真查 `ChildMember`），无库时仍是显式 501
+ *   （fail-closed）。⇒ "这个人跟这个孩子有没有关系"在**两个世界里都问得出口**，
+ *   且两个世界的答案都不会是"跳过检查"。
  */
 @Injectable()
 export class MembershipGuard implements CanActivate {

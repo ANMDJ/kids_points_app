@@ -34,7 +34,9 @@ import { WishesModule } from './wishes/wishes.module'
 @Module({
   imports: [
     PrismaModule,
-    MembershipModule,
+    // ★ 动态模块（W2-D，2026-10-16）：有 DATABASE_URL ⇒ PrismaMembershipRepository
+    //   （真查 ChildMember，屏障一读的就是库）；没有 ⇒ NotImplementedMembershipRepository（501）。
+    MembershipModule.register(),
     PermissionsModule,
     // ★ 动态模块（W2-B）：有 DATABASE_URL ⇒ 绑 PrismaLedgerRepository（真查库）；
     //   没有 ⇒ 绑 NotImplementedLedgerRepository（六个方法全抛 501，响亮失败而非静默 no-op）。
@@ -43,10 +45,15 @@ import { WishesModule } from './wishes/wishes.module'
     RulesModule,
     HabitsModule,
     WishesModule,
-    ApprovalsModule,
+    // ★ 动态模块（W2-D，2026-10-16）：它自己不选实现，但把"在哪个世界"转发给
+    //   DeviceSessionModule / MembershipModule（同一个 hasDatabase 只有一个来源）。
+    //   不传参 ⇒ 按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
+    ApprovalsModule.register(),
     OnboardingModule,
     InvitesModule,
-    DeviceSessionModule,
+    // ★ 动态模块（W2-D，2026-10-16）：有库 ⇒ PrismaDeviceSessionRepository
+    //   （真查 DeviceSession，身份/角色由库给出）；没有 ⇒ 501（无库时连 PrismaService 都不建）。
+    DeviceSessionModule.register(),
     AuditModule,
     NotificationsModule,
     IdempotencyModule
