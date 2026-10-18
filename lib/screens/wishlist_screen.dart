@@ -156,6 +156,15 @@ class _WishlistScreenState extends State<WishlistScreen> {
                                 wish: wish,
                                 points: store.points,
                                 onRedeem: () {
+                                  if (store.isReadOnly) {
+                                    messenger.hideCurrentSnackBar();
+                                    messenger.showSnackBar(
+                                      SnackBar(
+                                          content:
+                                              Text(store.readOnlyWriteMessage)),
+                                    );
+                                    return;
+                                  }
                                   final bool ok = store.redeem(wish);
                                   messenger.hideCurrentSnackBar();
                                   messenger.showSnackBar(
@@ -187,7 +196,16 @@ class _WishlistScreenState extends State<WishlistScreen> {
                     icon: Icons.favorite_rounded,
                     expanded: _expanded,
                     expandedWidth: expandedWidth,
-                    onTap: () => showAddWishSheet(context),
+                    onTap: () {
+                      if (store.isReadOnly) {
+                        messenger.hideCurrentSnackBar();
+                        messenger.showSnackBar(
+                          SnackBar(content: Text(store.readOnlyWriteMessage)),
+                        );
+                        return;
+                      }
+                      showAddWishSheet(context);
+                    },
                   ),
                 ),
               ],
@@ -204,6 +222,13 @@ class _WishlistScreenState extends State<WishlistScreen> {
     ScaffoldMessengerState messenger,
     Wish wish,
   ) async {
+    if (store.isReadOnly) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.readOnlyWriteMessage)),
+      );
+      return;
+    }
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {

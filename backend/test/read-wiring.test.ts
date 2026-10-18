@@ -302,6 +302,30 @@ describe('组 C：listRecords —— limit+1 判 hasMore，category 真进 where
     assert.equal(page.hasMore, true)
   })
 
+  it('before 游标：进 where 的是 (createdAt, id) 的**双层**条件，不是 offset', async () => {
+    const fake = makePrismaFake({ recordRows: [recordOf()] })
+    await new PrismaReadRepository(fake.prisma).listRecords({
+      childId: 'child-1',
+      limit: 50,
+      before: {
+        createdAt: new Date('2026-10-18T01:00:00.000Z'),
+        id: 'rec-9'
+      }
+    })
+
+    assert.deepEqual(
+      (callFor(fake.calls, 'pointRecord', 'findMany').args as { where: unknown }).where,
+      {
+        childId: 'child-1',
+        OR: [
+          { createdAt: { lt: new Date('2026-10-18T01:00:00.000Z') } },
+          { createdAt: new Date('2026-10-18T01:00:00.000Z'), id: { lt: 'rec-9' } }
+        ]
+      },
+      '游标只比时间 —— 同一毫秒的剩余行会被漏掉（第二页丢行）'
+    )
+  })
+
   it('孩子不存在 / 已软删 ⇒ null，且**不**去查流水（/records 也要 404 而不是空页）', async () => {
     const fake = makePrismaFake({ recordRows: [recordOf()] })
     const prisma = fake.prisma as unknown as { child: { findFirst: () => Promise<null> } }

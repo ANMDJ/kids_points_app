@@ -18,16 +18,29 @@ class PointsRuleScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final AppStore store = AppScope.of(context);
     final double bottomInset = MediaQuery.of(context).padding.bottom;
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+
+    // live 模式没有规则写端点：编辑 / 新建都会骗用户「改了」，所以入口先拦。
+    bool guardReadOnly() {
+      if (!store.isReadOnly) return false;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.readOnlyWriteMessage)),
+      );
+      return true;
+    }
 
     // 长按 / 点按规则：打开操作菜单（编辑 / 加入今天的习惯 / 移到回收站）。
     // 「编辑」走的是**同一张表单**（修 C10）—— 编辑态由 AddRuleSheet 自己认得出来。
     void openRuleActions(PointRule rule) {
+      if (guardReadOnly()) return;
       showRuleActionsSheet(
         context,
         rule,
         onEdit: () => showAddRuleSheet(context, rule: rule),
       );
     }
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
@@ -68,8 +81,7 @@ class PointsRuleScreen extends StatelessWidget {
                             (PointRule rule) => RuleTile(
                               rule: rule,
                               onTap: () => openRuleActions(rule),
-                              onLongPress: () =>
-                                  openRuleActions(rule),
+                              onLongPress: () => openRuleActions(rule),
                             ),
                           )
                           .toList(),
@@ -80,7 +92,10 @@ class PointsRuleScreen extends StatelessWidget {
               child: SoftButton(
                 label: '新增规则',
                 icon: Icons.menu_book_rounded,
-                onTap: () => showAddRuleSheet(context),
+                onTap: () {
+                  if (guardReadOnly()) return;
+                  showAddRuleSheet(context);
+                },
               ),
             ),
           ],

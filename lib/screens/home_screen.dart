@@ -26,86 +26,113 @@ class HomeScreen extends StatelessWidget {
     final int doneCount =
         habits.where((HabitView habit) => habit.checked).length;
 
+    void showReadOnlyHint() {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.readOnlyWriteMessage)),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-          children: <Widget>[
-            const Text(
-              '当前可用积分',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: AppColors.textSecondary,
-                letterSpacing: 0.4,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Center(
-              child: AnimatedPointText(
-                value: store.points,
-                style: const TextStyle(
-                  fontSize: 46,
-                  fontWeight: FontWeight.w800,
-                  height: 1.06,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ),
-            const Center(child: PointsJar(width: 168)),
-            const SizedBox(height: 20),
-            SectionTitle(
-              title: '今天的习惯',
-              trailing: Text(
-                '已完成 $doneCount/${habits.length}',
-                style: const TextStyle(
-                  fontSize: 11.5,
+        child: RefreshIndicator(
+          color: AppColors.primaryDeep,
+          onRefresh: store.refreshFromServer,
+          child: ListView(
+            // 内容比屏幕短时也要能下拉刷新（否则空态/一条记录时刷新手势无效）。
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            children: <Widget>[
+              const Text(
+                '当前可用积分',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13.5,
                   color: AppColors.textSecondary,
+                  letterSpacing: 0.4,
                 ),
               ),
-            ),
-            ...habits.map(
-              (HabitView habit) => HabitTile(
-                habit: habit,
-                onTap: () {
-                  // 视图是快照，取回习惯本身交给 store（Dart 没有 TS 的结构类型兼容）
-                  final String? message = store.checkIn(habit.habit);
-                  messenger.hideCurrentSnackBar();
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        message ?? '太棒了！“${habit.title}”+${habit.points} 积分',
+              const SizedBox(height: 4),
+              Center(
+                child: AnimatedPointText(
+                  value: store.points,
+                  style: const TextStyle(
+                    fontSize: 46,
+                    fontWeight: FontWeight.w800,
+                    height: 1.06,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
+              const Center(child: PointsJar(width: 168)),
+              const SizedBox(height: 20),
+              SectionTitle(
+                title: '今天的习惯',
+                trailing: Text(
+                  '已完成 $doneCount/${habits.length}',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              ...habits.map(
+                (HabitView habit) => HabitTile(
+                  habit: habit,
+                  onTap: () {
+                    if (store.isReadOnly) {
+                      showReadOnlyHint();
+                      return;
+                    }
+                    // 视图是快照，取回习惯本身交给 store（Dart 没有 TS 的结构类型兼容）
+                    final String? message = store.checkIn(habit.habit);
+                    messenger.hideCurrentSnackBar();
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          message ?? '太棒了！“${habit.title}”+${habit.points} 积分',
+                        ),
                       ),
-                    ),
-                  );
-                },
-                onLongPress: () {
-                  // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
-                  final String? message = store.undoCheckIn(habit.habit);
-                  messenger.hideCurrentSnackBar();
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(message ?? '已撤销“${habit.title}”的打卡'),
-                    ),
-                  );
+                    );
+                  },
+                  onLongPress: () {
+                    if (store.isReadOnly) {
+                      showReadOnlyHint();
+                      return;
+                    }
+                    // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
+                    final String? message = store.undoCheckIn(habit.habit);
+                    messenger.hideCurrentSnackBar();
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(message ?? '已撤销“${habit.title}”的打卡'),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              SoftButton(
+                label: '记一笔',
+                icon: Icons.edit_note_rounded,
+                onTap: () {
+                  if (store.isReadOnly) {
+                    showReadOnlyHint();
+                    return;
+                  }
+                  showQuickNoteSheet(context);
                 },
               ),
-            ),
-            const SizedBox(height: 10),
-            SoftButton(
-              label: '记一笔',
-              icon: Icons.edit_note_rounded,
-              onTap: () => showQuickNoteSheet(context),
-            ),
-            const SizedBox(height: 10),
-            const Center(
-              child: Text(
-                '点习惯卡片打卡 · 长按可撤销',
-                style: TextStyle(fontSize: 11, color: AppColors.textHint),
+              const SizedBox(height: 10),
+              const Center(
+                child: Text(
+                  '点习惯卡片打卡 · 长按可撤销',
+                  style: TextStyle(fontSize: 11, color: AppColors.textHint),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

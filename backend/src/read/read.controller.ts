@@ -33,7 +33,7 @@ export const DEFAULT_RECORD_LIMIT = 50
  *   · 401 `UNAUTHENTICATED` / `SESSION_NOT_FOUND`（缺身份头 / 无会话）；
  *   · 403 `MEMBER_NOT_FOUND` / `MEMBER_REMOVED`（屏障一）；
  *   · 404 `CHILD_NOT_FOUND`（成员位还在，但 Child 行已删）；
- *   · 400（`?limit=0` / `?limit=201` / 未知分类 / 未知查询键）；
+ *   · 400（`?limit=0` / `?limit=201` / 未知分类 / 未知查询键 / 非法 `cursor`）；
  *   · 501 `READ_MODEL_NOT_IMPLEMENTED`（**仅无库装配**，绝不返回空数据冒充成功）。
  */
 @Controller()
@@ -58,7 +58,8 @@ export class ReadController {
     return this.service.records(
       this.childIdOf(req),
       query.category,
-      query.limit ?? DEFAULT_RECORD_LIMIT
+      query.limit ?? DEFAULT_RECORD_LIMIT,
+      query.cursor
     )
   }
 

@@ -74,6 +74,10 @@ W4-A 先落**读路径**（不写任何东西，因此没有 `Idempotency-Key`�
 - `createdAt` / `reversedAt` 是 ISO-8601 字符串。
 - 被冲正的表扬**仍在记录列表里**（账本 append-only），只是不计入 `goodHabitCount`。
 
+> **W4-B 补充（2026-10-19）**：本节的 `hasMore` 当时没有配套游标，客户端无法取下一页。
+> W4-B 已给入参加 `cursor`、响应加 `nextCursor`，并补齐键集翻页；口径以
+> [`14-w4b-handoff.md`](./14-w4b-handoff.md) 为准。
+
 ## 4. 三条容易读错的口径
 
 | 字段 | 口径 | 为什么 |

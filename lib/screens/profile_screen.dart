@@ -21,6 +21,17 @@ class ProfileScreen extends StatelessWidget {
     final int trashCount = store.trashItems().length;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
+    // live 模式只有读端点：本地改名 / 回收站 / 恢复演示数据都不会写回服务器。
+    // 统一提示，而不是让用户以为「改成功了，只是服务器没同步」。
+    bool guardReadOnly() {
+      if (!store.isReadOnly) return false;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.readOnlyWriteMessage)),
+      );
+      return true;
+    }
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
@@ -30,7 +41,10 @@ class ProfileScreen extends StatelessWidget {
             Row(
               children: <Widget>[
                 GestureDetector(
-                  onTap: () => _renameChild(context, store),
+                  onTap: () {
+                    if (guardReadOnly()) return;
+                    _renameChild(context, store);
+                  },
                   child: Container(
                     width: 62,
                     height: 62,
@@ -144,9 +158,12 @@ class ProfileScreen extends StatelessWidget {
                     icon: Icons.delete_outline_rounded,
                     color: AppColors.pointSpend,
                     label: trashCount > 0 ? '回收站（$trashCount）' : '回收站',
-                    onTap: () => showTrashSheet(context),
+                    onTap: () {
+                      // 回收站里的恢复 / 彻底删除都是写操作；live 模式下整入口拦截。
+                      if (guardReadOnly()) return;
+                      showTrashSheet(context);
+                    },
                   ),
-
                 ],
               ),
             ),
@@ -156,6 +173,7 @@ class ProfileScreen extends StatelessWidget {
               Center(
                 child: TextButton(
                   onPressed: () {
+                    if (guardReadOnly()) return;
                     if (!store.resetToSeed()) {
                       messenger.showSnackBar(
                         const SnackBar(content: Text('正式环境不支持恢复演示数据')),

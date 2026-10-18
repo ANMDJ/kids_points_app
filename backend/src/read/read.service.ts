@@ -1,6 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common'
 import type { RecordCategory } from '@prisma/client'
 
+import { decodeRecordCursor } from './read.cursor'
 import { toHomeResponse, toRecordsResponse, type HomeResponse, type RecordsResponse } from './read.mapper'
 import { READ_REPOSITORY, type ReadPort } from './read.repository'
 
@@ -23,9 +24,19 @@ export class ReadService {
   async records(
     childId: string,
     category: RecordCategory | undefined,
-    limit: number
+    limit: number,
+    cursor?: string
   ): Promise<RecordsResponse> {
-    const page = await this.port.listRecords({ childId, category, limit })
+    // 游标解析失败 ⇒ 400（BadRequestException 由 `decodeRecordCursor` 抛出）；
+    // 绝不把非法游标当成“没传”而退回第一页 —— 客户端会无限重复第一页。
+    const before = cursor === undefined ? undefined : decodeRecordCursor(cursor)
+    const page = await this.port.listRecords({
+      childId,
+      category,
+      limit,
+      // `undefined` 键不落进端口入参：离线用例的 deepEqual 才能保持「没传就是没传」。
+      ...(before === undefined ? {} : { before })
+    })
     // ★ 与 /home 同一条兜底：孩子已软删时**两个端点都答 404**。
     //   若这里返回空页，客户端会显示「还没有任何记录」—— 又一个「把失败装成正常」。
     if (page === null) throw childNotFound(childId)

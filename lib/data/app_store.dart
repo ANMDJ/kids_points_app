@@ -11,6 +11,10 @@ import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_icons.dart';
 import 'seed_data.dart';
+import 'read_api.dart';
+import 'read_api_errors.dart';
+import 'read_dto.dart';
+import 'read_mapper.dart';
 
 /// release / profile 构建的判定 —— **编译期常量**（等价于 `!kDebugMode`）。
 ///
@@ -32,6 +36,11 @@ bool demoResetAllowed({bool isRelease = _isReleaseBuild}) => !isRelease;
 /// release / profile 构建下为 false，入口在编译期被整段树摇掉。
 const bool allowDemoReset = !_isReleaseBuild;
 
+/// 只读数据的加载状态（W4-B）。
+///
+/// `ready` 之后仍可能 `loadingMore`（追加下一页）或 `error`（保留已加载内容）。
+enum ReadStatus { idle, loading, ready, loadingMore, error }
+
 /// 应用状态中心：积分余额、习惯、心愿、流水、规则。
 ///
 /// 目前是纯内存实现（会话内有效）。要落地持久化时，
@@ -42,9 +51,60 @@ class AppStore extends ChangeNotifier {
   /// 原先构造即 `_reset()` → 应用一打开就是假数据（124 分 / 324 好习惯 /
   /// “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的。
   /// seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
-  AppStore() {
+  AppStore({ReadApiClient? readApi}) : _readApi = readApi {
     _resetToEmpty();
   }
+
+  /// 只读 API 客户端；为 null 表示**没有配置后端**，整个 App 用本地数据。
+  ///
+  /// 只有 `main()` 按 `--dart-define` 注入：测试 / 演示默认走原路径，
+  /// 不会因为环境里恰好有变量就偷偷发请求。
+  final ReadApiClient? _readApi;
+
+  /// 一页流水条数 —— 与后端 DTO 的上限（200）同口径，50 是「首屏够用」的折中。
+  static const int _recordsPageSize = 50;
+
+  ReadStatus _readStatus = ReadStatus.idle;
+  ReadApiException? _readError;
+  bool _usingPreview = true;
+  bool _hasMoreRecords = false;
+  String? _nextCursor;
+  RecordCategory? _recordFilter;
+
+  /// 每次「重新加载 / 切分类」都 +1；在途的旧响应据此丢弃（防串页）。
+  int _readEpoch = 0;
+  bool _disposed = false;
+
+  /// 是否接入了后端（与「当前是否已加载成功」是两件事）。
+  bool get isLiveMode => _readApi != null;
+
+  /// 只读模式：接后端时**不提供写入口**（W4 只实现了读端点）。
+  /// 本地预览数据不受影响，可以随便点 —— 那本来就是演示。
+  bool get isReadOnly => isLiveMode;
+
+  ReadStatus get readStatus => _readStatus;
+
+  ReadApiException? get readError => _readError;
+
+  /// 当前展示的是本地预览数据（未配置后端，或首次加载尚未成功）。
+  bool get usingPreview => _usingPreview;
+
+  /// 服务端还有下一页（仅 live 有效）。
+  bool get hasMoreRecords => _hasMoreRecords;
+
+  /// 当前记录页的服务端筛选（null = 全部）。
+  RecordCategory? get recordFilter => _recordFilter;
+
+  /// 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。
+  String get readOnlyWriteMessage => '只读模式：后端写入接口还没上线（W4），这次操作没有保存到服务器。';
+
+  /// 记录页要展示的流水：
+  ///   · 预览模式：对本地流水按分类过滤（原逻辑）；
+  ///   · live 模式：服务端已按 `category` 过滤，这里不再二次过滤，
+  ///     否则「全部」只加载 50 条时会漏掉后面的同类记录。
+  List<PointRecord> get visibleRecords => _usingPreview
+      ? recordsOf(_recordFilter)
+      : List<PointRecord>.unmodifiable(records);
 
   int _points = 0;
   late ChildProfile profile;
@@ -140,6 +200,179 @@ class AppStore extends ChangeNotifier {
   List<PointRecord> recordsOf(RecordCategory? category) {
     if (category == null) return List<PointRecord>.unmodifiable(records);
     return records.where((PointRecord r) => r.category == category).toList();
+  }
+
+  // ------------------------------------------------------- 只读 API（W4-B）
+
+  /// 从后端拉取首页快照 + 第一页流水；失败时**保留已有数据**并记录错误。
+  ///
+  /// 两个请求并发：首页和流水各自独立，任何一个失败都会走 catch，
+  /// 不会出现「首页更新了、流水还是旧的」这种半新半旧的静默状态。
+  Future<void> refreshFromServer() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null) return;
+
+    final int epoch = ++_readEpoch;
+    _readStatus = ReadStatus.loading;
+    _readError = null;
+    _notify();
+
+    try {
+      final List<Object> results = await Future.wait<Object>(<Future<Object>>[
+        api.fetchHome(),
+        api.fetchRecords(
+          category: _recordFilter?.name,
+          limit: _recordsPageSize,
+        ),
+      ]);
+      if (epoch != _readEpoch || _disposed) return;
+
+      final HomeSnapshot home = mapHome(results[0] as HomeDto);
+      final RecordsPage page = mapRecordsPage(results[1] as RecordsPageDto);
+
+      _applyHomeSnapshot(home);
+      _applyRecordsPage(page, append: false);
+      _usingPreview = false;
+      _readStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (epoch != _readEpoch || _disposed) return;
+      _readError = error;
+      _readStatus = ReadStatus.error;
+    } catch (error) {
+      if (epoch != _readEpoch || _disposed) return;
+      _readError = _unexpectedReadError(error);
+      _readStatus = ReadStatus.error;
+    }
+    _notify();
+  }
+
+  /// 追加下一页。**必须**用服务端给的 `nextCursor` 原样请求；
+  /// 没有更多 / 正在加载 / 预览模式时直接返回（不会重复请求同一页）。
+  Future<void> loadMoreRecords() async {
+    final ReadApiClient? api = _readApi;
+    final String? cursor = _nextCursor;
+    if (api == null ||
+        _usingPreview ||
+        !_hasMoreRecords ||
+        cursor == null ||
+        _readStatus == ReadStatus.loadingMore ||
+        _readStatus == ReadStatus.loading) {
+      return;
+    }
+
+    final int epoch = _readEpoch;
+    _readStatus = ReadStatus.loadingMore;
+    _readError = null;
+    _notify();
+
+    try {
+      final RecordsPageDto dto = await api.fetchRecords(
+        category: _recordFilter?.name,
+        limit: _recordsPageSize,
+        cursor: cursor,
+      );
+      if (epoch != _readEpoch || _disposed) return;
+
+      _applyRecordsPage(mapRecordsPage(dto), append: true);
+      _readStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (epoch != _readEpoch || _disposed) return;
+      _readError = error;
+      _readStatus = ReadStatus.error;
+    } catch (error) {
+      if (epoch != _readEpoch || _disposed) return;
+      _readError = _unexpectedReadError(error);
+      _readStatus = ReadStatus.error;
+    }
+    _notify();
+  }
+
+  /// 切换记录页分类。live 模式下**重新向服务端要第一页**（带 `category`），
+  /// 因为本地只过滤已加载的 50 条会漏掉后面的同类记录（那是假「共 N 条」）。
+  Future<void> setRecordFilter(RecordCategory? category) async {
+    if (_recordFilter == category) return;
+    _recordFilter = category;
+
+    if (_readApi == null || _usingPreview) {
+      _notify();
+      return;
+    }
+    final ReadApiClient api = _readApi!;
+
+    final int epoch = ++_readEpoch;
+    _readStatus = ReadStatus.loading;
+    _readError = null;
+    _nextCursor = null;
+    _hasMoreRecords = false;
+    records.clear();
+    _notify();
+
+    try {
+      final RecordsPageDto dto = await api.fetchRecords(
+        category: _recordFilter?.name,
+        limit: _recordsPageSize,
+      );
+      if (epoch != _readEpoch || _disposed) return;
+
+      _applyRecordsPage(mapRecordsPage(dto), append: false);
+      _readStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (epoch != _readEpoch || _disposed) return;
+      _readError = error;
+      _readStatus = ReadStatus.error;
+    } catch (error) {
+      if (epoch != _readEpoch || _disposed) return;
+      _readError = _unexpectedReadError(error);
+      _readStatus = ReadStatus.error;
+    }
+    _notify();
+  }
+
+  void _applyHomeSnapshot(HomeSnapshot home) {
+    _points = home.pointsBalance;
+    profile = ChildProfile(
+      name: home.childName,
+      childId: home.childId,
+      goodHabitCount: home.goodHabitCount,
+      rewardCount: home.rewardCount,
+    );
+    _habitList
+      ..clear()
+      ..addAll(home.habits);
+    _ruleList
+      ..clear()
+      ..addAll(home.rules);
+    _wishList
+      ..clear()
+      ..addAll(home.wishes);
+  }
+
+  void _applyRecordsPage(RecordsPage page, {required bool append}) {
+    if (!append) records.clear();
+    // 按 id 去重：键集翻页本不该重叠，但客户端多一道保险 ——
+    // 宁可少显示一条重复，也不能让「加载更多」把同一笔流水堆两遍。
+    final Set<String> known = records.map((PointRecord r) => r.id).toSet();
+    records.addAll(page.records.where((PointRecord r) => known.add(r.id)));
+    _nextCursor = page.nextCursor;
+    _hasMoreRecords = page.hasMore;
+  }
+
+  ReadApiException _unexpectedReadError(Object error) => ReadApiException(
+        ReadFailureKind.malformed,
+        '读取数据时发生意外错误。请重试；若持续出现请反馈。',
+        code: 'UNEXPECTED_READ_ERROR',
+        detail: error.toString(),
+      );
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _readApi?.close();
+    super.dispose();
   }
 
   /// 首页用的**派生视图**列表 —— 修 A2 / A3 / E17。
@@ -753,6 +986,7 @@ class AppStore extends ChangeNotifier {
         );
       }
     }
+
     collect(TrashKind.pointRule);
     collect(TrashKind.wish);
     collect(TrashKind.habit);
@@ -774,7 +1008,8 @@ class AppStore extends ChangeNotifier {
   }
 
   /// 从回收站恢复某条规则（规则页 / 回收站页用）—— 修 C9。
-  bool restoreRule(PointRule rule, {ActorContext actor = const ActorContext()}) =>
+  bool restoreRule(PointRule rule,
+          {ActorContext actor = const ActorContext()}) =>
       restoreTrash(TrashKind.pointRule, rule.id, actor: actor);
 
   /// 从回收站恢复某个心愿（心愿页 / 回收站页用）—— 修 C9。
@@ -813,7 +1048,8 @@ class AppStore extends ChangeNotifier {
   ///
   /// **只在 UI 显式调用时执行**（回收站页的“清理已过期”按钮）：
   /// 到期不等于必须删 —— 见 docs/design/08 §3.5（判定是纯函数，动作由产品决定）。
-  int purgeExpiredTrash({DateTime? now, ActorContext actor = const ActorContext()}) {
+  int purgeExpiredTrash(
+      {DateTime? now, ActorContext actor = const ActorContext()}) {
     final DateTime time = now ?? DateTime.now();
     int purged = 0;
     void sweep(List<SoftDeletable> list, TrashKind kind) {
@@ -838,6 +1074,7 @@ class AppStore extends ChangeNotifier {
         purged += 1;
       }
     }
+
     sweep(_ruleList, TrashKind.pointRule);
     sweep(_wishList, TrashKind.wish);
     sweep(_habitList, TrashKind.habit);
@@ -897,7 +1134,8 @@ class AppStore extends ChangeNotifier {
       return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
     }
     final String nextTitle = title.trim().isEmpty ? live.title : title.trim();
-    final String nextCondition = condition.trim().isEmpty ? '家长约定' : condition.trim();
+    final String nextCondition =
+        condition.trim().isEmpty ? '家长约定' : condition.trim();
     if (nextTitle == live.title &&
         nextCondition == live.condition &&
         dailyLimit == live.dailyLimit &&

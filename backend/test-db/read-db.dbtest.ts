@@ -532,6 +532,47 @@ describe('组 C：GET /records —— 账本只增不删，分页与筛选来自
     const all = await get('/records?limit=5', H.dad)
     assert.equal((all.body.records as unknown[]).length, 5)
     assert.equal(all.body.hasMore, false)
+    assert.equal(all.body.nextCursor, null)
+  })
+
+  it('★ 键集翻页（真 SQL）：逐页取完 = 全量、无重复、无漏行', async () => {
+    const seen: string[] = []
+    let cursor: string | null = null
+    let pages = 0
+
+    do {
+      const path: string =
+        cursor === null
+          ? '/records?limit=2'
+          : `/records?limit=2&cursor=${encodeURIComponent(cursor)}`
+      const res = await get(path, H.dad)
+      assert.equal(res.status, 200, `实际 ${res.status}：${JSON.stringify(res.body)}`)
+      const records = res.body.records as { id: string }[]
+      seen.push(...records.map((record) => record.id))
+      cursor = res.body.nextCursor as string | null
+      if (res.body.hasMore === true) {
+        assert.equal(typeof cursor, 'string', 'hasMore=true 却没有 nextCursor —— 客户端无法取下一页')
+      } else {
+        assert.equal(cursor, null, 'hasMore=false 却给了游标 —— 客户端会继续调用')
+      }
+      pages += 1
+      assert.ok(pages <= 10, '翻页没有终止 —— hasMore / nextCursor 在骗人')
+    } while (cursor !== null)
+
+    assert.equal(pages, 3, '5 条 / 每页 2 条 应当是 3 页（2 + 2 + 1）')
+    assert.deepEqual(seen, [
+      ID.recAdjust,
+      ID.recExchange,
+      ID.recPraise,
+      ID.recCorrection,
+      ID.recReversed
+    ], '翻页顺序或去重不对 —— 键集条件把同一毫秒的行漏掉/重复了')
+  })
+
+  it('非法 cursor ⇒ 400（不静默回第一页）', async () => {
+    const res = await get('/records?cursor=not-a-cursor', H.dad)
+    assert.equal(res.status, 400)
+    assert.equal(res.body.code, 'INVALID_RECORD_CURSOR')
   })
 
   it('另一个孩子只读到自己的那一条（childId 来自会话，不来自 query）', async () => {

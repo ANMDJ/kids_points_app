@@ -1,3 +1,4 @@
+import { encodeRecordCursor } from './read.cursor'
 import type {
   HomeSnapshotRow,
   RecordPageRow,
@@ -105,6 +106,13 @@ export interface RecordsResponse {
   /** 本次实际请求的上限（客户端可据此判断是否要「加载更多」）。 */
   limit: number
   hasMore: boolean
+  /**
+   * 下一页游标；`hasMore=false` 时为 `null`。
+   *
+   * ★ 客户端必须**原样回传**（`?cursor=...`）：这是 `(createdAt, id)` 的编码，
+   *   自己拼日期会因精度 / 时区写法不同而失效（服务端回 400，不会静默回到第一页）。
+   */
+  nextCursor: string | null
 }
 
 /** 规则分值：库内恒正 + `direction` ⇒ 客户端带符号。 */
@@ -170,9 +178,18 @@ export function toRecordDto(row: RecordRow): RecordDto {
 }
 
 export function toRecordsResponse(page: RecordPageRow, limit: number): RecordsResponse {
+  // 游标指向**本页最后一行**（不是多取的那一行）：下一页从它之后开始，
+  // 因此两页之间不会重叠。`hasMore=false` 时给 null —— 客户端据此停掉「加载更多」。
+  const last = page.rows[page.rows.length - 1]
+  const nextCursor =
+    page.hasMore && last !== undefined
+      ? encodeRecordCursor({ createdAt: last.createdAt, id: last.id })
+      : null
+
   return {
     records: page.rows.map(toRecordDto),
     limit,
-    hasMore: page.hasMore
+    hasMore: page.hasMore,
+    nextCursor
   }
 }

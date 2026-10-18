@@ -138,7 +138,18 @@ export class PrismaReadRepository implements ReadPort {
     const rows = await this.prisma.pointRecord.findMany({
       where: {
         childId: input.childId,
-        ...(input.category === undefined ? {} : { category: input.category })
+        ...(input.category === undefined ? {} : { category: input.category }),
+        // 键集翻页：排序是 (createdAt desc, id desc)，因此「下一页」是
+        // 时间更早，或同一毫秒但 id 更小。两条件缺一不可 ——
+        // 只比时间会把同一毫秒的剩余行全部漏掉。
+        ...(input.before === undefined
+          ? {}
+          : {
+              OR: [
+                { createdAt: { lt: input.before.createdAt } },
+                { createdAt: input.before.createdAt, id: { lt: input.before.id } }
+              ]
+            })
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: input.limit + 1,

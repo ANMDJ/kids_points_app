@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator'
+import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator'
 
 import type { RecordCategory } from '@prisma/client'
 
@@ -30,4 +30,16 @@ export class ListRecordsQueryDto {
   @Min(1)
   @Max(200)
   limit?: number
+
+  /**
+   * 键集游标：把上一页响应里的 `nextCursor` **原样**回传。
+   *
+   * ★ 这里只做形状校验（非空字符串 / 长度上界）；语义解析在 service
+   *   （`decodeRecordCursor`）。格式错 ⇒ 400 `INVALID_RECORD_CURSOR`，
+   *   绝不静默退回第一页 —— 那会让「加载更多」无限重复同一页。
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  cursor?: string
 }

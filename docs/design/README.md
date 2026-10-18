@@ -3,7 +3,7 @@
 > 本目录是**可评审的设计事实源**，所有条目均以现有代码中的真实方法/调用点为依据，非推测。
 
 > **需求侧文档**（面向「做什么、为什么做、做到什么程度算完成」）见 [`../PRD.md`](../PRD.md) ——
-> 它整合本目录 `01`–`13` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
+> 它整合本目录 `01`–`14` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
@@ -20,18 +20,20 @@
 | [`11-d3b-handoff.md`](./11-d3b-handoff.md) | **阶段 D-b 交接单**（`D3b` `ChildMember.restrictions` 裸 `Json` 定形）：**为什么定形只能落在应用层（Prisma 表达不了 `Json` 内部形状）**、权威源 ↔ 两处手抄的三处对账、落地清单、**新增闸门 `restrictions:check` 的 6 项检查**、**证伪 17 例（14 反例：每例"红且只点名自己" ＋ 3 控制例）**、**`02` §3 去掉开放标记 `...` 的口径修正**、遗留（写入路径未开工 / 闸门此刻"无字面量可查"） | ✅ D-b 已收口 |
 | [`12-w3c-handoff.md`](./12-w3c-handoff.md) | **阶段 W3-C 交接单**（审批链路收尾）：**4 执行器 / 5 种 `autoReason` / `expireDue()` 后台扫描 / `Idempotency-Key`**、真库证据与可复跑基线、**`add_wish` 无流水 / 加分流水不带 `ruleId` / 幂等响应缓存不在业务事务**等 8 条防复发坑、W4 接手顺序与仍未落地边界 | ✅ W3-C 已收口 |
 | [`13-w4a-handoff.md`](./13-w4a-handoff.md) | **阶段 W4-A 交接单**（只读后端 `GET /home` / `GET /records`）：**端口/适配器/映射/三道屏障**、`goodHabitCount` 与 `rewardCount` 的历史口径、`limit + 1` 分页、三层证据（离线 HTTP / 装配 / 真库）、**真库抓到的 `/records` 对已删孩子返回空页**、仍未落地的写端点边界 | ✅ W4-A 已收口 |
+| [`14-w4b-handoff.md`](./14-w4b-handoff.md) | **阶段 W4-B 交接单**（记录页键集分页）：`cursor` / `nextCursor` 契约、同毫秒 `(createdAt, id)` 双条件、非法游标 400、Flutter DTO/AppStore/UI 三态、**live 只读拦截位置**、`didChangeDependencies` 同步 notify 的坑、可复跑基线 | ✅ W4-B 已收口 |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
 
-> ⚠️ **读法**：以下按阶段留档，**后面的阶段会推翻前面的结论**。当前（2026-10-18）最关键的一条：
-> 后端**已有只读入口** —— **W4-A** 起 `GET /home` / `GET /records` 有库时是真 Prisma 查询（无库仍 501），
-> 双端不必再只靠内存种子；写端点（规则 / 习惯 / 心愿 / 邀请）仍未建。
+> ⚠️ **读法**：以下按阶段留档，**后面的阶段会推翻前面的结论**。当前（2026-10-19）最关键的一条：
+> 后端**已有只读入口** —— **W4-A** 起 `GET /home` / `GET /records` 有库时是真 Prisma 查询（无库仍 501）；
+> **W4-B** 起 `/records` 支持键集分页，Flutter 配齐 `--dart-define` 时会接真实只读数据（未配置仍是本地预览）。
+> **小程序端尚未接这两条端点**；写端点（规则 / 习惯 / 心愿 / 邀请）仍未建。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
-> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A）为准。
+> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A / W4-B）为准。
 
 ### ✅ 已完成并验证
 
@@ -822,6 +824,33 @@
     ⑧ 仍不粉饰：规则 / 习惯 / 心愿 / 邀请的**写端点未建**；双端 `AppStore` 仍用内存种子
     （W4-B 起才逐个替换）；设备凭据仍不可验证（生产 503）。
     交接单：[`13-w4a-handoff.md`](./13-w4a-handoff.md)。
+
+
+**W4-B 进展（2026-10-19）：记录页键集分页 + Flutter 只读接入**
+
+    ① **`GET /records` 真的能翻页了**：入参加 `cursor`，响应加 `nextCursor`；
+    游标是 `base64url("<ISO-8601>|<id>")`，客户端**原样回传**，服务端严格解码。
+    非法游标一律 `400 INVALID_RECORD_CURSOR`，**绝不静默退回第一页**。
+    ② **键集而非 offset**：排序仍 `(createdAt desc, id desc)`，下一页谓词是
+    `createdAt < c OR (createdAt = c AND id < c.id)`；`nextCursor` 取自**本页最后一行**
+    （不是 `limit + 1` 多取的探针行），因此两页不重不漏。
+    ③ **Flutter 读层**：`read_api.dart`（两个 GET、身份头、游标透传）、
+    `read_dto.dart`（严格解析，`hasMore ⇔ nextCursor` 双端自洽）、`read_mapper.dart`
+    （服务端字段 → 现有 UI 模型）。`AppStore.loadMoreRecords()` 追加并按 `id` 去重；
+    加载更多失败保留已加载页，重试用同一游标。
+    ④ **UI 三态不粉饰**：live 模式顶部 `ReadStatusBanner` 区分「首次读取 / 失败（空数据）/
+    失败（有旧数据）/ 只读成功」；记录页首屏 spinner、页尾「加载更多 / 重试 / 没有更多了」，
+    短列表也可下拉刷新（`AlwaysScrollableScrollPhysics`）。
+    ⑤ **只读拦截**：live 模式下打卡、撤销、记一笔、兑换、新增心愿、改名、回收站、
+    新建/编辑规则、恢复演示数据全部先提示只读，不修改本地状态。
+    ⑥ **一个真实坑**：首屏刷新不能写在 `didChangeDependencies` 的同步路径里 ——
+    `refreshFromServer()` 会同步 `notifyListeners()`，触发 `markNeedsBuild during build`；
+    改为 `addPostFrameCallback` ＋ `_loadStarted` 只触发一次。
+    ⑦ 真跑基线（2026-10-19）：`npm run ci` → **`CI_EXIT=0`（15 步）**；
+    `npm test` → **17 文件 / 302 条**；`flutter analyze` → **0 issue**；
+    `flutter test` → **50 条**（`test/read_api_test.dart` 9 条）。本阶段**没有新增迁移**。
+    ⑧ 仍不粉饰：写端点未建（live 只读）；小程序端尚未消费游标；`test:db` 本轮未复跑。
+    交接单：[`14-w4b-handoff.md`](./14-w4b-handoff.md)。
 
 
 ### 文档缺陷修正记录

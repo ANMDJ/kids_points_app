@@ -17,7 +17,11 @@ extension RecordCategoryLabel on RecordCategory {
 }
 
 /// 成员角色。对应后端 ChildMember.role（见 docs/design/02）。
-enum MemberRole { guardian, child }
+///
+/// `viewer` 是**只读访客**（后端矩阵里一律 DENY，但历史流水理论上可能由它产生）：
+/// 枚举里保留它，是为了线格式 `operatorRole: 'viewer'` 能被**如实**解析，
+/// 而不是在映射层崩掉或悄悄改成 child。业务写入仍只允许 guardian / child。
+enum MemberRole { guardian, child, viewer }
 
 /// 积分记录的**操作来源**。
 ///

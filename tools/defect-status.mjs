@@ -407,8 +407,11 @@ const DEFECTS = [
     A.has(T_STORE, /constructor\(\) \{\s*this\.resetToEmpty\(\)/, '构造函数未改为空态初始化'),
     A.lack(T_STORE, /constructor\(\)[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
     A.has(T_STORE, /resetToEmpty\(\): void \{[\s\S]{0,200}?this\.points = 0/, '空态初始化不完整'),
-    A.has(F_STORE, /AppStore\(\) \{\s*_resetToEmpty\(\);/, '构造函数未改为空态初始化'),
-    A.lack(F_STORE, /AppStore\(\)[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
+    // ★ W4-B：构造函数允许注入只读客户端（`AppStore({ReadApiClient? readApi})`），
+    //   因此这里匹配「任意参数列表」，而不是旧的空参 `AppStore()`；
+    //   要守的仍然是「构造即空态」这件事本身。
+    A.has(F_STORE, /AppStore\([^)]*\)[^}]*\{\s*_resetToEmpty\(\);/, '构造函数未改为空态初始化'),
+    A.lack(F_STORE, /AppStore\([^)]*\)[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
     A.has(F_STORE, /_resetToEmpty\(\) \{[\s\S]{0,200}?_points = 0;/, '空态初始化不完整'),
     A.has(T_STORE, /resetToSeed\(\): boolean \{[\s\S]{0,120}?this\.applySeed\(\)/, 'seed 不是唯一显式入口'),
     // ③ 回归用例：两套测试都必须有「能失败」的首启空态 / 生产不可达断言

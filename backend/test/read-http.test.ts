@@ -444,5 +444,59 @@ describe('组 D：GET /records —— 分类、limit、hasMore、拒绝非法入
     }
     assert.equal(port.recordCalls.length, 0, '入参没过却在查库 —— 形状校验没生效')
   })
+
+  it('hasMore=true ⇒ 下发 nextCursor；原样回传 ⇒ 端口收到 before（本页最后一行的键）', async () => {
+    const first = await get(url, '/records?limit=2', GUARDIAN)
+    assert.equal(first.status, 200)
+    assert.equal(first.body.hasMore, true)
+    assert.equal(typeof first.body.nextCursor, 'string', 'hasMore=true 却没有下一页游标')
+
+    port.recordCalls.length = 0
+    const second = await get(
+      url,
+      `/records?limit=2&cursor=${encodeURIComponent(first.body.nextCursor as string)}`,
+      GUARDIAN
+    )
+    assert.equal(second.status, 200, `实际 ${second.status}：${JSON.stringify(second.body)}`)
+    assert.deepEqual(port.recordCalls, [
+      {
+        childId: CHILD_ID,
+        category: undefined,
+        limit: 2,
+        before: {
+          // makePage 的最后一行是 rec-2（02:03:04）—— 游标必须钉在它上面
+          createdAt: new Date('2026-10-18T02:03:04.000Z'),
+          id: 'rec-2'
+        }
+      }
+    ])
+  })
+
+  it('非法 cursor ⇒ 400 INVALID_RECORD_CURSOR，且不查库（不静默退回第一页）', async () => {
+    const res = await get(url, '/records?cursor=not-a-cursor', GUARDIAN)
+    assert.equal(res.status, 400)
+    assert.equal(res.body.code, 'INVALID_RECORD_CURSOR')
+    assert.equal(port.recordCalls.length, 0, '游标没解析却在查库 —— 会把错误游标当成第一页')
+  })
+
+  it('hasMore=false ⇒ nextCursor=null（客户端据此停止“加载更多”）', async () => {
+    const done: ReadPort = {
+      async loadHome() {
+        return null
+      },
+      async listRecords() {
+        return { rows: [], hasMore: false }
+      }
+    }
+    const other = await startApp(done)
+    try {
+      const res = await get(other.url, '/records', GUARDIAN)
+      assert.equal(res.status, 200)
+      assert.equal(res.body.hasMore, false)
+      assert.equal(res.body.nextCursor, null)
+    } finally {
+      await other.app.close()
+    }
+  })
 })
 

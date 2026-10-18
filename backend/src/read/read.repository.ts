@@ -7,6 +7,8 @@ import type {
   WishCoverStyle
 } from '@prisma/client'
 
+import type { RecordCursor } from './read.cursor'
+
 /**
  * 只读查询的**持久化端口**（W4-A，2026-10-18）。
  *
@@ -114,6 +116,11 @@ export interface ListRecordsInput {
   category?: RecordCategory
   /** 1–200，由 DTO 校验；端口必须**如实**限制返回条数。 */
   limit: number
+  /**
+   * 键集游标：只返回**严格早于**这一行 `(createdAt, id)` 的记录。
+   * `undefined` = 第一页。由 service 解析 `nextCursor` 得到，端口不碰编码格式。
+   */
+  before?: RecordCursor
 }
 
 export interface RecordPageRow {
