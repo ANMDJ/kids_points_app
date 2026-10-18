@@ -48,8 +48,10 @@
  *    绝不在两处各写一份「谁能撤回」。
  * 用例：`test/approvals-http.test.ts`（含「改矩阵 ⇒ HTTP 行为必须跟着变」）、
  *       `test-db/approvals-execution-db.dbtest.ts`（真库同事务证据）。
- * ⚠️ 仍有限制：执行器只覆盖 `redeem`；`expired` 只有惰性判定、没有后台扫描任务。
- *    **别把「判定已上线」读成「审批全部动作已验收」。**
+ * ⚠️ W3-C（2026-10-18）已收尾：执行器覆盖 `redeem` / `request_redeem` /
+ *    `request_points_bonus` / `add_wish`；`autoReason` 五种均可复现；`expired` 有后台扫描；
+ *    `Idempotency-Key` 已接到 create / decide / withdraw。
+ *    **别把「审批动作已覆盖这四项」读成「所有业务动作都已实现」**（规则/邀请等模块仍待建）。
  */
 
 import { resolveVerdict, type ActionType, type Role } from './permission-matrix'

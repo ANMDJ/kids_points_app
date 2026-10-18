@@ -24,7 +24,7 @@
 | 首次引导流程、规则模板库、同意与合规 | [`design/04-onboarding-and-templates.md`](./design/04-onboarding-and-templates.md) |
 | 开发计划、压缩选项（已否决）、风险登记、阻塞项 L1–L6、决策 P1–P3 | [`design/05-dev-plan.md`](./design/05-dev-plan.md) |
 | W0 实施报告与真实命令/退出码 | [`design/06-w0-report.md`](./design/06-w0-report.md) |
-| 各阶段交接单（C3–C5、D-a、D-b） | [`design/07`](./design/07-c3-handoff.md) ～ [`design/11`](./design/11-d3b-handoff.md) |
+| 各阶段交接单（C3–C5、D-a、D-b、W3-C） | [`design/07`](./design/07-c3-handoff.md) ～ [`design/12`](./design/12-w3c-handoff.md) |
 
 > **诚实标注（本项目头号原则）**：本文所有"当前状态"均以**代码与可执行命令的实测结果**为依据；
 > 凡未落地或存在代价之处，一律**显式写明**，不做"看起来在做需求"的表述（见 §15）。
@@ -376,7 +376,7 @@ User（自然人）
 | **自批必须显式** | 两种形态：① 提交后**本人**二次确认；② 申请时勾选"自动审批"（`autoApprove: true`）。**未勾选 / 缺字段一律 `pending`** —— **不存在**"只有一位家长就自动批准"的特例 |
 | 参数与动作不匹配 | 没批准资格却传 `autoApprove`、或对不需要审批的动作传 → `400 SELF_APPROVAL_NOT_ALLOWED`（**不静默忽略**：静默忽略会让客户端以为已批） |
 | 自批留痕 | 由 `decidedByUserId == requesterUserId` 判定（**不新增字段**），审计动作名 `approval.self_approved` |
-| 幂等 | 双击"同意" → 第二次 `409`（乐观锁），账本**只扣一次** |
+| 幂等 | 双击"同意" → 第二次 `409`（乐观锁），账本**只扣一次**；带 `Idempotency-Key` 的网络重试 → 第二次返回**首次响应**（不再执行），同键不同请求 → `409 IDEMPOTENCY_KEY_REUSED`（W3-C） |
 | 重校验 | 批准执行前**重新校验全部前提**（防跨时间 `invalidated`，R2） |
 | 撤回同意 | `GuardianConsent` 撤回后**全链路写入停止**，导出仍可下载 |
 | 孩子限制 | 孩子不可扣分（`403 CHILD_CANNOT_DEDUCT`）；每日申请加分有配额；单次金额 ±50 上限 |
@@ -384,7 +384,7 @@ User（自然人）
 | 撤回 | 申请人本人可撤回 `pending`（`POST /approvals/:id/withdraw`）：`withdrawn`；**不写流水、不动余额**；另一位家长撤回 → `403 NOT_REQUESTER`；已终态 → `409`；跨孩子 → `404`（W3-B） |
 | 租户隔离 | 审批的读 / 批 / 撤回都以 `childId` 为查询键：另一家的审批 id 与「不存在」同样 `404`（W3-B） |
 
-**验收标准**：9.1–**9.33** 全部通过（含 9.9 Agent 伪造角色 → `401` 整份 plan 作废；
+**验收标准**：9.1–**9.40** 全部通过（含 9.9 Agent 伪造角色 → `401` 整份 plan 作废；
 9.22 成员级 `restrictions` 试图放宽 `DENY` 被忽略；**9.25–9.27 自批三条** —— 家长显式自批 → 直接 `approved`；
 孩子传 `autoApprove` → `400 SELF_APPROVAL_NOT_ALLOWED`；单家长家庭**不勾选** → `pending`（**不自动批准**）、
 本人二次确认 → `approved`；**9.31–9.33 撤回与跨孩子隔离**）。
@@ -738,22 +738,22 @@ User（自然人）
 | Taro 小程序端 UI | ✅ 5 页 + 6 个 sheet，与 Flutter 像素级对齐 | `npx tsc --noEmit` → `EXIT=0`；`node .tmp_test/run.js` → **27/27** |
 | 既有缺陷台账（19 条） | ✅ **19/19 已修**（A1/A2/A3/A4/A5、B6/B7/B8、C9/C10/C11、D9/D12/D13、E15/E16/E17/E18/E19） | `npm run defects:check` → `ALL PASS` |
 | 后端 schema | ✅ **18 表 / 14 枚举**，含 `PointRuleVersion` + 不可变账本 + 软删除 + `AuditLog`（**同批**） | `prisma validate` + `generate` 通过；迁移 `20261012022042_w0_init` 已应用 |
-| 后端骨架 | ✅ 13 个空模块签名 + Prisma 7 adapter | `tsc --noEmit` / `nest build` EXIT=0 |
+| 后端骨架 | ✅ 13 个模块（`approvals` / `device-session` / `membership` / `ledger` / `permissions` / `idempotency` 已有实体实现；其余仍为占位）＋ Prisma 7 adapter | `tsc --noEmit` / `nest build` EXIT=0 |
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
 | 跨语言契约 | ✅ `contracts/permission-matrix.json`（25 动作，由 TS 生成） | `contracts:emit` |
-| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径 + 真库执行**：`approval-policy.ts`（含 W3-B 的 `withdrawDenial()`）＋ 真 HTTP `test/approvals-http.test.ts` ＋ 真库同事务 `test-db/approvals-execution-db.dbtest.ts`；W3-A / W3-B 见 `design/README` | `npm test` → **14 个文件 / 254 条**；`npm run test:db` → **4 个文件 / 62 条**（均全绿） |
+| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径 + 真库执行**：`approval-policy.ts`（含 W3-B 的 `withdrawDenial()`）＋ 真 HTTP `test/approvals-http.test.ts` ＋ 真库同事务 `test-db/approvals-execution-db.dbtest.ts`；W3-A / W3-B / W3-C 见 `design/README` | `npm test` → **14 个文件 / 261 条**；`npm run test:db` → **5 个文件 / 75 条**（均全绿） |
 | 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
-| 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **14 步全绿，`CI_EXIT=0`** |
+| 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **15 步全绿，`CI_EXIT=0`** |
 | 首启空态 + 演示数据守卫 | ✅（E18 收口） | release/profile 构建入口被树摇 |
 
 ### 15.2 **尚未落地**（不粉饰）
 
 | 项 | 状态 | 影响 |
 |---|---|---|
-| **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），但**绝大多数端点尚不存在** | W1–W3、W6 的主体工作量 |
+| **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），但**绝大多数端点尚不存在** | W4–W6 的主体工作量（规则 / 习惯 / 心愿 / 邀请等） |
 | **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但~~**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）~~ → **W2-D（2026-10-16）已结清：有库真查库、无库才是 501**、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | 三个端口的 Prisma 实现**均已交付**（`Membership` / `DeviceSession` = W2-D；`Approvals` = **W3-A**）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
-| **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。⚠️ 仍有限制：执行器只覆盖 `redeem`；`expired` 无后台扫描；`idempotencyKey` 未接到 HTTP | W3 剩余：其它动作的执行器、TTL 扫描任务、幂等键接线 |
+| **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` / `request_points_bonus` / `add_wish`；`autoReason` **五种全部可复现**；`expired` 有后台扫描（`ApprovalsExpiryService`）；`Idempotency-Key` 已接到 create / decide / withdraw（无库 501）。真库证据：`test-db/approvals-closing-db.dbtest.ts`（5 文件 / 75 条） | 审批状态机本身已收尾；W4 起是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点） |
 | **双端接 API** | ❌ 未开始；`AppStore` 仍为**内存态**（重启回到空态） | W4 |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
 | **通知 / 推送** | ❌ 无依赖、无凭据（L3） | W6 |
@@ -764,16 +764,16 @@ User（自然人）
 ### 15.3 计划的下一步
 
 按 §11 顺序推进：**W1（身份 ＋ 三道屏障）／ W2（账本内核 ＋ 三个端口真库实现）／
-W3-A / W3-B（审批执行路径 ＋ 撤回 ＋ 租户隔离）均已落地**（见 `design/README` 的 W2-D / W3-A / W3-B 段）。
+W3-A / W3-B / W3-C（审批执行路径 ＋ 撤回 ＋ 租户隔离 ＋ 执行器/扫描/幂等键）均已落地**
+（见 `design/README` 的 W2-D / W3-A / W3-B / W3-C 段）。
 
-**下一步（W3 收尾 → W4）**：
-1. **W3 剩余**：`request_points_bonus` 等其它动作的执行器（目前只有 `redeem`；
-   未支持的动作在建请求时即 400，不落永远批不动的 `pending`）、`expired` 的后台扫描任务、
-   `idempotencyKey` 的重放保护接到 HTTP。
-2. **W4 双端接 API**：`AppStore` 目前仍是内存态；W4 exit = 双端同一用例结论一致，
+**下一步（W4）**：
+1. **W4 双端接 API**：`AppStore` 目前仍是内存态；W4 exit = 双端同一用例结论一致，
    断网 / 超时 / 401 / 403 / 202 都有可读 UI。
-3. **并行启动 L2 / L4**（微信 AppID / 域名备案）；W5 引导与模板需 L5 法务文本；
+2. **并行启动 L2 / L4**（微信 AppID / 域名备案）；W5 引导与模板需 L5 法务文本；
    L3 推送凭据须在 W4 前到位。
+3. 后端其它业务模块（规则 / 习惯 / 心愿 / 邀请）按需在 W4–W6 补齐 —— 它们的端点
+   **不在 W3 的验收范围**，不要因为审批已收尾就以为它们已经能用。
 
 审批的任何新写入路径**必须继续消费** `backend/src/contracts/approval-policy.ts`（P4 ＋ W3-B 的
 `withdrawDenial()`），不得在 controller / service 里另写一份「谁可以批准 / 谁能撤回」。
@@ -813,7 +813,7 @@ W3-A / W3-B（审批执行路径 ＋ 撤回 ＋ 租户隔离）均已落地**（
 - 引导与模板库 → [`design/04-onboarding-and-templates.md`](./design/04-onboarding-and-templates.md)
 - 开发计划、风险、阻塞项、决策 → [`design/05-dev-plan.md`](./design/05-dev-plan.md)
 - W0 实施报告（真实命令与退出码）→ [`design/06-w0-report.md`](./design/06-w0-report.md)
-- 各阶段交接单 → [`design/07`](./design/07-c3-handoff.md) · [`08`](./design/08-c4-handoff.md) · [`09`](./design/09-c5-handoff.md) · [`10`](./design/10-d1b-handoff.md) · [`11`](./design/11-d3b-handoff.md)
+- 各阶段交接单 → [`design/07`](./design/07-c3-handoff.md) · [`08`](./design/08-c4-handoff.md) · [`09`](./design/09-c5-handoff.md) · [`10`](./design/10-d1b-handoff.md) · [`11`](./design/11-d3b-handoff.md) · [`12`](./design/12-w3c-handoff.md)
 - 设计文档索引 → [`design/README.md`](./design/README.md)
 - 工程入门（运行/测试/目录）→ [`../README.md`](../README.md)
 

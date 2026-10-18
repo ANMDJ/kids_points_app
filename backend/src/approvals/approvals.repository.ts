@@ -66,6 +66,27 @@ export interface CreateApprovalInput {
   targetId?: string
   requesterUserId: string
   requesterRole: Role | 'viewer'
+
+  /* ── 动作参数（W3-C）────────────────────────────────────────────────
+   * 这些字段是「**建请求时**」的输入，端口负责在**同一事务**里把它们快照进
+   * `ApprovalRequest.payload`。哪些字段对哪个动作有效，由 `snapshotPayload()` 判定
+   * （多余字段 ⇒ 400 `APPROVAL_PARAM_NOT_APPLICABLE`，不静默忽略）。
+   */
+
+  /** `request_points_bonus`：申请加分的金额（恒为正，单笔 ≤ 50）。 */
+  amount?: number
+  /** `request_points_bonus`：加分事由。 */
+  reason?: string
+  /** `request_points_bonus`：依据的规则（可选；批准时复查）。 */
+  ruleId?: string
+  /** `request_points_bonus`：依据的习惯（可选；批准时复查）。 */
+  habitId?: string
+  /** `add_wish`：心愿标题。 */
+  title?: string
+  /** `add_wish`：兑换成本。 */
+  cost?: number
+  /** `add_wish`：表情。 */
+  emoji?: string
 }
 
 export interface DecideApprovalInput {
@@ -122,6 +143,15 @@ export interface ApprovalsPort {
    * 只有申请人本人可撤回；已终态 ⇒ 409；TTL 已过 ⇒ 先惰性置 `expired` 再 409。
    */
   withdraw(input: WithdrawApprovalInput): Promise<ApprovalRow>
+
+  /**
+   * TTL 扫描（`02` §4.3）：把 `pending` 且 `expiresAt <= now` 的行批量置为 `expired`。
+   *
+   * ★ 返回「本次真正改了几行」，供后台任务日志与用例断言。
+   *   实现必须用**单条条件 UPDATE**（或 `FOR UPDATE SKIP LOCKED`）抢过期权，
+   *   并发扫描/惰性过期只有一个赢家，审计不会重复。
+   */
+  expireDue(now: Date, limit?: number): Promise<number>
 }
 
 /**
@@ -167,5 +197,11 @@ export class NotImplementedApprovalsRepository implements ApprovalsPort {
   withdraw(input: WithdrawApprovalInput): Promise<ApprovalRow> {
     void input
     return Promise.resolve(this.fail('withdraw'))
+  }
+
+  expireDue(now: Date, limit?: number): Promise<number> {
+    void now
+    void limit
+    return Promise.resolve(this.fail('expireDue'))
   }
 }

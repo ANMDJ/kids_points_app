@@ -429,7 +429,7 @@ describe('组 E：审批落库 —— 建 pending / 拒绝 / 无效 / 过期', (
 
   it('没有执行器的动作 ⇒ 400 `APPROVAL_ACTION_NOT_EXECUTABLE`（不落一条永远批不动的 pending）', async () => {
     const before = await prisma.approvalRequest.count({ where: { childId: ID.childP } })
-    const r = await send('/approvals', { body: { action: 'request_points_bonus' }, headers: H.dad })
+    const r = await send('/approvals', { body: { action: 'add_rule' }, headers: H.dad })
     assert.equal(r.status, 400)
     assert.equal(r.body.code, 'APPROVAL_ACTION_NOT_EXECUTABLE')
     assert.equal(
@@ -561,7 +561,7 @@ describe('组 E：审批落库 —— 建 pending / 拒绝 / 无效 / 过期', (
 
   it('★ body 带多余键 ⇒ 400（**不是业务 code**）—— 管道先于端口', async () => {
     const r = await send('/approvals', {
-      body: { action: 'redeem', targetId: ID.wishMain, amount: 5 },
+      body: { action: 'redeem', targetId: ID.wishMain, foo: 5 },
       headers: H.dad
     })
     assert.equal(

@@ -6,6 +6,7 @@ import 'dotenv/config'
 
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
+import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
 import { applyGlobalPipes, logBootstrap } from './app.setup'
 
 /**
@@ -31,6 +32,10 @@ async function bootstrap(): Promise<void> {
   const port = Number(process.env.PORT ?? 3000)
   await app.listen(port)
   logBootstrap(`http://localhost:${port}`)
+
+  // ★ W3-C：审批 TTL 后台扫描（02 §4.3）。计时器在无库装配下自动 no-op；
+  //   `enableShutdownHooks()` 已在上方注册，进程退出时 `onApplicationShutdown` 清理计时器。
+  app.get(ApprovalsExpiryService).start()
 }
 
 void bootstrap()

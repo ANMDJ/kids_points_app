@@ -2,11 +2,13 @@ import { DynamicModule, Module, type Type } from '@nestjs/common'
 
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
+import { IdempotencyModule } from '../idempotency/idempotency.module'
 import { MembershipModule } from '../membership/membership.module'
 import { PermissionsModule } from '../permissions/permissions.module'
 import { hasDatabaseUrl } from '../prisma/database-enabled'
 import { PrismaModule } from '../prisma/prisma.module'
 import { ApprovalsController } from './approvals.controller'
+import { ApprovalsExpiryService } from './approvals-expiry.service'
 import { PrismaApprovalsRepository } from './approvals.prisma.repository'
 import {
   APPROVALS_REPOSITORY,
@@ -57,7 +59,11 @@ export function resolveApprovalsRepositoryClass(hasDatabase: boolean): Type<Appr
  *     批准 / 自批在**同一事务**里写 `ApprovalRequest` 终态 ＋ `PointRecord` 流水 ＋
  *     `Child.pointsBalance` ＋ `AuditLog`；无库 ⇒ 仍显式 501（不假装写入成功）。
  *     即：**有库时\"批准\"真的会扣分**，且双击只扣一次（乐观锁 + 幂等键）。
- *     ⚠️ 执行器目前只覆盖 `redeem`（兑换心愿）；其余动作建请求时 400，不做\"永远批不动的 pending\"。
+ *   · **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` /
+ *     `request_points_bonus` / `add_wish`；`autoReason` 五种全部可复现
+ *     （`WISH_DELETED` / `RULE_DELETED` / `HABIT_GONE` / `INSUFFICIENT_POINTS` / `MEMBER_REMOVED`）；
+ *     `expireDue()` 由 `ApprovalsExpiryService` 在 `main.ts` 里按周期扫描；
+ *     `Idempotency-Key` 已在 create / decide / withdraw 三个写端点接线（无库 ⇒ 501）。
  *   · **W3-B（2026-10-18）**：① `decide` / `withdraw` / `findById` 全部按 `childId` 收口，
  *     跨孩子的审批 id 与「不存在」一样返回 **404**（此前只验请求头里的孩子是不是自己的，
  *     拿到别家 id 就能批别家的账）；② 新增 `POST /approvals/:id/withdraw` —— 第 5 个终态
@@ -122,11 +128,17 @@ export class ApprovalsModule {
         // ★ 同一个 `hasDatabase` 往下传（W2-D）：两个子模块的装配分叉由此**只有一个来源**。
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
-        PermissionsModule
+        PermissionsModule,
+        // ★ W3-C：`Idempotency-Key` 的持久化端口也必须按同一个世界选实现
+        //   （无库 ⇒ 501，带 key 的请求不会假装重放保护已生效）。
+        IdempotencyModule.register({ hasDatabase })
       ],
       controllers: [ApprovalsController],
       providers: [
         ApprovalsService,
+        // ★ W3-C：TTL 后台扫描的**执行体**。计时器只由 `main.ts` 调 `start()` 启动
+        //   （测试里不会留下 setInterval，见该文件头）。
+        ApprovalsExpiryService,
         // ★ 控制器上的 Guard 在**本模块**的注入器里实例化 —— 它的依赖（端口令牌）
         //   由上面三个模块的 `exports` 提供。漏 export 就崩在启动：
         //   `Nest can't resolve dependencies of the DeviceSessionGuard (?)`

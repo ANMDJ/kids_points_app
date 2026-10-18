@@ -3,7 +3,7 @@
 > 本目录是**可评审的设计事实源**，所有条目均以现有代码中的真实方法/调用点为依据，非推测。
 
 > **需求侧文档**（面向「做什么、为什么做、做到什么程度算完成」）见 [`../PRD.md`](../PRD.md) ——
-> 它整合本目录 `01`–`11` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
+> 它整合本目录 `01`–`12` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
@@ -18,6 +18,7 @@
 | [`09-c5-handoff.md`](./09-c5-handoff.md) | **阶段 C5 交接单**（`D9` 图标名 ↔ `IconData`）：**三端类型表与「为什么光有映射表不够」**、落地清单（文件级）、**新增闸门 `icons:check` 的 7 项检查**、**闸门 12/12 ＋ 用例 3/3 ＋ 3/3 证伪**、**两次「反例假绿」的自我纠正**、遗留（编辑不可改图标 / 名单仍手抄） | ✅ C5 已收口 |
 | [`10-d1b-handoff.md`](./10-d1b-handoff.md) | **阶段 D-a 交接单**（`D1b` `relation` 升枚举 `RelationKind`）：**三处手抄契约 ＋ Prisma 默认 `DROP+ADD` 会静默清列这个坑**、落地清单、**新增闸门 `relation:check` 的 5 项检查**、**证伪 15 例（含 3 控制例）**、**三条自我纠正**、遗留（`D3b` / 首启引导 / 闸门 ④ 目前"无字面量可查"） | ✅ D-a 已收口 |
 | [`11-d3b-handoff.md`](./11-d3b-handoff.md) | **阶段 D-b 交接单**（`D3b` `ChildMember.restrictions` 裸 `Json` 定形）：**为什么定形只能落在应用层（Prisma 表达不了 `Json` 内部形状）**、权威源 ↔ 两处手抄的三处对账、落地清单、**新增闸门 `restrictions:check` 的 6 项检查**、**证伪 17 例（14 反例：每例"红且只点名自己" ＋ 3 控制例）**、**`02` §3 去掉开放标记 `...` 的口径修正**、遗留（写入路径未开工 / 闸门此刻"无字面量可查"） | ✅ D-b 已收口 |
+| [`12-w3c-handoff.md`](./12-w3c-handoff.md) | **阶段 W3-C 交接单**（审批链路收尾）：**4 执行器 / 5 种 `autoReason` / `expireDue()` 后台扫描 / `Idempotency-Key`**、真库证据与可复跑基线、**`add_wish` 无流水 / 加分流水不带 `ruleId` / 幂等响应缓存不在业务事务**等 8 条防复发坑、W4 接手顺序与仍未落地边界 | ✅ W3-C 已收口 |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
@@ -25,8 +26,9 @@
 
 > ⚠️ **读法**：以下按阶段留档，**后面的阶段会推翻前面的结论**。当前（2026-10-18）最关键的一条：
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
-> **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口。前文所有「审批有库也是 501」都是
-> **W2-D 当时**的事实；以本目录最后两段（W3-A / W3-B）为准。
+> **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
+> 前文所有「审批有库也是 501」都是
+> **W2-D 当时**的事实；以本目录最后三段（W3-A / W3-B / W3-C）为准。
 
 ### ✅ 已完成并验证
 
@@ -749,10 +751,38 @@
     真库 `approvals-execution-db` 组 D（撤回零账本 ＋ 审计；重复撤回审计仍 1 条；
     TTL 过期留历史；**第二家的 guardian 拿 child1 的 id 去 decide / withdraw ⇒ 404，
     child1 的行与账、child2 的账都不变**；本家 guardian 仍能处理作对照）。
-    ④ 仍未落地（不粉饰）：执行器只覆盖 `redeem`；`expired` 只有惰性判定、**没有后台扫描任务**；
-    `idempotencyKey` 的重放保护仍**未接线**到 HTTP；设备凭据仍不可验证（生产 503）；
-    会话刷新 / PIN 切换 / 锁 15 分钟未做。
+    ④ 仍未落地（**已被紧下面的 W3-C 结清，留档**）：执行器只覆盖 `redeem`；
+    `expired` 只有惰性判定、没有后台扫描任务；`idempotencyKey` 的重放保护未接线到 HTTP；
+    设备凭据仍不可验证（生产 503）；会话刷新 / PIN 切换 / 锁 15 分钟未做。
     ⑤ 基线同 W3-A 的 ⑦（本轮真跑）：**254 / 62 / `CI_EXIT=0`**。
+
+
+**W3-C 进展（2026-10-18）：W3 收尾 —— 执行器 / autoReason / 后台过期 / 幂等键**
+
+    ① **执行器从 1 个扩到 4 个**：`redeem` / `request_redeem`（同一执行路径）/
+    `request_points_bonus`（`+amount`，`adjust/approval` 流水）/ `add_wish`（创建 Wish，
+    不产生流水，`executedRecordId=null`）。未支持动作仍在**建请求时** 400
+    `APPROVAL_ACTION_NOT_EXECUTABLE`，不落永远批不动的 pending。
+    ② **`autoReason` 五种全部可复现**：`WISH_DELETED` / `INSUFFICIENT_POINTS`（兑换）；
+    `RULE_DELETED` / `HABIT_GONE`（加分申请的 ruleId/habitId 在批准前被软删）；
+    `MEMBER_REMOVED`（执行前查申请人 `ChildMember.status`，非 active ⇒ invalidated）。
+    ③ **`expired` 后台扫描**：`ApprovalsExpiryService` 在 `main.ts` 启动，
+    `ApprovalsPort.expireDue()` 用 `FOR UPDATE SKIP LOCKED` ＋ 条件 UPDATE 批量置过期；
+    审计与状态同一事务，重复扫描不重复计数。惰性过期保留为兜底。
+    ④ **`Idempotency-Key` 接 HTTP**：create / decide / withdraw 三个写端点。
+    同键同请求 → 返回首次响应、业务只执行一次；同键不同请求 → `409 IDEMPOTENCY_KEY_REUSED`；
+    上次未写完 → `409 IDEMPOTENCY_IN_PROGRESS`；无库带 key → `501 IDEMPOTENCY_NOT_IMPLEMENTED`。
+    ★ 响应缓存不在业务事务内；业务本身已由 `PointRecord.idempotencyKey=approval:<id>`
+    ＋ 行锁 ＋ 条件 UPDATE 保证只执行一次。
+    ⑤ 用例：离线 `approvals-http` 组 H（create/decide 重放、同键不同请求、非法 key）；
+    真库新增 `approvals-closing-db.dbtest.ts`（6 组：加分执行 / 三种 autoReason /
+    add_wish / request_redeem / expireDue / 幂等键 / I2）。
+    ⑥ 真跑基线（2026-10-18）：`npm test` → **14 文件 / 261 条**；
+    `npm run test:db` → **5 文件 / 75 条**；`npm run ci` → **`CI_EXIT=0`（15 步）**。
+    ⑦ 仍不粉饰：设备凭据仍不可验证（生产 503）；会话刷新 / PIN 切换未做；
+    规则 / 习惯 / 心愿 / 邀请等**其它业务模块端点**仍未建（不在 W3 范围）；
+    加分的「每天 3 条 / 同因去重」仍属 §6 dispatcher（单笔 ≤50 已落实）。
+    交接单：[`12-w3c-handoff.md`](./12-w3c-handoff.md)。
 
 
 ### 文档缺陷修正记录

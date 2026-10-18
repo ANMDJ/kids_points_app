@@ -18,7 +18,8 @@ import {
   buildRecordDraft,
   LedgerDeniedError,
   LedgerShapeError,
-  resolveAppendCreatedAt
+  resolveAppendCreatedAt,
+  type PointRecordDraft
 } from '../ledger/ledger.gate'
 import { PrismaService } from '../prisma/prisma.service'
 import type {
@@ -54,15 +55,17 @@ import type {
  *     在事务里抛 409 会把刚写下的 `invalidated` 一起回滚 ⇒ 客户端重试永远看到
  *     `pending`（死循环）—— 这是本文件最容易写错的一处。
  *
- * ── 范围（诚实标注，别把 W3-A 读成\"审批全落地\"）────────────────────────────
- *   · 已落地：`redeem`（兑换心愿）—— `FR-08` / `02` §9.25–§9.27 的主路径。
- *     payload 快照 = `{ wishId, titleSnapshot, costSnapshot }`（`02` §4.3：
- *     家长 3 小时后同意时，扣分必须等于**孩子申请时看到的**价格，不是现价）。
- *   · `request_points_bonus` / `add_rule` / `add_habit` / `redeem_wish` 等
- *     **没有执行器**：建请求时即 400 `APPROVAL_ACTION_NOT_EXECUTABLE`，
+ * ── 范围（W3-C 收尾后的真实状态）──────────────────────────────────────────
+ *   · 执行器四项：`redeem` / `request_redeem` / `request_points_bonus` / `add_wish`。
+ *     `redeem` 的 payload 快照 = `{ wishId, titleSnapshot, costSnapshot }`（`02` §4.3：
+ *     家长 3 小时后同意时，扣分必须等于**孩子申请时看到的**价格，不是现价）；
+ *     加分快照金额/事由/可选规则或习惯；`add_wish` 快照标题/成本/表情。
+ *   · 其余动作**没有执行器**：建请求时即 400 `APPROVAL_ACTION_NOT_EXECUTABLE`，
  *     而不是先落一条永远批不动的 `pending`（那是死胡同）。
- *   · `expired` 的**扫描任务**尚未落地（`02` §4.3 的 72h TTL）：本文件按需惰性过期
- *     （读/决/撤回时判定），不假装有后台 job。
+ *   · `autoReason` 五种全部可复现：`WISH_DELETED` / `INSUFFICIENT_POINTS`（兑换）、
+ *     `RULE_DELETED` / `HABIT_GONE`（加分依据消失）、`MEMBER_REMOVED`（申请人被移出）。
+ *   · `expireDue()` 是后台扫描的入口；`expireIfDue()` 仍保留为读/决时的惰性兜底
+ *     （扫描没跑到时也不会让过期审批被批准）。
  *
  * ── W3-B（2026-10-18）：两个改动都在\"别让一家碰另一家\"上 ─────────────────────
  *   ① **租户隔离**：`findById` / `decide` / `withdraw` 的 `childId` 是**查询条件**
@@ -91,7 +94,7 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
     assertExecutable(input.action)
 
     return this.prisma.$transaction(async (tx) => {
-      const payload = await this.snapshotRedeemPayload(tx, input)
+      const payload = await this.snapshotPayload(tx, input)
       const now = new Date()
       const row = await tx.approvalRequest.create({
         data: {
@@ -130,7 +133,7 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
     assertExecutable(input.action)
 
     return this.prisma.$transaction(async (tx) => {
-      const payload = await this.snapshotRedeemPayload(tx, input)
+      const payload = await this.snapshotPayload(tx, input)
       const now = new Date()
       const row = await tx.approvalRequest.create({
         data: {
@@ -144,10 +147,12 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
         }
       })
 
-      const outcome = await this.executeRedeem(tx, {
+      const outcome = await this.executeAction(tx, {
         approvalId: row.id,
+        action: input.action,
         childId: input.childId,
         payload,
+        requesterUserId: input.requesterUserId,
         operatorUserId: input.requesterUserId,
         operatorRole: role,
         now
@@ -284,13 +289,15 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
       }
 
       // ── 批准：先执行，再落终态（顺序反了会留下\"批了却没扣分\"的假账）──────────
-      const payload = parseRedeemPayload(row.payload)
       assertExecutable(row.actionType as ActionType)
+      const payload = parseApprovalPayload(row.actionType as ActionType, row.payload)
       const deciderRole = toMemberRole(input.decidedByRole)
-      const outcome = await this.executeRedeem(tx, {
+      const outcome = await this.executeAction(tx, {
         approvalId: row.id,
+        action: row.actionType as ActionType,
         childId: row.childId,
         payload,
+        requesterUserId: row.requesterUserId,
         operatorUserId: input.decidedByUserId,
         operatorRole: deciderRole,
         now
@@ -456,11 +463,43 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
 
 
   /**
-   * 建请求时的 payload 快照（`02` §4.3）：**只读心愿、不读余额**。
+   * 建请求时的 payload 快照（`02` §4.3）：**只读目标对象，不读余额**。
    *
    * ★ 余额不在申请时冻结：孩子申请时够分、家长 3 小时后同意时可能已花掉 ——
    *   那正是 `invalidated: INSUFFICIENT_POINTS` 要表达的事（比\"偷偷扣成负数\"诚实）。
+   *
+   * ★ 每个动作只接受自己的参数（`rejectParams`）：多余字段 → 400，而不是静默忽略。
+   *   静默忽略会让客户端以为\"我传的金额生效了\"，而审批里存的是另一个数。
    */
+  private async snapshotPayload(
+    tx: Prisma.TransactionClient,
+    input: CreateApprovalInput
+  ): Promise<ApprovalPayload> {
+    switch (input.action) {
+      case 'redeem':
+      case 'request_redeem':
+        rejectParams(input, ['targetId'])
+        return this.snapshotRedeemPayload(tx, input)
+
+      case 'request_points_bonus':
+        rejectParams(input, ['amount', 'reason', 'ruleId', 'habitId'])
+        return this.snapshotBonusPayload(tx, input)
+
+      case 'add_wish':
+        rejectParams(input, ['title', 'cost', 'emoji'])
+        return snapshotAddWishPayload(input)
+
+      default:
+        // `createPending` / `createSelfApproved` 已先 `assertExecutable`；走到这里说明
+        // 「可执行名单」与 `snapshotPayload` 的分支漂了 —— 响亮失败，不落半条快照。
+        throw new InternalServerErrorException({
+          code: 'UNSUPPORTED_APPROVAL_ACTION',
+          message: `动作 ${input.action} 没有 payload 快照分支 —— 可执行名单与快照实现已经漂移。`
+        })
+    }
+  }
+
+  /** 兑换 / 申请兑换：只读心愿、不读余额；别人的心愿一律回答\"不存在\"。 */
   private async snapshotRedeemPayload(
     tx: Prisma.TransactionClient,
     input: CreateApprovalInput
@@ -499,6 +538,158 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
     return { wishId: wish.id, titleSnapshot: wish.title, costSnapshot: wish.cost }
   }
 
+  /**
+   * `request_points_bonus` 的快照：金额 + 事由 + 可选依据（规则 / 习惯）。
+   *
+   * ★ `ruleId` / `habitId` 在这里就查一次（属于这个孩子、仍 `active`），
+   *   但**批准那一刻还要再查**：跨时间前提可能已经消失 →
+   *   `invalidated: RULE_DELETED` / `HABIT_GONE`（`02` §4.2）。
+   */
+  private async snapshotBonusPayload(
+    tx: Prisma.TransactionClient,
+    input: CreateApprovalInput
+  ): Promise<BonusPayload> {
+    const amount = input.amount
+    if (amount === undefined) {
+      throw new BadRequestException({
+        code: 'APPROVAL_AMOUNT_REQUIRED',
+        message: '加分申请必须带 amount（正整数，单笔 ≤ 50）—— 没有金额就无法生成可对账的流水。'
+      })
+    }
+    if (!Number.isInteger(amount) || amount <= 0 || amount > 50) {
+      throw new BadRequestException({
+        code: 'INVALID_APPROVAL_AMOUNT',
+        message: `加分金额必须是 1..50 的整数（收到 ${JSON.stringify(amount)}）—— 02 §6 / Q15。`
+      })
+    }
+
+    if (input.ruleId !== undefined && input.habitId !== undefined) {
+      throw new BadRequestException({
+        code: 'AMBIGUOUS_BONUS_SOURCE',
+        message:
+          '加分申请不能同时引用规则和习惯 —— 依据必须唯一，否则批准时无法判断该复查哪一个。'
+      })
+    }
+
+    const reason = (input.reason ?? '').trim()
+    if (reason.length > 200) {
+      throw new BadRequestException({
+        code: 'APPROVAL_REASON_TOO_LONG',
+        message: `加分事由最多 200 字（收到 ${reason.length} 字）。`
+      })
+    }
+
+    let ruleTitleSnapshot: string | null = null
+    if (input.ruleId !== undefined) {
+      const ruleId = requireRefId(input.ruleId, 'RULE_ID_REQUIRED')
+      const rule = await tx.pointRule.findFirst({
+        where: { id: ruleId, childId: input.childId, status: 'active' },
+        select: { title: true }
+      })
+      if (rule === null) {
+        throw new NotFoundException({
+          code: 'RULE_NOT_FOUND',
+          message: `规则 ${ruleId} 不存在或已删除（也可能不属于这个孩子 —— 一律按不存在回答）。`
+        })
+      }
+      ruleTitleSnapshot = rule.title
+    }
+
+    let habitTitleSnapshot: string | null = null
+    if (input.habitId !== undefined) {
+      const habitId = requireRefId(input.habitId, 'HABIT_ID_REQUIRED')
+      const habit = await tx.habit.findFirst({
+        where: { id: habitId, childId: input.childId, status: 'active' },
+        select: { title: true }
+      })
+      if (habit === null) {
+        throw new NotFoundException({
+          code: 'HABIT_NOT_FOUND',
+          message: `习惯 ${habitId} 不存在或已删除（也可能不属于这个孩子 —— 一律按不存在回答）。`
+        })
+      }
+      habitTitleSnapshot = habit.title
+    }
+
+    return {
+      amount,
+      reason,
+      ruleId: input.ruleId?.trim() ?? null,
+      ruleTitleSnapshot,
+      habitId: input.habitId?.trim() ?? null,
+      habitTitleSnapshot
+    }
+  }
+
+
+  /**
+   * 执行一条**已判定该批**的审批（`02` §4.3 / §4.5）。
+   *
+   * 三件事按顺序做，顺序是语义的一部分：
+   *   ① **申请人还在这个家里吗** —— 成员位被移出 ⇒ `invalidated: MEMBER_REMOVED`
+   *      （不该再给已离开的成员发分 / 落心愿）；
+   *   ② 动作自己的前提复查（心愿 / 规则 / 习惯）—— 消失 ⇒ 对应 `autoReason`；
+   *   ③ 执行（写账本或创建心愿）。
+   *
+   * ★ 返回判别式联合而不是抛异常：`invalidated` 是**要提交的历史**，
+   *   在事务里抛 409 会把它回滚掉（见文件头第 ★ 段）。
+   */
+  private async executeAction(
+    tx: Prisma.TransactionClient,
+    args: {
+      approvalId: string
+      action: ActionType
+      childId: string
+      payload: ApprovalPayload
+      requesterUserId: string
+      operatorUserId: string
+      operatorRole: MemberRole
+      now: Date
+    }
+  ): Promise<ExecutionOutcome> {
+    const member = await tx.childMember.findUnique({
+      where: { childId_userId: { childId: args.childId, userId: args.requesterUserId } },
+      select: { status: true }
+    })
+    if (member === null || member.status !== 'active') {
+      return { kind: 'invalidated', reason: 'MEMBER_REMOVED' }
+    }
+
+    switch (args.action) {
+      case 'redeem':
+      case 'request_redeem':
+        return this.executeRedeem(tx, {
+          approvalId: args.approvalId,
+          childId: args.childId,
+          payload: args.payload as RedeemPayload,
+          operatorUserId: args.operatorUserId,
+          operatorRole: args.operatorRole,
+          now: args.now
+        })
+
+      case 'request_points_bonus':
+        return this.executeBonus(tx, {
+          approvalId: args.approvalId,
+          childId: args.childId,
+          payload: args.payload as BonusPayload,
+          operatorUserId: args.operatorUserId,
+          operatorRole: args.operatorRole,
+          now: args.now
+        })
+
+      case 'add_wish':
+        return this.executeAddWish(tx, {
+          childId: args.childId,
+          payload: args.payload as AddWishPayload
+        })
+
+      default:
+        throw new InternalServerErrorException({
+          code: 'UNSUPPORTED_APPROVAL_ACTION',
+          message: `动作 ${args.action} 没有执行器 —— 可执行名单与执行实现已经漂移。`
+        })
+    }
+  }
 
   /**
    * 执行兑换：**写流水 ＋ 扣余额 ＋ 标记心愿已兑换**（调用方已在事务里）。
@@ -521,15 +712,7 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
       now: Date
     }
   ): Promise<ExecutionOutcome> {
-    const locked = await tx.$queryRaw<{ pointsBalance: number }[]>`
-      SELECT "pointsBalance" FROM "Child" WHERE "id" = ${args.childId} FOR UPDATE`
-    if (locked.length === 0) {
-      throw new NotFoundException({
-        code: 'APPROVAL_CHILD_NOT_FOUND',
-        message: `孩子 ${args.childId} 不存在 —— 这条审批无处执行（拒绝，而不是造一条无主流水）。`
-      })
-    }
-    const currentBalance = locked[0].pointsBalance
+    const currentBalance = await this.lockBalance(tx, args.childId)
 
     // 前提复查（批准那一刻，而不是申请那一刻）：软删 / 已兑换 ⇒ invalidated。
     const wish = await tx.wish.findUnique({
@@ -578,34 +761,7 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
     }
 
 
-    // 与 `ledger.prisma.repository.ts` 完全同一套定序手法（两处必须一致，否则 I2 会裂）。
-    const [clock] = await tx.$queryRaw<{ ts: Date }[]>`
-      SELECT (clock_timestamp() AT TIME ZONE 'UTC') AS ts`
-    const [latest] = await tx.$queryRaw<{ latest: Date | null }[]>`
-      SELECT MAX("createdAt") AS latest FROM "PointRecord" WHERE "childId" = ${args.childId}`
-    const createdAt = resolveAppendCreatedAt({
-      dbNow: clock.ts,
-      latestCreatedAt: latest.latest
-    })
-
-    const record = await tx.pointRecord.create({
-      data: { ...draft, createdAt },
-      select: { id: true }
-    })
-
-    const expectedBefore = draft.balanceAfter - draft.pointsDelta
-    const updated = await tx.child.updateMany({
-      where: { id: args.childId, pointsBalance: expectedBefore },
-      data: { pointsBalance: draft.balanceAfter }
-    })
-    if (updated.count !== 1) {
-      throw new ConflictException({
-        code: 'APPROVAL_BALANCE_CHANGED',
-        message:
-          `余额已被别的写入改过：按 ${expectedBefore} 分算，库里现在是 ${currentBalance} 分 ⇒ ` +
-          '拒绝落库（这笔的 balanceAfter 已经不成立了）。重试请重新读余额。'
-      })
-    }
+    const recordId = await this.appendDraft(tx, args.childId, draft)
 
     // 心愿\"已兑换\"与流水必须同一事务：否则会出现\"扣了分但心愿还能再兑换\"。
     const wishUpdated = await tx.wish.updateMany({
@@ -619,11 +775,160 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
       })
     }
 
-    return { kind: 'executed', recordId: record.id }
+    return { kind: 'executed', recordId }
   }
 
   /**
-   * TTL 惰性过期（`02` §4.3）—— 扫描任务落地前，**读/决的时候顺手判**。
+   * 执行加分申请：先复查依据，再写一条 `+amount` 的 `adjust/approval` 流水。
+   *
+   * ★ 流水不带 `ruleId`：本内核的 I3/I4 要求 `(ruleId, ruleVersion)` **成对**且命中版本行，
+   *   而加分申请是「人对一笔金额的批准」，不是规则版本执行。依据只快照在
+   *   `ApprovalRequest.payload` 与标题里，足以解释这笔分从何而来。
+   */
+  private async executeBonus(
+    tx: Prisma.TransactionClient,
+    args: {
+      approvalId: string
+      childId: string
+      payload: BonusPayload
+      operatorUserId: string
+      operatorRole: MemberRole
+      now: Date
+    }
+  ): Promise<ExecutionOutcome> {
+    const payload = args.payload
+
+    if (payload.ruleId !== null) {
+      const rule = await tx.pointRule.findFirst({
+        where: { id: payload.ruleId, childId: args.childId, status: 'active' },
+        select: { id: true }
+      })
+      if (rule === null) return { kind: 'invalidated', reason: 'RULE_DELETED' }
+    }
+    if (payload.habitId !== null) {
+      const habit = await tx.habit.findFirst({
+        where: { id: payload.habitId, childId: args.childId, status: 'active' },
+        select: { id: true }
+      })
+      if (habit === null) return { kind: 'invalidated', reason: 'HABIT_GONE' }
+    }
+
+    const currentBalance = await this.lockBalance(tx, args.childId)
+    const title =
+      payload.reason.trim() !== ''
+        ? payload.reason
+        : (payload.ruleTitleSnapshot ?? payload.habitTitleSnapshot ?? '申请加分')
+
+    let draft
+    try {
+      draft = buildRecordDraft({
+        childId: args.childId,
+        ruleVersionRow: null,
+        titleSnapshot: title,
+        pointsDelta: payload.amount,
+        category: 'adjust',
+        source: 'approval',
+        operator: { userId: args.operatorUserId, role: args.operatorRole },
+        habitId: payload.habitId,
+        idempotencyKey: `approval:${args.approvalId}`,
+        currentBalance,
+        now: args.now
+      })
+    } catch (err) {
+      if (err instanceof LedgerDeniedError) {
+        throw new ConflictException({ code: err.code, message: err.message })
+      }
+      if (err instanceof LedgerShapeError) {
+        throw new InternalServerErrorException({ code: err.code, message: err.message })
+      }
+      throw err
+    }
+
+    const recordId = await this.appendDraft(tx, args.childId, draft)
+    return { kind: 'executed', recordId }
+  }
+
+  /**
+   * 执行 `add_wish`：**创建**心愿（不是兑换）。
+   *
+   * ★ 没有 `PointRecord`（这只审批不产生积分变动），所以 `executedRecordId` 为 `null`；
+   *   `executedRecordId` 是「批准并执行后产出的流水」的字段，硬塞一个心愿 id 会破坏
+   *   `@unique` 外键语义。客户端的 `ApprovalRequest.status=approved` 已经表示执行成功。
+   */
+  private async executeAddWish(
+    tx: Prisma.TransactionClient,
+    args: { childId: string; payload: AddWishPayload }
+  ): Promise<ExecutionOutcome> {
+    await tx.wish.create({
+      data: {
+        childId: args.childId,
+        title: args.payload.title,
+        cost: args.payload.cost,
+        emoji: args.payload.emoji,
+        coverStyle: 'A',
+        status: 'active'
+      }
+    })
+    return { kind: 'executed', recordId: null }
+  }
+
+  /** 锁孩子余额行（同一孩子的写入排队），返回当前余额。 */
+  private async lockBalance(tx: Prisma.TransactionClient, childId: string): Promise<number> {
+    const locked = await tx.$queryRaw<{ pointsBalance: number }[]>`
+      SELECT "pointsBalance" FROM "Child" WHERE "id" = ${childId} FOR UPDATE`
+    if (locked.length === 0) {
+      throw new NotFoundException({
+        code: 'APPROVAL_CHILD_NOT_FOUND',
+        message: `孩子 ${childId} 不存在 —— 这条审批无处执行（拒绝，而不是造一条无主流水）。`
+      })
+    }
+    return locked[0].pointsBalance
+  }
+
+  /**
+   * 写一条账本记录并同步余额（调用方已持有孩子行锁）。
+   *
+   * 与 `ledger.prisma.repository.ts` 完全同一套定序手法（两处必须一致，否则 I2 会裂）：
+   * `createdAt` 由库钟 + 严格递增决定；余额用 CAS（`WHERE pointsBalance = 期望前值`）。
+   */
+  private async appendDraft(
+    tx: Prisma.TransactionClient,
+    childId: string,
+    draft: PointRecordDraft
+  ): Promise<string> {
+    const [clock] = await tx.$queryRaw<{ ts: Date }[]>`
+      SELECT (clock_timestamp() AT TIME ZONE 'UTC') AS ts`
+    const [latest] = await tx.$queryRaw<{ latest: Date | null }[]>`
+      SELECT MAX("createdAt") AS latest FROM "PointRecord" WHERE "childId" = ${childId}`
+    const createdAt = resolveAppendCreatedAt({
+      dbNow: clock.ts,
+      latestCreatedAt: latest.latest
+    })
+
+    const record = await tx.pointRecord.create({
+      data: { ...draft, createdAt },
+      select: { id: true }
+    })
+
+    const expectedBefore = draft.balanceAfter - draft.pointsDelta
+    const updated = await tx.child.updateMany({
+      where: { id: childId, pointsBalance: expectedBefore },
+      data: { pointsBalance: draft.balanceAfter }
+    })
+    if (updated.count !== 1) {
+      throw new ConflictException({
+        code: 'APPROVAL_BALANCE_CHANGED',
+        message:
+          `余额已被别的写入改过：按 ${expectedBefore} 分算 ⇒ ` +
+          '拒绝落库（这笔的 balanceAfter 已经不成立了）。重试请重新读余额。'
+      })
+    }
+
+    return record.id
+  }
+
+  /**
+   * TTL 惰性过期（`02` §4.3）—— 读/决的时候顺手判。
    *
    * 用单条条件 UPDATE 抢\"过期权\"（`WHERE status='pending' AND expiresAt <= now`）：
    * 并发两个请求只有一个 `count=1`，审计不会重复。**独立提交**，不在 decide 事务里
@@ -653,36 +958,107 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
       }
     })
   }
+
+  /**
+   * TTL 后台扫描（`02` §4.3）：把到期的 `pending` 批量置为 `expired`。
+   *
+   * ★ `FOR UPDATE SKIP LOCKED`：多个实例同时扫描时各拿各的，不会互相阻塞；
+   *   每行再用 `WHERE status='pending'` 条件更新，与惰性过期/decide 抢同一行时只有一个赢家。
+   * ★ 审计与状态**同一事务**：不会出现「行过期了但没人记得为什么」。
+   */
+  async expireDue(now: Date, limit = 100): Promise<number> {
+    const take = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 500) : 100
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ id: string; childId: string }[]>`
+        SELECT "id", "childId" FROM "ApprovalRequest"
+        WHERE "status" = 'pending' AND "expiresAt" <= ${now}
+        ORDER BY "expiresAt" ASC
+        LIMIT ${take}
+        FOR UPDATE SKIP LOCKED`
+
+      let expired = 0
+      for (const row of rows) {
+        const updated = await tx.approvalRequest.updateMany({
+          where: { id: row.id, childId: row.childId, status: 'pending', expiresAt: { lte: now } },
+          data: { status: 'expired' }
+        })
+        if (updated.count !== 1) continue
+        await writeAudit(tx, {
+          childId: row.childId,
+          actorUserId: null,
+          actorRole: null,
+          action: 'approval.expired',
+          targetId: row.id,
+          before: { status: 'pending' },
+          after: { status: 'expired' }
+        })
+        expired += 1
+      }
+      return expired
+    })
+  }
 }
 
-
-// ── 模块内的小工具（不导出：端口契约里没有\"实现细节\"的位置）──────────────────────
-
-/** 兑换审批的快照形状（`02` §4.3）。读回来时**逐字段校验**，不信任 JSON 列。 */
+/** 兑换 / 申请兑换的快照形状（`02` §4.3）。读回来时**逐字段校验**，不信任 JSON 列。 */
 interface RedeemPayload {
   wishId: string
   titleSnapshot: string
   costSnapshot: number
 }
 
+/**
+ * `request_points_bonus` 的快照形状。
+ *
+ * ★ `ruleId` / `habitId` 至多一个（`snapshotBonusPayload` 保证）；
+ *   `*TitleSnapshot` 是建请求时读到的标题 —— 批准时若对象已删，UI 仍能说清
+ *   「你申请的是哪条规则/习惯的加分」。
+ */
+interface BonusPayload {
+  amount: number
+  reason: string
+  ruleId: string | null
+  ruleTitleSnapshot: string | null
+  habitId: string | null
+  habitTitleSnapshot: string | null
+}
+
+/** `add_wish` 的快照形状（批准时才真正落 `Wish`）。 */
+interface AddWishPayload {
+  title: string
+  cost: number
+  emoji: string
+}
+
+/** 本文件认识的 payload 联合（动作类型决定该按哪个接口解析）。 */
+type ApprovalPayload = RedeemPayload | BonusPayload | AddWishPayload
+
 /** 执行结果：\"做成了\" 与 \"前提消失\" 是两条正常分支（后者要落 `invalidated`）。 */
 type ExecutionOutcome =
-  | { kind: 'executed'; recordId: string }
+  /** `recordId` 为 `null` 表示执行成功但**不产生流水**（如 `add_wish`）。 */
+  | { kind: 'executed'; recordId: string | null }
   | { kind: 'invalidated'; reason: AutoReason }
 
 /**
- * 目前**有执行器**的动作（W3-A）。
+ * 目前**有执行器**的动作（W3-C 起四项）。
+ *
+ * | 动作 | 批准时做什么 | 会产生流水吗 |
+ * |---|---|---|
+ * | `redeem` | 按 `costSnapshot` 扣分 + 心愿置已兑换 | 是（`exchange`） |
+ * | `request_redeem` | 与 `redeem` 同一执行路径（孩子申请兑换的矩阵动作） | 是（`exchange`） |
+ * | `request_points_bonus` | 按快照金额加分 | 是（`adjust`） |
+ * | `add_wish` | 创建心愿 | 否（`executedRecordId = null`） |
+ *
  * ★ 不在名单里的动作在建请求时就 400 —— 先落一条永远批不动的 `pending` 是死胡同，
  *   而\"看起来提交成功\"比\"明确不支持\"更伤（用户会等一个永远不会来的批准）。
  */
-const EXECUTABLE_ACTIONS = ['redeem'] as const
+const EXECUTABLE_ACTIONS = ['redeem', 'request_redeem', 'request_points_bonus', 'add_wish'] as const
 
 function assertExecutable(action: ActionType): void {
   if (!(EXECUTABLE_ACTIONS as readonly string[]).includes(action)) {
     throw new BadRequestException({
       code: 'APPROVAL_ACTION_NOT_EXECUTABLE',
       message:
-        `动作 ${action} 还没有执行器（W3-A 只落地 redeem 兑换）。` +
+        `动作 ${action} 还没有执行器（W3-C 支持：${EXECUTABLE_ACTIONS.join(' / ')}）。` +
         '★ 现在建请求会留下一条永远批不动的 pending —— 所以在这里拒绝，而不是假装受理。'
     })
   }
@@ -713,11 +1089,28 @@ function toRow(row: ApprovalRequest): ApprovalRow {
 }
 
 /** 写入 `payload` 列的形状（`InputJsonObject` 不接受无索引签名的 interface）。 */
-function jsonOf(payload: RedeemPayload): Prisma.InputJsonObject {
+function jsonOf(payload: ApprovalPayload): Prisma.InputJsonObject {
+  if ('wishId' in payload) {
+    return {
+      wishId: payload.wishId,
+      titleSnapshot: payload.titleSnapshot,
+      costSnapshot: payload.costSnapshot
+    }
+  }
+  if ('amount' in payload) {
+    return {
+      amount: payload.amount,
+      reason: payload.reason,
+      ruleId: payload.ruleId,
+      ruleTitleSnapshot: payload.ruleTitleSnapshot,
+      habitId: payload.habitId,
+      habitTitleSnapshot: payload.habitTitleSnapshot
+    }
+  }
   return {
-    wishId: payload.wishId,
-    titleSnapshot: payload.titleSnapshot,
-    costSnapshot: payload.costSnapshot
+    title: payload.title,
+    cost: payload.cost,
+    emoji: payload.emoji
   }
 }
 
@@ -746,6 +1139,197 @@ function parseRedeemPayload(payload: Prisma.JsonValue): RedeemPayload {
     return bad()
   }
   return { wishId, titleSnapshot, costSnapshot }
+}
+
+/**
+ * 按**动作类型**解析 payload：动作决定形状，绝不允许\"一个解析器猜所有形状\"。
+ * 任何缺字段 / 多余字段 / 类型不对 ⇒ 500 `INVALID_APPROVAL_PAYLOAD`（库里的坏数据）。
+ */
+function parseApprovalPayload(action: ActionType, payload: Prisma.JsonValue): ApprovalPayload {
+  switch (action) {
+    case 'redeem':
+    case 'request_redeem':
+      return parseRedeemPayload(payload)
+    case 'request_points_bonus':
+      return parseBonusPayload(payload)
+    case 'add_wish':
+      return parseAddWishPayload(payload)
+    default:
+      throw new InternalServerErrorException({
+        code: 'INVALID_APPROVAL_ACTION',
+        message: `动作 ${action} 没有 payload 解析器 —— 可执行名单与解析实现已经漂移。`
+      })
+  }
+}
+
+function payloadRecord(payload: Prisma.JsonValue, what: string): Record<string, Prisma.JsonValue> {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new InternalServerErrorException({
+      code: 'INVALID_APPROVAL_PAYLOAD',
+      message: `${what}的 payload 不是对象（收到 ${JSON.stringify(payload)}）—— 拒绝据此执行。`
+    })
+  }
+  return payload as Record<string, Prisma.JsonValue>
+}
+
+/** 读 `request_points_bonus` 的 payload：金额 / 事由 / 至多一个依据。 */
+function parseBonusPayload(payload: Prisma.JsonValue): BonusPayload {
+  const record = payloadRecord(payload, '加分申请')
+  const { amount, reason, ruleId, ruleTitleSnapshot, habitId, habitTitleSnapshot } = record
+
+  if (
+    typeof amount !== 'number' ||
+    !Number.isInteger(amount) ||
+    amount <= 0 ||
+    amount > 50 ||
+    typeof reason !== 'string'
+  ) {
+    throw new InternalServerErrorException({
+      code: 'INVALID_APPROVAL_PAYLOAD',
+      message:
+        '加分申请的 payload 形状不对（应含 1..50 的 amount 与 reason）—— ' +
+        '这是库里的坏数据，拒绝据此加分。'
+    })
+  }
+  if (ruleId !== null && typeof ruleId !== 'string') {
+    throw new InternalServerErrorException({ code: 'INVALID_APPROVAL_PAYLOAD', message: 'ruleId 形状不对。' })
+  }
+  if (habitId !== null && typeof habitId !== 'string') {
+    throw new InternalServerErrorException({ code: 'INVALID_APPROVAL_PAYLOAD', message: 'habitId 形状不对。' })
+  }
+  if (ruleId !== null && habitId !== null) {
+    throw new InternalServerErrorException({
+      code: 'INVALID_APPROVAL_PAYLOAD',
+      message: '加分申请同时带 ruleId 与 habitId —— 依据不唯一，无法复查。'
+    })
+  }
+  if (ruleTitleSnapshot !== null && typeof ruleTitleSnapshot !== 'string') {
+    throw new InternalServerErrorException({
+      code: 'INVALID_APPROVAL_PAYLOAD',
+      message: 'ruleTitleSnapshot 形状不对。'
+    })
+  }
+  if (habitTitleSnapshot !== null && typeof habitTitleSnapshot !== 'string') {
+    throw new InternalServerErrorException({
+      code: 'INVALID_APPROVAL_PAYLOAD',
+      message: 'habitTitleSnapshot 形状不对。'
+    })
+  }
+
+  return {
+    amount,
+    reason,
+    ruleId,
+    ruleTitleSnapshot,
+    habitId,
+    habitTitleSnapshot
+  }
+}
+
+/** 读 `add_wish` 的 payload：标题 / 成本 / 表情。 */
+function parseAddWishPayload(payload: Prisma.JsonValue): AddWishPayload {
+  const record = payloadRecord(payload, '新建心愿')
+  const { title, cost, emoji } = record
+  if (
+    typeof title !== 'string' ||
+    title.trim() === '' ||
+    title.length > 100 ||
+    typeof cost !== 'number' ||
+    !Number.isInteger(cost) ||
+    cost <= 0 ||
+    cost > 100_000 ||
+    typeof emoji !== 'string' ||
+    emoji.trim() === '' ||
+    emoji.length > 8
+  ) {
+    throw new InternalServerErrorException({
+      code: 'INVALID_APPROVAL_PAYLOAD',
+      message:
+        '新建心愿的 payload 形状不对（应含 title / 正整数 cost / emoji）—— ' +
+        '这是库里的坏数据，拒绝据此创建心愿。'
+    })
+  }
+  return { title, cost, emoji }
+}
+
+/**
+ * 建请求时的 `add_wish` 快照（无 IO，只做形状与业务边界校验）。
+ *
+ * ★ 这里**不查**是否重名：同名心愿是允许的（孩子可以想要两个一样的）；
+ *   真正的唯一性由 `Wish.id` 保证。
+ */
+function snapshotAddWishPayload(input: CreateApprovalInput): AddWishPayload {
+  const title = (input.title ?? '').trim()
+  if (title === '') {
+    throw new BadRequestException({
+      code: 'APPROVAL_TITLE_REQUIRED',
+      message: '新建心愿必须带 title（1..100 字）—— 没有标题的审批无法说明要建什么。'
+    })
+  }
+  if (title.length > 100) {
+    throw new BadRequestException({
+      code: 'APPROVAL_TITLE_TOO_LONG',
+      message: `心愿标题最多 100 字（收到 ${title.length} 字）。`
+    })
+  }
+  const cost = input.cost
+  if (cost === undefined) {
+    throw new BadRequestException({
+      code: 'APPROVAL_COST_REQUIRED',
+      message: '新建心愿必须带 cost（正整数）—— 否则孩子无法知道要攒多少分。'
+    })
+  }
+  if (!Number.isInteger(cost) || cost <= 0 || cost > 100_000) {
+    throw new BadRequestException({
+      code: 'INVALID_APPROVAL_COST',
+      message: `心愿成本必须是 1..100000 的整数（收到 ${JSON.stringify(cost)}）。`
+    })
+  }
+  const emoji = (input.emoji ?? '🎁').trim()
+  if (emoji === '' || emoji.length > 8) {
+    throw new BadRequestException({
+      code: 'INVALID_APPROVAL_EMOJI',
+      message: `心愿表情必须是 1..8 个字符（收到 ${JSON.stringify(emoji)}）。`
+    })
+  }
+  return { title, cost, emoji }
+}
+
+/** 本动作允许的参数集合；其余参数出现 ⇒ 400（不静默忽略）。 */
+const APPROVAL_PARAM_KEYS = [
+  'targetId',
+  'amount',
+  'reason',
+  'ruleId',
+  'habitId',
+  'title',
+  'cost',
+  'emoji'
+] as const
+
+type ApprovalParamKey = (typeof APPROVAL_PARAM_KEYS)[number]
+
+function rejectParams(input: CreateApprovalInput, allowed: readonly ApprovalParamKey[]): void {
+  const extras = APPROVAL_PARAM_KEYS.filter(
+    (key) => !allowed.includes(key) && input[key] !== undefined
+  )
+  if (extras.length > 0) {
+    throw new BadRequestException({
+      code: 'APPROVAL_PARAM_NOT_APPLICABLE',
+      message:
+        `动作 ${input.action} 不接受参数：${extras.join(', ')} —— ` +
+        '静默忽略会让客户端以为这些参数生效了（02 §4.3 的形状封闭）。'
+    })
+  }
+}
+
+/** 引用 id 必须非空（DTO 的 `@IsString()` 允许空串，业务上不允许）。 */
+function requireRefId(value: string, code: string): string {
+  const trimmed = value.trim()
+  if (trimmed === '') {
+    throw new BadRequestException({ code, message: '引用 id 不能为空 —— 没有它就无法复查依据。' })
+  }
+  return trimmed
 }
 
 function alreadyDecided(): ConflictException {

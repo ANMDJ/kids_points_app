@@ -224,6 +224,10 @@ function makeApprovalsFake(): ApprovalsFake {
     async withdraw(input) {
       calls.push({ method: 'withdraw', input })
       throw new Error('不该走到这里：撤回用例不在本文件范围内')
+    },
+    async expireDue(now, limit) {
+      calls.push({ method: 'expireDue', input: { now, limit } })
+      return 0
     }
   }
 }

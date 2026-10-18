@@ -56,7 +56,9 @@ import { WishesModule } from './wishes/wishes.module'
     DeviceSessionModule.register(),
     AuditModule,
     NotificationsModule,
-    IdempotencyModule
+    // ★ W3-C：动态模块 —— 有库 ⇒ PrismaIdempotencyRepository（唯一约束兜底），
+    //   无库 ⇒ 501（只在请求真的带 `Idempotency-Key` 时触发）。
+    IdempotencyModule.register()
   ]
 })
 export class AppModule {}

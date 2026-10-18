@@ -325,8 +325,10 @@ Prisma 无法表达 `Json` 的内部形状，所以定形落在应用层）。�
 **终态集合**：`approved` / `rejected` / `withdrawn` / `invalidated` / `expired`（TTL 触发）
 
 > ✅ **W3-B（2026-10-18）：5 个终态全部可达。** `withdrawn` 走
-> `POST /approvals/:id/withdraw`（§4.6）；`invalidated` 由批准时的前提复查产生；
-> `expired` 目前只有**惰性判定**（读/决/撤回时顺手判），后台扫描任务尚未落地。
+> `POST /approvals/:id/withdraw`（§4.6）；`invalidated` 由批准时的前提复查产生。
+> ✅ **W3-C（2026-10-18）：`expired` 有后台扫描** —— `ApprovalsExpiryService.expireDue()`
+> 每 60s（`APPROVAL_EXPIRY_SCAN_INTERVAL_MS` 可调）把到期的 `pending` 批量置 `expired`；
+> 读/决/撤回时的惰性判定仍保留为兜底（扫描没跑到时也不会批准过期审批）。
 
 ### 4.2 为什么需要 `invalidated`（不能只靠 `rejected`）
 
@@ -344,6 +346,8 @@ Prisma 无法表达 `Json` 的内部形状，所以定形落在应用层）。�
 type AutoReason = 'WISH_DELETED' | 'RULE_DELETED' | 'HABIT_GONE'
                 | 'INSUFFICIENT_POINTS' | 'MEMBER_REMOVED'
 ```
+✅ **W3-C：五种全部可复现**（真库用例 `backend/test-db/approvals-closing-db.dbtest.ts`
+覆盖后三种；前两种在 `approvals-execution-db.dbtest.ts`）。
 
 **语义区别（必须在 UI 上区分）**：
 - `rejected` = **家长不同意**（人的决定）→ 孩子看到"爸爸说这次先不换"
@@ -448,8 +452,12 @@ W3-B 新增 `POST /approvals/:id/withdraw`；用例 `backend/test/approvals-http
 任何一位 guardian 拿到别家 id 就能批准并扣别家的分。
 ⚠️ **历史留档（已被 W3-A 取代，别照着做）**：W2-D 之后 `ApprovalsPort` 仍是 501（有库也是）；
 2026-10-17 的端到端实测结论正是「合法 guardian 也 501」—— 那是 W3-A 之前的真实状态。
-⚠️ **仍有限制**：执行器只覆盖 `redeem`；`expired` 只有惰性判定（无后台扫描任务）；
-设备凭据仍不可验证（`NODE_ENV=production` ⇒ 503，等 L2 的会话 token）。
+✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` /
+`request_points_bonus` / `add_wish`；**`autoReason` 五种全部可复现**
+（`WISH_DELETED` / `RULE_DELETED` / `HABIT_GONE` / `INSUFFICIENT_POINTS` / `MEMBER_REMOVED`）；
+`expired` 有后台扫描（§4.1）；`Idempotency-Key` 已接到三个写端点（§4.7）。
+仍待建的是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点），不是审批状态机本身。
+⚠️ 设备凭据仍不可验证（`NODE_ENV=production` ⇒ 503，等 L2 的会话 token）。
 ★ 身份口径**已于 W1-C 更换**（2026-10-15）：W1-A/W1-B 时代的
 `x-kp-role` / `x-kp-user-id` / `x-kp-child-id` **三个自报头**已改为
 `x-kp-device-id` / `x-kp-child-id` **两个头 ＋ 服务端会话行**（角色与 userId 由 `DeviceSession` 给出，
@@ -494,6 +502,48 @@ fail-closed：此刻**没有人**被放过去）；缺 `x-kp-child-id` → **401
 
 > ★ 这一条修的是**第 5 个终态不可达**：此前矩阵有 `withdraw_request`、状态机文档也写了
 > `withdrawn`，但**没有任何端点/端口方法**——孩子只能等 72h 过期。
+
+### 4.7 执行器、后台过期与幂等键（W3-C，2026-10-18）
+
+**四个有执行器的动作**（其余动作建请求时 400 `APPROVAL_ACTION_NOT_EXECUTABLE`）：
+
+| 动作 | 批准时做什么 | 流水 | 可能 `invalidated` |
+|---|---|---|---|
+| `redeem` | 按 `payload.costSnapshot` 扣分 ＋ `Wish.redeemed=true` | `exchange` / `-costSnapshot` | `WISH_DELETED` / `INSUFFICIENT_POINTS` / `MEMBER_REMOVED` |
+| `request_redeem` | 与 `redeem` **同一执行路径** | 同上 | 同上 |
+| `request_points_bonus` | 按 `payload.amount` 加分 | `adjust` / `+amount` | `RULE_DELETED` / `HABIT_GONE` / `MEMBER_REMOVED` |
+| `add_wish` | 创建 `Wish` | **无**（`executedRecordId=null`） | `MEMBER_REMOVED` |
+
+- **`MEMBER_REMOVED` 是通用复查**：执行前查申请人 `ChildMember.status`，非 `active` ⇒
+  `invalidated`（不再给已离开的成员发分 / 落心愿）。
+- **目标动作矩阵 `DENY` ⇒ `403 ACTION_NOT_ALLOWED`**：`POST /approvals` 的屏障二只验
+  `request_approval`，若不再查目标动作，孩子就能「为 `add_rule` 提审批」绕过矩阵。
+- **`RULE_DELETED` / `HABIT_GONE`**：加分申请可带 `ruleId` 或 `habitId`（至多一个）；
+  建请求时快照标题，批准时再查 `status='active'` —— 依据消失就无效。
+- **`add_wish` 不产生流水**：`executedRecordId` 是「批准并执行后产出的 `PointRecord`」
+  的外键，不能塞心愿 id；`status=approved` 已表示执行成功。
+- **单笔 ≤ 50 已落实**（DTO ＋ `snapshotBonusPayload`）；**每天 3 条 / 同因去重**
+  属于 §6 的 dispatcher（尚未实现）—— 不要把这个端点读成「加分配额已验收」。
+
+**后台过期**：`ApprovalsExpiryService`（`main.ts` 调 `start()`）每 60s 调
+`ApprovalsPort.expireDue(now, limit)`；SQL 用 `FOR UPDATE SKIP LOCKED` ＋ 条件 UPDATE，
+多实例/惰性过期并发时只有一个赢家，审计 `approval.expired` 不会重复。
+无库装配不启动计时器（`expireDue` 本身也是 501）。
+
+**幂等键（`Idempotency-Key` 请求头，可选）**：
+
+| 场景 | 结果 |
+|---|---|
+| 同键 + 同一请求（方法/路径/规范化 body 的 SHA-256 相同） | 返回**首次**的 `statusCode` / `body`，不再执行业务 |
+| 同键 + 不同请求 | `409 IDEMPOTENCY_KEY_REUSED`（不得静默复用） |
+| 同键的上一次还没写完响应 | `409 IDEMPOTENCY_IN_PROGRESS`（fail-closed，不重复执行） |
+| key 为空 / > 200 字符 | `400 INVALID_IDEMPOTENCY_KEY` |
+| 无库装配 + 带 key | `501 IDEMPOTENCY_NOT_IMPLEMENTED` |
+
+覆盖 `POST /approvals`、`/approvals/:id/decide`、`/approvals/:id/withdraw`。
+★ 响应缓存**不在业务事务内**（业务本身已由 `PointRecord.idempotencyKey=approval:<id>`
+＋ 行锁 ＋ 条件 UPDATE 保证只执行一次）；若进程在「业务提交、响应写回」之间崩溃，
+重放会得到 `IDEMPOTENCY_IN_PROGRESS`，**不会重复扣分**。记录 24h 过期后 key 可复用。
 
 ---
 
@@ -961,4 +1011,11 @@ model InviteCode {
 | 9.31 | 申请人撤回自己的 `pending`（W3-B） | `200 withdrawn`；**零流水、余额不变、心愿不置已兑换**；审计 `approval.withdrawn`（✅ `approvals-execution-db` 组 D） |
 | 9.32 | 另一位 guardian 撤回 / 已批准后撤回（W3-B） | `403 NOT_REQUESTER` / `409 ALREADY_DECIDED`；行状态不变（✅ 离线组 F ＋ 真库组 D） |
 | 9.33 | **另一家的 guardian** 拿别家审批 id 去 decide / withdraw（W3-B） | **`404 APPROVAL_NOT_FOUND`**，两家账本均无变化（`childId` 是查询键，不是事后过滤） |
+| 9.34 | 孩子 `request_points_bonus(amount=10)` → 家长批准（W3-C） | `approved` ＋ `+10` 流水（`adjust/approval`）＋ 余额 +10；申请阶段余额不变 |
+| 9.35 | 加分依据的规则在批准前被软删（W3-C） | `409 APPROVAL_INVALIDATED`、`autoReason=RULE_DELETED`、零流水 |
+| 9.36 | 加分依据的习惯在批准前被软删（W3-C） | 同上，`autoReason=HABIT_GONE` |
+| 9.37 | 申请人在批准前被移出家庭（W3-C） | 同上，`autoReason=MEMBER_REMOVED`、零流水 |
+| 9.38 | 孩子 `add_wish` → 家长批准（W3-C） | 真的创建 `Wish`；`executedRecordId=null`、余额不变 |
+| 9.39 | TTL 到期 + 后台 `expireDue()`（W3-C） | 行 `expired`、审计 `approval.expired` 恰好 1 条、零流水；重复扫描不重复计数 |
+| 9.40 | 同 `Idempotency-Key` 重发 create / decide（W3-C） | 第二次返回**首次响应**，业务只执行一次；同键不同请求 `409 IDEMPOTENCY_KEY_REUSED` |
 

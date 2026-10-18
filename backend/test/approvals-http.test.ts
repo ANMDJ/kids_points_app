@@ -14,9 +14,10 @@
  *   所以 `npm test` 现在先 `tsc` 真编译再跑；否则本文件是**假绿**。
  *
  * ── 覆盖的判据来源 ──────────────────────────────────────────────────────────
- *   `02` §4.5 六条硬约束 + §9.3 / §9.10 / §9.25 / §9.26 / §9.27。
- *   仓储用**内存替身**（`ApprovalsPort` 的实现）—— 真实的 Prisma 实现**仍未落地**
- *   （`ApprovalsPort` 有库也是 501，见 W2-D）；**不注入替身**那一组断言的是 **501 fail-closed**，不是「成功」。
+ *   `02` §4.5 六条硬约束 + §9.3 / §9.10 / §9.25 / §9.26 / §9.27；W3-C 追加 §9.40。
+ *   仓储用**内存替身**（`ApprovalsPort` 的实现）—— 真实 Prisma 实现由
+ *   `test-db/approvals-execution-db` / `approvals-closing-db` 负责（真库、真事务）。
+ *   **不注入替身**那一组断言的是 **501 fail-closed**，不是「成功」。
  *   ★ 本文件的世界**显式钉死**在无库（`ApprovalsModule.register({ hasDatabase: false })`，W2-D）——
  *   所以"默认装配"在这里的含义是**审批端口未注入**，与本机有没有 `.env` 无关。
  */
@@ -41,6 +42,13 @@ import {
   type DeviceSessionPort
 } from '../src/device-session/device-session.repository'
 import type { SessionLookupRow } from '../src/device-session/session.gate'
+import {
+  IDEMPOTENCY_REPOSITORY,
+  type BeginIdempotencyInput,
+  type BeginIdempotencyResult,
+  type CompleteIdempotencyInput,
+  type IdempotencyPort
+} from '../src/idempotency/idempotency.repository'
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 
@@ -186,6 +194,63 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
       const updated: ApprovalRow = { ...existing, status: 'withdrawn' }
       rows.set(updated.id, updated)
       return updated
+    },
+    async expireDue(now, limit) {
+      calls.push({ method: 'expireDue', input: { now, limit } })
+      let expired = 0
+      for (const [id, row] of [...rows]) {
+        if (row.status === 'pending') {
+          rows.set(id, { ...row, status: 'expired' })
+          expired += 1
+        }
+      }
+      return expired
+    }
+  }
+}
+
+/**
+ * 幂等端口替身：把「插入进行中 / 唯一冲突 / 重放」做成内存状态机。
+ * ★ 它的意义是证明 **HTTP 层真的调用了端口**，而不是在 controller 里另写一份判断。
+ */
+function makeIdempotencyFake(): IdempotencyPort & {
+  rows: Map<string, { requestHash: string; statusCode: number | null; body: Record<string, unknown> | null }>
+} {
+  const rows = new Map<
+    string,
+    { requestHash: string; statusCode: number | null; body: Record<string, unknown> | null }
+  >()
+  const idOf = (input: { childId: string; key: string }): string => `${input.childId}:${input.key}`
+
+  return {
+    rows,
+    async begin(input: BeginIdempotencyInput): Promise<BeginIdempotencyResult> {
+      const id = idOf(input)
+      const existing = rows.get(id)
+      if (existing === undefined) {
+        rows.set(id, { requestHash: input.requestHash, statusCode: null, body: null })
+        return { kind: 'started' }
+      }
+      if (existing.requestHash !== input.requestHash) {
+        return { kind: 'conflict', reason: 'HASH_MISMATCH' }
+      }
+      if (existing.statusCode === null || existing.body === null) {
+        return { kind: 'conflict', reason: 'IN_PROGRESS' }
+      }
+      return { kind: 'replay', statusCode: existing.statusCode, body: existing.body }
+    },
+    async complete(input: CompleteIdempotencyInput): Promise<void> {
+      const id = idOf(input)
+      const existing = rows.get(id)
+      if (existing === undefined) throw new Error('complete 之前没有 begin')
+      rows.set(id, {
+        requestHash: input.requestHash,
+        statusCode: input.statusCode,
+        body: input.body
+      })
+    },
+    async abort(input: { key: string; childId: string; requestHash: string }): Promise<void> {
+      rows.delete(idOf(input))
     }
   }
 }
@@ -227,7 +292,10 @@ async function send(
  *   （"**无库装配**下身份层 501" 由 `device-session-http.test.ts` 组 D 专门钉住 ——
  *   该文件同样把世界写死成 `hasDatabase: false`）。
  */
-async function startApp(repository?: ApprovalsPort): Promise<{ app: INestApplication; url: string }> {
+async function startApp(
+  repository?: ApprovalsPort,
+  idempotency?: IdempotencyPort
+): Promise<{ app: INestApplication; url: string }> {
   const builder = Test.createTestingModule({
     // ★ 显式 `hasDatabase: false`（W2-D 起 `ApprovalsModule` 会把世界转发给两个子模块）：
     //   本文件是**离线**用例 —— 不传参就会按环境推断，导出过 `DATABASE_URL` 的机器上
@@ -242,6 +310,9 @@ async function startApp(repository?: ApprovalsPort): Promise<{ app: INestApplica
     .useValue(makeMembershipFake())
   if (repository !== undefined) {
     builder.overrideProvider(APPROVALS_REPOSITORY).useValue(repository)
+  }
+  if (idempotency !== undefined) {
+    builder.overrideProvider(IDEMPOTENCY_REPOSITORY).useValue(idempotency)
   }
   const moduleRef = await builder.compile()
   const app = moduleRef.createNestApplication()
@@ -295,6 +366,15 @@ describe('默认装配（无替身）：审批写入路径未落地 ⇒ 必须 5
     })
     assert.equal(r.status, 501)
     assert.equal(r.body.code, 'APPROVALS_PERSISTENCE_NOT_IMPLEMENTED')
+  })
+
+  it('带 `Idempotency-Key` 但无库 ⇒ 501 `IDEMPOTENCY_NOT_IMPLEMENTED`（不假装重放保护生效）', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'wish-1' },
+      headers: { ...GUARDIAN, 'idempotency-key': 'no-db-key' }
+    })
+    assert.equal(r.status, 501)
+    assert.equal(r.body.code, 'IDEMPOTENCY_NOT_IMPLEMENTED')
   })
 })
 
@@ -354,6 +434,20 @@ describe('判定（§4.5 六条硬约束 / §9.25–§9.27）', () => {
     assert.equal(r.body.auditAction, AUDIT_ACTION_SELF_APPROVED)
     const call = port.calls.find((c) => c.method === 'createSelfApproved')
     assert.ok(call !== undefined, '显式勾选却走了 createPending —— 会变成"等别人批"的死锁')
+  })
+
+  it('★ 目标动作在矩阵里 `DENY`（child add_rule）⇒ 403 `ACTION_NOT_ALLOWED`，连申请都不许提', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'add_rule' },
+      headers: CHILD
+    })
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'ACTION_NOT_ALLOWED')
+    assert.equal(
+      port.calls.length,
+      0,
+      '矩阵 DENY 的动作仍走到了端口 —— 「为 DENY 动作提审批」可以绕过矩阵'
+    )
   })
 
   it('§9.26 孩子 request_redeem + autoApprove:true → **400 且点名**，且**一行都没落**', async () => {
@@ -847,6 +941,117 @@ describe('唯一事实源：判定必须完全由矩阵导出', () => {
     })
     assert.equal(r.status, 400)
     assert.equal(r.body.code, SELF_APPROVAL_NOT_ALLOWED)
+  })
+})
+
+
+// ── 组 H：`Idempotency-Key` 的 HTTP 重放保护（W3-C）──────────────────────────
+describe('组 H：Idempotency-Key 的 HTTP 重放保护（W3-C）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+  let idem!: ReturnType<typeof makeIdempotencyFake>
+
+  before(async () => {
+    port = makeFakePort()
+    idem = makeIdempotencyFake()
+    ;({ app, url } = await startApp(port, idem))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+    idem.rows.clear()
+  })
+
+  const withKey = (key: string): Record<string, string> => ({
+    ...GUARDIAN,
+    'idempotency-key': key
+  })
+
+  it('★ 同一个 key + 同一个请求 ⇒ 第二次**直接返回首次响应**，业务只执行一次', async () => {
+    const body = { action: 'redeem', targetId: 'w-1' }
+    const first = await send(url, '/approvals', { body, headers: withKey('k-create') })
+    const second = await send(url, '/approvals', { body, headers: withKey('k-create') })
+
+    assert.equal(first.status, 202)
+    assert.equal(second.status, 202)
+    assert.equal(second.body.id, first.body.id, '重放生成了第二条 pending —— 幂等键没有生效')
+    assert.equal(
+      port.calls.filter((c) => c.method === 'createPending').length,
+      1,
+      '第二次仍然调用了业务端口 —— controller 没有消费幂等端口'
+    )
+    assert.equal(idem.rows.size, 1)
+  })
+
+  it('★ 同一个 key + **不同**请求体 ⇒ 409 IDEMPOTENCY_KEY_REUSED（不得静默复用首次结果）', async () => {
+    const first = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-1' },
+      headers: withKey('k-reuse')
+    })
+    assert.equal(first.status, 202)
+
+    const second = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-2' },
+      headers: withKey('k-reuse')
+    })
+    assert.equal(second.status, 409)
+    assert.equal(second.body.code, 'IDEMPOTENCY_KEY_REUSED')
+    assert.equal(
+      port.calls.filter((c) => c.method === 'createPending').length,
+      1,
+      '同键不同请求仍然执行了第二次业务'
+    )
+  })
+
+  it('★ decide 重放：第二次仍 200（而不是 ALREADY_DECIDED），业务只批准一次', async () => {
+    const created = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-decide' },
+      headers: GUARDIAN
+    })
+    assert.equal(created.status, 202)
+    const id = String(created.body.id)
+    const body = { decision: 'approved' }
+
+    const first = await send(url, `/approvals/${id}/decide`, {
+      body,
+      headers: withKey('k-decide')
+    })
+    const second = await send(url, `/approvals/${id}/decide`, {
+      body,
+      headers: withKey('k-decide')
+    })
+
+    assert.equal(first.status, 200)
+    assert.equal(second.status, 200, '网络重试拿到了 409 —— 客户端会以为批准失败')
+    assert.equal(second.body.status, 'approved')
+    assert.equal(
+      port.calls.filter((c) => c.method === 'decide').length,
+      1,
+      '重放仍然调用了 decide —— 第二次会被乐观锁挡成 409，说明幂等层没生效'
+    )
+  })
+
+  it('不带 key ⇒ 完全不碰幂等端口（幂等是可选能力，不是强制）', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-nokey' },
+      headers: GUARDIAN
+    })
+    assert.equal(r.status, 202)
+    assert.equal(idem.rows.size, 0)
+  })
+
+  it('非法 key（> 200 字符）⇒ 400 INVALID_IDEMPOTENCY_KEY，且不执行业务', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-bad-key' },
+      headers: withKey('x'.repeat(201))
+    })
+    assert.equal(r.status, 400)
+    assert.equal(r.body.code, 'INVALID_IDEMPOTENCY_KEY')
+    assert.equal(port.calls.length, 0)
   })
 })
 

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Headers,
   Inject,
   Param,
   Post,
@@ -10,6 +11,7 @@ import {
 } from '@nestjs/common'
 
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
+import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
 import type { RequestWithActor } from '../permissions/actor'
 import { PermissionsGuard } from '../permissions/permissions.guard'
@@ -31,6 +33,7 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  *   · `201` 显式自批 → 直接 `approved` ＋ 流水（§9.25）
  *   · `400 SELF_APPROVAL_NOT_ALLOWED` 显式要求自批却没资格（§9.26）
  *   · `200` 批准 / 拒绝 / **撤回**成功；`403` 无批准资格 / `403 NOT_REQUESTER` 不是申请人本人撤回；
+ *     `403 ACTION_NOT_ALLOWED` 目标动作在矩阵里是 `DENY`（连申请都不许提，W3-C）；
  *     `409 ALREADY_DECIDED` 已决（含已撤回后再撤）；`404` 没有这条**或不属于这个孩子**（W3-B 起同一回答）
  *   · `401 UNAUTHENTICATED` 缺 `x-kp-device-id` / `x-kp-child-id`；`401 SESSION_NOT_FOUND` 没会话（有库时由真适配器回答）；
  *     `503 IDENTITY_NOT_IMPLEMENTED` 生产环境（设备凭据尚不可验）；`501 SESSION_LOOKUP_NOT_IMPLEMENTED` **仅无库装配**
@@ -57,7 +60,10 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
 //   屏障二**不能**改成 `APP_GUARD` 的原因。
 @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
 export class ApprovalsController {
-  constructor(@Inject(ApprovalsService) private readonly service: ApprovalsService) {}
+  constructor(
+    @Inject(ApprovalsService) private readonly service: ApprovalsService,
+    @Inject(IdempotencyService) private readonly idempotency: IdempotencyService
+  ) {}
 
   /** 只用到 `status()`：用结构类型而非 import express 类型，免得为一行代码引入新依赖。 */
   private static applyStatus(res: { status(code: number): unknown }, code: number): void {
@@ -71,9 +77,21 @@ export class ApprovalsController {
   async create(
     @Body() dto: CreateApprovalRequestDto,
     @Req() req: RequestWithActor,
-    @Res({ passthrough: true }) res: { status(code: number): unknown }
+    @Res({ passthrough: true }) res: { status(code: number): unknown },
+    @Headers('idempotency-key') idempotencyKey?: string
   ): Promise<unknown> {
-    const result = await this.service.createRequest(dto, this.actorOf(req), this.childIdOf(req))
+    const actor = this.actorOf(req)
+    const childId = this.childIdOf(req)
+    const result = await this.idempotency.run(
+      {
+        key: idempotencyKey,
+        childId,
+        userId: actor.userId,
+        actionType: dto.action,
+        requestHash: IdempotencyService.hashRequest('POST', '/approvals', dto)
+      },
+      () => this.service.createRequest(dto, actor, childId)
+    )
     ApprovalsController.applyStatus(res, result.statusCode)
     return result.body
   }
@@ -86,9 +104,21 @@ export class ApprovalsController {
     @Param('id') id: string,
     @Body() dto: DecideApprovalRequestDto,
     @Req() req: RequestWithActor,
-    @Res({ passthrough: true }) res: { status(code: number): unknown }
+    @Res({ passthrough: true }) res: { status(code: number): unknown },
+    @Headers('idempotency-key') idempotencyKey?: string
   ): Promise<unknown> {
-    const result = await this.service.decide(id, dto, this.actorOf(req), this.childIdOf(req))
+    const actor = this.actorOf(req)
+    const childId = this.childIdOf(req)
+    const result = await this.idempotency.run(
+      {
+        key: idempotencyKey,
+        childId,
+        userId: actor.userId,
+        actionType: 'review_approvals',
+        requestHash: IdempotencyService.hashRequest('POST', `/approvals/${id}/decide`, dto)
+      },
+      () => this.service.decide(id, dto, actor, childId)
+    )
     ApprovalsController.applyStatus(res, result.statusCode)
     return result.body
   }
@@ -109,9 +139,21 @@ export class ApprovalsController {
   async withdraw(
     @Param('id') id: string,
     @Req() req: RequestWithActor,
-    @Res({ passthrough: true }) res: { status(code: number): unknown }
+    @Res({ passthrough: true }) res: { status(code: number): unknown },
+    @Headers('idempotency-key') idempotencyKey?: string
   ): Promise<unknown> {
-    const result = await this.service.withdraw(id, this.actorOf(req), this.childIdOf(req))
+    const actor = this.actorOf(req)
+    const childId = this.childIdOf(req)
+    const result = await this.idempotency.run(
+      {
+        key: idempotencyKey,
+        childId,
+        userId: actor.userId,
+        actionType: 'withdraw_request',
+        requestHash: IdempotencyService.hashRequest('POST', `/approvals/${id}/withdraw`, null)
+      },
+      () => this.service.withdraw(id, actor, childId)
+    )
     ApprovalsController.applyStatus(res, result.statusCode)
     return result.body
   }

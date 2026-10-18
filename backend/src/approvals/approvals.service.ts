@@ -16,6 +16,7 @@ import {
   isSelfApproved,
   withdrawDenial
 } from '../contracts/approval-policy'
+import { resolveVerdict } from '../contracts/permission-matrix'
 import type { Actor } from '../permissions/actor'
 import {
   APPROVALS_REPOSITORY,
@@ -78,11 +79,48 @@ export class ApprovalsService {
     actor: Actor,
     childId: string
   ): Promise<ServiceResult> {
+    /**
+     * ★ 先看**目标动作**在矩阵里的判定：`DENY` 的动作**连申请都不许提**。
+     *
+     * 为什么这层不能省：`POST /approvals` 的屏障二只验 `request_approval`
+     * （两个角色都是 ALLOW），而 `dto.action` 是任意 25 个动作之一。
+     * 不查目标动作，孩子就能「为 `add_rule` 提一条审批」并让家长批准 ——
+     * 矩阵的 `add_rule.child = DENY` 被绕过了。判定仍只来自矩阵（不新增名单）。
+     */
+    if (resolveVerdict(dto.action, actor.role) === 'DENY') {
+      throw new ForbiddenException({
+        code: 'ACTION_NOT_ALLOWED',
+        message:
+          `角色 ${actor.role} 不能发起动作 ${dto.action}（矩阵 DENY）—— ` +
+          '更不能把它包装成一条审批请求。'
+      })
+    }
+
     const outcome = decideRequestOutcome({
       action: dto.action,
       requesterRole: actor.role,
       autoApprove: dto.autoApprove
     })
+
+    /**
+     * 端口入参在**分支之前**拼一次：两个分支（pending / self-approved）必须拿到
+     * **同一份**快照参数，否则「勾选自动审批」与「两步确认」会落出两种 payload。
+     * ★ 这里只搬运形状；「哪些参数对哪个动作有效」由端口判定（`snapshotPayload`）。
+     */
+    const input = {
+      childId,
+      action: dto.action,
+      targetId: dto.targetId,
+      requesterUserId: actor.userId,
+      requesterRole: actor.role,
+      amount: dto.amount,
+      reason: dto.reason,
+      ruleId: dto.ruleId,
+      habitId: dto.habitId,
+      title: dto.title,
+      cost: dto.cost,
+      emoji: dto.emoji
+    }
 
     switch (outcome.kind) {
       case 'REJECTED':
@@ -97,26 +135,14 @@ export class ApprovalsService {
         })
 
       case 'PENDING': {
-        const row = await this.port.createPending({
-          childId,
-          action: dto.action,
-          targetId: dto.targetId,
-          requesterUserId: actor.userId,
-          requesterRole: actor.role
-        })
+        const row = await this.port.createPending(input)
         this.assertTerminalWithoutExecution(row)
         return { statusCode: HttpStatus.ACCEPTED, body: toBody(row) }
       }
 
       case 'SELF_APPROVED': {
         // ★ 硬约束 5：与「他人批准」**同一套**执行路径（端口承诺同一事务 + 同一流水）。
-        const row = await this.port.createSelfApproved({
-          childId,
-          action: dto.action,
-          targetId: dto.targetId,
-          requesterUserId: actor.userId,
-          requesterRole: actor.role
-        })
+        const row = await this.port.createSelfApproved(input)
         // 自批也要面对「前提在落库那一刻已经消失」：端口会落成 `invalidated`
         // （积分不足等），这里必须 409 而不是回 201 —— 回 201 等于谎报"已兑换"。
         this.assertTerminalWithoutExecution(row)
