@@ -13,7 +13,8 @@ import {
   canDecide,
   canReview,
   decideRequestOutcome,
-  isSelfApproved
+  isSelfApproved,
+  withdrawDenial
 } from '../contracts/approval-policy'
 import type { Actor } from '../permissions/actor'
 import {
@@ -54,8 +55,9 @@ function toBody(row: ApprovalRow): Record<string, unknown> {
  *   `approvals-http.test.ts` 里有一条用例专门钉住这一点（把矩阵的行改掉，本文件的
  *   行为必须跟着变；否则说明判定被抄了一份）。
  *
- * ⚠️ 诚实标注：**落库 / 账本流水 / 审计写入属于 W1–W3**，本文件目前只产出
- *   「应当是什么结果」；真正的写入由 `ApprovalsPort` 承担，而它的默认实现是 **501**。
+ * ⚠️ 诚实标注（2026-10-18，W3-A / W3-B）：`ApprovalsPort` 在**有库时**是
+ *   `PrismaApprovalsRepository`（同事务写流水/余额/审计）；**无库时**仍是显式 501。
+ *   本文件只产出「应当是什么结果」与「谁有资格做」，**不做任何持久化**。
  */
 @Injectable()
 export class ApprovalsService {
@@ -136,13 +138,17 @@ export class ApprovalsService {
 
   /**
    * `POST /approvals/:id/decide` —— 批准 / 拒绝（两步式自批也走这里，§4.4 / §4.5）。
+   *
+   * `childId` 来自**屏障一**验过的会话上下文：审批属于哪个孩子是**键的一半**，
+   * 不是事后过滤。跨孩子的 id 与「不存在」返回同一个 404（W3-B）。
    */
   async decide(
     id: string,
     dto: DecideApprovalRequestDto,
-    actor: Actor
+    actor: Actor,
+    childId: string
   ): Promise<ServiceResult> {
-    const row = await this.port.findById(id)
+    const row = await this.port.findById(id, childId)
     if (row === null) {
       throw new NotFoundException({ code: 'APPROVAL_NOT_FOUND', message: `没有这条审批请求：${id}` })
     }
@@ -157,6 +163,8 @@ export class ApprovalsService {
           message: `角色 ${actor.role} 没有批准资格（矩阵 review_approvals）。`
         })
       }
+      // ★ 先判角色，再判过期：没资格的人不该因为“这条过期了”而得到 409。
+      this.assertNotExpired(row)
       throw new ConflictException({
         code: 'ALREADY_DECIDED',
         message: `这条审批已是终态：${row.status}（02 §4.4 乐观锁只认 status = 'pending'）。`
@@ -165,6 +173,7 @@ export class ApprovalsService {
 
     const decided = await this.port.decide({
       id,
+      childId,
       outcome: dto.decision,
       decidedByUserId: actor.userId,
       decidedByRole: actor.role
@@ -178,6 +187,79 @@ export class ApprovalsService {
         selfApproved,
         auditAction: selfApproved ? AUDIT_ACTION_SELF_APPROVED : null
       }
+    }
+  }
+
+  /**
+   * `POST /approvals/:id/withdraw` —— 申请人撤回（`02` §4.1 的 `withdrawn` 终态）。
+   *
+   * ── 三条不能被「宽松实现」掉的语义 ────────────────────────────────────────
+   *   ① **只有申请人本人**：另一位 guardian 也不能替孩子撤回（那是「拒绝」，有它自己的语义）；
+   *      非本人一律 403 `NOT_REQUESTER`，且**不**顺带告诉他这条是否已批（存在性也是信息）。
+   *   ② **只有 `pending`**：已批准/已拒绝/已撤回 ⇒ 409 `ALREADY_DECIDED`（§9.7）。
+   *   ③ **不写账本**：撤回是「取消申请」，不是「冲正」——余额与流水必须一动不动；
+   *      批准后想撤销属于另一条路径（§4.1 没有 `approved → withdrawn`）。
+   *
+   * 判定只在 `withdrawDenial()`（service 与端口消费同一份）；TTL 惰性过期由端口完成，
+   * 它返回 `expired` 行时这里翻成 409 `APPROVAL_EXPIRED`（与 decide 同一口径）。
+   */
+  async withdraw(id: string, actor: Actor, childId: string): Promise<ServiceResult> {
+    const row = await this.port.findById(id, childId)
+    if (row === null) {
+      throw new NotFoundException({ code: 'APPROVAL_NOT_FOUND', message: `没有这条审批请求：${id}` })
+    }
+    this.assertCanWithdraw(row, actor)
+
+    const withdrawn = await this.port.withdraw({
+      id,
+      childId,
+      requesterUserId: actor.userId,
+      requesterRole: actor.role
+    })
+    this.assertTerminalWithoutExecution(withdrawn)
+    return { statusCode: HttpStatus.OK, body: toBody(withdrawn) }
+  }
+
+  /**
+   * `expired` 无论**第一次**判定还是**重试**都必须得到 `APPROVAL_EXPIRED`。
+   *
+   * 若不先看它，重试会落到「状态不是 pending」分支 → `ALREADY_DECIDED` ——
+   * 同一个事实两种错误码，客户端没法统一提示「过期了，重提一条吧」。
+   */
+  private assertNotExpired(row: ApprovalRow): void {
+    if (row.status !== 'expired') return
+    throw new ConflictException({
+      code: 'APPROVAL_EXPIRED',
+      message: '这条审批已超过有效期（02 §4.3 的 72h TTL），不能再批准、拒绝或撤回。',
+      approvalId: row.id,
+      status: row.status
+    })
+  }
+
+  /** 撤回判定的 HTTP 映射（原因来自 `withdrawDenial()`，本文件不另写一套条件）。 */
+  private assertCanWithdraw(row: ApprovalRow, actor: Actor): void {
+    switch (withdrawDenial(row, actor)) {
+      case null:
+        return
+      case 'WITHDRAW_FORBIDDEN_ROLE':
+        throw new ForbiddenException({
+          code: 'FORBIDDEN',
+          message: `角色 ${actor.role} 没有撤回资格（矩阵 withdraw_request）。`
+        })
+      case 'NOT_REQUESTER':
+        throw new ForbiddenException({
+          code: 'NOT_REQUESTER',
+          message:
+            '只有申请人本人可以撤回这条审批。' +
+            '★ 另一位家长想表达不同意请用 decide(rejected) —— 两种语义不能混（02 §4.2）。'
+        })
+      case 'ALREADY_DECIDED':
+        // 先区分“过期”与“别的终态”：同一个 409，code 不同（客户端要给不同提示）。
+        this.assertNotExpired(row)
+        throw new ConflictException({
+          code: 'ALREADY_DECIDED',
+          message: `这条审批已是终态：${row.status}，不能再撤回（02 §4.4 只认 status = 'pending'）。`
+        })
     }
   }
 
@@ -206,7 +288,7 @@ export class ApprovalsService {
     if (row.status === 'expired') {
       throw new ConflictException({
         code: 'APPROVAL_EXPIRED',
-        message: `这条审批已超过有效期（02 §4.3 的 72h TTL），不能再批准或拒绝。`,
+        message: `这条审批已超过有效期（02 §4.3 的 72h TTL），不能再批准、拒绝或撤回。`,
         approvalId: row.id,
         status: row.status
       })

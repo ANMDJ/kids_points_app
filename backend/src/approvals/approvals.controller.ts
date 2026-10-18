@@ -30,7 +30,8 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  *   · `202` 建了 `pending`（§9.3：孩子申请加分 → 202 + `status:pending`）
  *   · `201` 显式自批 → 直接 `approved` ＋ 流水（§9.25）
  *   · `400 SELF_APPROVAL_NOT_ALLOWED` 显式要求自批却没资格（§9.26）
- *   · `200` 批准 / 拒绝成功；`403` 无批准资格；`409 ALREADY_DECIDED` 已决；`404` 没有这条
+ *   · `200` 批准 / 拒绝 / **撤回**成功；`403` 无批准资格 / `403 NOT_REQUESTER` 不是申请人本人撤回；
+ *     `409 ALREADY_DECIDED` 已决（含已撤回后再撤）；`404` 没有这条**或不属于这个孩子**（W3-B 起同一回答）
  *   · `401 UNAUTHENTICATED` 缺 `x-kp-device-id` / `x-kp-child-id`；`401 SESSION_NOT_FOUND` 没会话（有库时由真适配器回答）；
  *     `503 IDENTITY_NOT_IMPLEMENTED` 生产环境（设备凭据尚不可验）；`501 SESSION_LOOKUP_NOT_IMPLEMENTED` **仅无库装配**
  *     ★ **W1-C 起角色/身份不再来自请求头**（`x-kp-role` / `x-kp-user-id` 已废弃、不被读取）
@@ -38,8 +39,10 @@ import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
  *   · **`500 INVALID_MEMBER_RESTRICTIONS` / `INVALID_MEMBER_ROLE`** 成员位形状坏了（**不是**权限问题）
  *   · **`500 INVALID_SESSION_ROLE` / `INVALID_SESSION_EXPIRY` / `SESSION_CHILD_MISMATCH`**
  *     会话行形状坏了（**不是**权限问题，W1-C 起）
- *   · `501 APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`（★ **有库、无库都是** 501）/
+ *   · `501 APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`（**仅无库装配**）/
  *     `MEMBERSHIP_QUERY_NOT_IMPLEMENTED`、`SESSION_LOOKUP_NOT_IMPLEMENTED`（**仅无库装配**）
+ *   ★ W3-A 起有库时审批端口是真 Prisma 适配器（不再 501）；W3-B 起 decide / withdraw
+ *     都按 `x-kp-child-id` 收口 —— 跨孩子的审批 id 与「不存在」同样返回 404。
  *
  * ★ 响应状态码随「判定结果」变化，故由 service 带出来、controller 落到 `res.status()`；
  *   这里**不做任何 if (role …) 判断**（判定只有一处，见 service 头注释）。
@@ -85,7 +88,30 @@ export class ApprovalsController {
     @Req() req: RequestWithActor,
     @Res({ passthrough: true }) res: { status(code: number): unknown }
   ): Promise<unknown> {
-    const result = await this.service.decide(id, dto, this.actorOf(req))
+    const result = await this.service.decide(id, dto, this.actorOf(req), this.childIdOf(req))
+    ApprovalsController.applyStatus(res, result.statusCode)
+    return result.body
+  }
+
+  /**
+   * 申请人撤回（`02` §4.1 的 `withdrawn` 终态）。
+   *
+   * 屏障二：矩阵 `withdraw_request`（guardian / child 都是 ALLOW）。
+   * 「是不是**本人**的申请」不在这里判 —— 那需要读行，属于 service / 端口；
+   * 本端点因此对两个角色都开放，非本人会得到 `403 NOT_REQUESTER`（而不是 403 FORBIDDEN）。
+   *
+   * ★ 为什么单独一个端点，而不是 `decide: { decision: 'withdrawn' }`：
+   *   批准/拒绝是**有权批的人**的动作，撤回是**申请人**的动作；合并会让
+   *   「谁能写哪个状态」变成一句含糊的矩阵，且 `child` 能批自己的申请会绕过 §4.5。
+   */
+  @Post(':id/withdraw')
+  @RequireAction('withdraw_request')
+  async withdraw(
+    @Param('id') id: string,
+    @Req() req: RequestWithActor,
+    @Res({ passthrough: true }) res: { status(code: number): unknown }
+  ): Promise<unknown> {
+    const result = await this.service.withdraw(id, this.actorOf(req), this.childIdOf(req))
     ApprovalsController.applyStatus(res, result.statusCode)
     return result.body
   }

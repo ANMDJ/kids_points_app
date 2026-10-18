@@ -1,13 +1,18 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   NotFoundException
 } from '@nestjs/common'
 import type { ApprovalRequest, AutoReason, MemberRole, Prisma } from '@prisma/client'
 
-import { AUDIT_ACTION_SELF_APPROVED } from '../contracts/approval-policy'
+import {
+  AUDIT_ACTION_SELF_APPROVED,
+  AUDIT_ACTION_WITHDRAWN,
+  withdrawDenial
+} from '../contracts/approval-policy'
 import type { ActionType, Role } from '../contracts/permission-matrix'
 import {
   buildRecordDraft,
@@ -20,7 +25,8 @@ import type {
   ApprovalRow,
   ApprovalsPort,
   CreateApprovalInput,
-  DecideApprovalInput
+  DecideApprovalInput,
+  WithdrawApprovalInput
 } from './approvals.repository'
 
 /**
@@ -56,7 +62,16 @@ import type {
  *     **没有执行器**：建请求时即 400 `APPROVAL_ACTION_NOT_EXECUTABLE`，
  *     而不是先落一条永远批不动的 `pending`（那是死胡同）。
  *   · `expired` 的**扫描任务**尚未落地（`02` §4.3 的 72h TTL）：本文件按需惰性过期
- *     （读/决时判定），不假装有后台 job。
+ *     （读/决/撤回时判定），不假装有后台 job。
+ *
+ * ── W3-B（2026-10-18）：两个改动都在\"别让一家碰另一家\"上 ─────────────────────
+ *   ① **租户隔离**：`findById` / `decide` / `withdraw` 的 `childId` 是**查询条件**
+ *      （`WHERE id = ? AND childId = ?`），不是读出来再比较。跨孩子的 id 与
+ *      \"不存在\"返回同一个 404 —— 否则任何一位 guardian 拿到别家的审批 id 就能
+ *      批准并扣那一家的分（屏障一只验\"你对**请求头里的孩子**是不是成员\"）。
+ *   ② **撤回**：`withdraw()` 只做 `pending → withdrawn`，**不写流水、不动余额**；
+ *      判定与 service 共用 `withdrawDenial()`（角色 → 本人 → 状态），
+ *      并在**行锁下**再验一次（读与写之间可能有人刚好批准）。
  */
 @Injectable()
 export class PrismaApprovalsRepository implements ApprovalsPort {
@@ -183,9 +198,12 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
     })
   }
 
-  /** 读一条（**不**在这里惰性过期：读接口不应改数据；过期在 `decide` 时判定）。 */
-  async findById(id: string): Promise<ApprovalRow | null> {
-    const row = await this.prisma.approvalRequest.findUnique({ where: { id } })
+  /**
+   * 读一条（**不**在这里惰性过期：读接口不应改数据；过期在 `decide` / `withdraw` 时判定）。
+   * ★ `childId` 进 `WHERE`（W3-B）：另一家的审批与「不存在」必须长得一模一样。
+   */
+  async findById(id: string, childId: string): Promise<ApprovalRow | null> {
+    const row = await this.prisma.approvalRequest.findFirst({ where: { id, childId } })
     return row === null ? null : toRow(row)
   }
 
@@ -202,24 +220,21 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
   async decide(input: DecideApprovalInput): Promise<ApprovalRow> {
     const now = new Date()
     // TTL 惰性过期**先独立提交**：若在事务里抛 409，刚写下的 `expired` 会被回滚。
-    await this.expireIfDue(input.id, now)
+    await this.expireIfDue(input.id, input.childId, now)
 
     return this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "ApprovalRequest" WHERE "id" = ${input.id} FOR UPDATE`
+        SELECT "id" FROM "ApprovalRequest"
+        WHERE "id" = ${input.id} AND "childId" = ${input.childId} FOR UPDATE`
       if (locked.length === 0) {
-        throw new NotFoundException({
-          code: 'APPROVAL_NOT_FOUND',
-          message: `没有这条审批请求：${input.id}`
-        })
+        throw approvalNotFound(input.id)
       }
-      const row = await tx.approvalRequest.findUnique({ where: { id: input.id } })
+      const row = await tx.approvalRequest.findFirst({
+        where: { id: input.id, childId: input.childId }
+      })
       if (row === null) {
-        // 行锁拿到了、按 id 却读不到 —— 只可能是我们在同一事务里删了它（不该发生）。
-        throw new NotFoundException({
-          code: 'APPROVAL_NOT_FOUND',
-          message: `没有这条审批请求：${input.id}`
-        })
+        // 行锁拿到了、按 (id, childId) 却读不到 —— 只可能是我们在同一事务里删了它（不该发生）。
+        throw approvalNotFound(input.id)
       }
 
       if (row.status === 'expired') {
@@ -228,7 +243,7 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
           // 与 service 的 `assertTerminalWithoutExecution` 保持同一错误体形状：
           // 同一个 code 不该因为“走了哪条分支”而有时带 status、有时不带（客户端没法统一处理）。
           status: 'expired',
-          message: '这条审批已超过有效期（72h TTL），不能再批准或拒绝（02 §4.3）。'
+          message: '这条审批已超过有效期（72h TTL），不能再批准、拒绝或撤回（02 §4.3）。'
         })
       }
       if (row.status !== 'pending') {
@@ -242,21 +257,7 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
 
       // 竞态兜底：过期扫描可能刚好没抢到；这里让\"过期\"同样留下历史再返回。
       if (row.expiresAt.getTime() <= now.getTime()) {
-        await tx.approvalRequest.updateMany({
-          where: { id: input.id, status: 'pending' },
-          data: { status: 'expired' }
-        })
-        const after = await tx.approvalRequest.findUniqueOrThrow({ where: { id: input.id } })
-        await writeAudit(tx, {
-          childId: row.childId,
-          actorUserId: null,
-          actorRole: null,
-          action: 'approval.expired',
-          targetId: row.id,
-          before: { status: 'pending' },
-          after: { status: 'expired' }
-        })
-        return toRow(after)
+        return this.markExpiredInTx(tx, row)
       }
 
       if (input.outcome === 'rejected') {
@@ -351,6 +352,106 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
       })
       return toRow(after)
     })
+  }
+
+  /**
+   * 申请人撤回（`02` §4.1）：`pending → withdrawn`，**不写流水、不动余额**。
+   *
+   * ★ 与 `decide` 同一个并发姿势：`FOR UPDATE` → 行锁下重验 → 条件 UPDATE。
+   *   否则「读的时候还是 pending、写的时候已经被批准」会把一笔**已扣分**的兑换
+   *   改成撤回 —— 状态与账本互相矛盾（比 409 糟得多）。
+   *
+   * ★ `decidedByUserId` / `decidedAt` **保持 null**：撤回不是「谁的批准决定」，
+   *   写进去会让「谁批的」统计把撤回也算成一次批准。时间线由 `updatedAt`
+   *   ＋ 审计行的 `createdAt` 记录。
+   */
+  async withdraw(input: WithdrawApprovalInput): Promise<ApprovalRow> {
+    const now = new Date()
+    // 与 decide 相同的理由：过期的历史必须**独立提交**，不能在事务里被 409 回滚。
+    await this.expireIfDue(input.id, input.childId, now)
+
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "ApprovalRequest"
+        WHERE "id" = ${input.id} AND "childId" = ${input.childId} FOR UPDATE`
+      if (locked.length === 0) throw approvalNotFound(input.id)
+
+      const row = await tx.approvalRequest.findFirst({
+        where: { id: input.id, childId: input.childId }
+      })
+      if (row === null) throw approvalNotFound(input.id)
+
+      if (row.status === 'expired') throw expiredApproval()
+      // 竞态兜底：expireIfDue 与这里之间又过了期 —— 让过期留下历史再交给 service 翻 409。
+      if (row.expiresAt.getTime() <= now.getTime()) {
+        return this.markExpiredInTx(tx, row)
+      }
+
+      // ★ 判定只有一处：service 与这里都调 `withdrawDenial()`。
+      switch (withdrawDenial(row, { userId: input.requesterUserId, role: input.requesterRole })) {
+        case null:
+          break
+        case 'WITHDRAW_FORBIDDEN_ROLE':
+          throw new ForbiddenException({
+            code: 'FORBIDDEN',
+            message: `角色 ${input.requesterRole} 没有撤回资格（矩阵 withdraw_request）。`
+          })
+        case 'NOT_REQUESTER':
+          throw new ForbiddenException({
+            code: 'NOT_REQUESTER',
+            message: '只有申请人本人可以撤回这条审批（02 §4.1）。'
+          })
+        case 'ALREADY_DECIDED':
+          // 已终态：绝不覆盖（尤其是 approved —— 流水已经写了，不能倒着改状态）。
+          throw alreadyDecided()
+      }
+
+      const updated = await tx.approvalRequest.updateMany({
+        where: { id: input.id, childId: input.childId, status: 'pending' },
+        data: { status: 'withdrawn' }
+      })
+      if (updated.count !== 1) throw alreadyDecided()
+
+      const after = await tx.approvalRequest.findUniqueOrThrow({ where: { id: input.id } })
+      await writeAudit(tx, {
+        childId: row.childId,
+        actorUserId: input.requesterUserId,
+        actorRole: toMemberRole(input.requesterRole),
+        action: AUDIT_ACTION_WITHDRAWN,
+        targetId: row.id,
+        before: { status: 'pending' },
+        after: { status: 'withdrawn' }
+      })
+      return toRow(after)
+    })
+  }
+
+  /**
+   * 事务内把一行 `pending` 置为 `expired` 并写审计，返回过期后的行。
+   *
+   * ★ 调用方必须已持有该行的 `FOR UPDATE` 锁；`count !== 1` 说明状态在眼皮底下变了
+   *   （不该发生）—— 抛 409 让整个事务回滚，绝不假装过期成功。
+   */
+  private async markExpiredInTx(
+    tx: Prisma.TransactionClient,
+    row: ApprovalRequest
+  ): Promise<ApprovalRow> {
+    const updated = await tx.approvalRequest.updateMany({
+      where: { id: row.id, childId: row.childId, status: 'pending' },
+      data: { status: 'expired' }
+    })
+    if (updated.count !== 1) throw alreadyDecided()
+    const after = await tx.approvalRequest.findUniqueOrThrow({ where: { id: row.id } })
+    await writeAudit(tx, {
+      childId: row.childId,
+      actorUserId: null,
+      actorRole: null,
+      action: 'approval.expired',
+      targetId: row.id,
+      before: { status: 'pending' },
+      after: { status: 'expired' }
+    })
+    return toRow(after)
   }
 
 
@@ -528,14 +629,15 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
    * 并发两个请求只有一个 `count=1`，审计不会重复。**独立提交**，不在 decide 事务里
    * 抛异常（否则过期这条历史会被回滚）。
    */
-  private async expireIfDue(id: string, now: Date): Promise<void> {
+  private async expireIfDue(id: string, childId: string, now: Date): Promise<void> {
     const updated = await this.prisma.approvalRequest.updateMany({
-      where: { id, status: 'pending', expiresAt: { lte: now } },
+      // ★ `childId` 也是条件（W3-B）：否则一个跨孩子的请求会把别家的 `pending` 提前置过期。
+      where: { id, childId, status: 'pending', expiresAt: { lte: now } },
       data: { status: 'expired' }
     })
     if (updated.count !== 1) return
-    const row = await this.prisma.approvalRequest.findUnique({
-      where: { id },
+    const row = await this.prisma.approvalRequest.findFirst({
+      where: { id, childId },
       select: { childId: true }
     })
     if (row === null) return
@@ -600,6 +702,7 @@ function toMemberRole(role: Role | 'viewer'): MemberRole {
 function toRow(row: ApprovalRequest): ApprovalRow {
   return {
     id: row.id,
+    childId: row.childId,
     action: row.actionType as ActionType,
     requesterUserId: row.requesterUserId,
     status: row.status,
@@ -651,6 +754,27 @@ function alreadyDecided(): ConflictException {
     message:
       '这条审批已被决过（状态刚被改了）—— 乐观锁未命中。' +
       '★ 绝不覆盖终态：双击\"同意\"的第二次必须 409，而不是再扣一次分（02 §4.4 / §9.10）。'
+  })
+}
+
+/**
+ * 「没有这条」的唯一回答。
+ * ★ 跨孩子的 id **必须**与不存在完全相同（W3-B）：否则 403/404 的差别会告诉
+ *   一位家长「另一家存在这条审批、只是不属于你」——存在性本身就是信息。
+ */
+function approvalNotFound(id: string): NotFoundException {
+  return new NotFoundException({
+    code: 'APPROVAL_NOT_FOUND',
+    message: `没有这条审批请求：${id}`
+  })
+}
+
+/** 过期（与 service 的 `assertTerminalWithoutExecution` 保持同一错误体形状）。 */
+function expiredApproval(): ConflictException {
+  return new ConflictException({
+    code: 'APPROVAL_EXPIRED',
+    status: 'expired',
+    message: '这条审批已超过有效期（72h TTL），不能再批准、拒绝或撤回（02 §4.3）。'
   })
 }
 

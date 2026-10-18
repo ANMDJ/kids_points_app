@@ -38,12 +38,18 @@
  * `adjust_points` / `add_wish`（矩阵 `ALLOW`），自批只是把"自己提的兑换"从
  * "等别人"变成"自己确认"；孩子照旧受 `02` §9.16 / §9.17 的每日配额与 ±50 上限约束。
  *
- * ── 落地状态（2026-10-14 阶段 B4 更新，**上一版标注已被证伪**）────────────
+ * ── 落地状态（2026-10-18，W3-A / W3-B）─────────────────────────────────────
  * ✅ **HTTP 路径已建成并真实消费本文件**：`approvals.controller.ts` → `approvals.service.ts`
- *    （`POST /approvals`、`POST /approvals/:id/decide`），用例 `test/approvals-http.test.ts`
- *    （26 条**真 HTTP**用例，含一条「改矩阵 ⇒ HTTP 行为必须跟着变」——判定若被抄一份就会红）。
- * ⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
- *    （W1/W2），不是静默成功。**别把「判定已上线」读成「审批已验收」。**
+ *    （`POST /approvals`、`POST /approvals/:id/decide`、`POST /approvals/:id/withdraw`）。
+ * ✅ **落库 / 账本流水 / 余额 / 审计已落地（W3-A）**：有库时由
+ *    `PrismaApprovalsRepository` 在**同一事务**里写四张表；无库才显式 501。
+ * ✅ **撤回（W3-B）**：`withdrawDenial()` 是本文件新增的**唯一撤回判定**
+ *    （角色 → 是否本人 → 是否仍 pending），service 与 Prisma 适配器都消费它，
+ *    绝不在两处各写一份「谁能撤回」。
+ * 用例：`test/approvals-http.test.ts`（含「改矩阵 ⇒ HTTP 行为必须跟着变」）、
+ *       `test-db/approvals-execution-db.dbtest.ts`（真库同事务证据）。
+ * ⚠️ 仍有限制：执行器只覆盖 `redeem`；`expired` 只有惰性判定、没有后台扫描任务。
+ *    **别把「判定已上线」读成「审批全部动作已验收」。**
  */
 
 import { resolveVerdict, type ActionType, type Role } from './permission-matrix'
@@ -139,4 +145,52 @@ export function isSelfApproved(decision: {
   decidedByUserId: string | null
 }): boolean {
   return decision.decidedByUserId !== null && decision.decidedByUserId === decision.requesterUserId
+}
+
+/**
+ * 撤回的审计动作名（`02` §4.1 的 `withdrawn` 终态）。
+ * 与 `approval.approved` / `approval.rejected` 分开记：撤回是**申请人**的动作，
+ * 不是批准人的决定 —— 统计「谁批的」时不能把撤回算进去。
+ */
+export const AUDIT_ACTION_WITHDRAWN = 'approval.withdrawn'
+
+/**
+ * 撤回被拒的三种原因。返回**判别式**而不是布尔：
+ * 三种原因对应三种不同的 HTTP 处置（角色不够 403 / 不是本人 403 / 已终态 409），
+ * 用一个 `false` 表示会把它们压成同一句话，客户端无法正确提示。
+ */
+export type WithdrawDenial =
+  | 'WITHDRAW_FORBIDDEN_ROLE' // 矩阵的 withdraw_request 不是 ALLOW（viewer / 未知角色）
+  | 'NOT_REQUESTER' // 不是申请人本人 —— 连「这条还在不在等」都不该知道
+  | 'ALREADY_DECIDED' // 已终态（approved / rejected / withdrawn / invalidated / expired）
+
+/**
+ * 撤回判定（`02` §4.1 / §9.7）：**只有申请人本人**、**只有 `pending`** 能撤回。
+ *
+ * 顺序是语义的一部分：
+ *   ① 先看角色（矩阵 `withdraw_request`，两道角色都是 ALLOW）—— 权限只在矩阵里定义一次；
+ *   ② 再看是不是本人 —— 非本人一律 `NOT_REQUESTER`，**不**顺便告诉他这条已批/已拒
+ *      （跨孩子/跨用户的存在性本身就是信息）；
+ *   ③ 最后看状态 —— 这里只认字面量 `'pending'`，与 §4.4 的乐观锁
+ *      `UPDATE … WHERE status='pending'` 同一口径。
+ *
+ * `expired` 的惰性判定**不在这里**：它需要「现在几点」，属于端口在事务里做的事
+ * （见 `PrismaApprovalsRepository.withdraw`）—— 纯策略不读时钟，才能被稳定地单测。
+ */
+export function withdrawDenial(
+  request: { status: string; requesterUserId: string },
+  actor: { userId: string; role: Role | 'viewer' }
+): WithdrawDenial | null {
+  if (resolveVerdict('withdraw_request', actor.role) !== 'ALLOW') return 'WITHDRAW_FORBIDDEN_ROLE'
+  if (request.requesterUserId !== actor.userId) return 'NOT_REQUESTER'
+  if (request.status !== 'pending') return 'ALREADY_DECIDED'
+  return null
+}
+
+/** 布尔形态（便于断言「能撤回」）；原因请用 `withdrawDenial()`。 */
+export function canWithdraw(
+  request: { status: string; requesterUserId: string },
+  actor: { userId: string; role: Role | 'viewer' }
+): boolean {
+  return withdrawDenial(request, actor) === null
 }

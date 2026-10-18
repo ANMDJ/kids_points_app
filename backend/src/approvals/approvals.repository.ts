@@ -12,10 +12,13 @@ import type { ActionType, Role } from '../contracts/permission-matrix'
  *   ② 端口的默认实现是**显式 501**（见文件末尾）：W1 之前它**不许**假装成功。
  *      这样「审批写入还没落地」是一个**可执行断言**，而不是注释里的一句话。
  *
- * ⚠️ 目前的真实状态（W3-A，2026-10-18）：**有库时**由 `PrismaApprovalsRepository`
- *    实现（同事务写 `ApprovalRequest` + `PointRecord` + 余额 + `AuditLog`）；
+ * ⚠️ 目前的真实状态（W3-A / W3-B，2026-10-18）：**有库时**由 `PrismaApprovalsRepository`
+ *    实现（同事务写 `ApprovalRequest` + `PointRecord` + 余额 + `AuditLog`；撤回只改状态）；
  *    本类只用于**无库装配**（`npm test` / 未配 DATABASE_URL 的进程）—— 显式 501，
  *    绝不假装写入成功。判据只有一处：`prisma/database-enabled.ts` 的 `hasDatabaseUrl()`。
+ *
+ * ★ **每个读写都带 `childId`**（W3-B）：这条审批属于哪个孩子是**键的一半**，
+ *   不是事后过滤器。跨孩子的 id 一律按「不存在」回答（404），绝不泄露另一家的审批存在。
  */
 
 /** Nest 注入令牌（用 unique symbol 避免字符串撞名）。 */
@@ -24,6 +27,12 @@ export const APPROVALS_REPOSITORY = Symbol('APPROVALS_REPOSITORY')
 /** 一条审批请求的**读模型**（只含策略与响应需要的字段，不假装是完整 Prisma 模型）。 */
 export interface ApprovalRow {
   id: string
+  /**
+   * 这条审批**属于哪个孩子**（`ApprovalRequest.childId`）。
+   * ★ 它是**键的一半**（W3-B）：读 / 决 / 撤回都必须拿它与会话里的 `x-kp-child-id` 对齐；
+   *   跨孩子一律返回「不存在」，否则一家家长能批另一家的账。
+   */
+  childId: string
   action: ActionType
   requesterUserId: string
   /** `pending` / `approved` / `rejected` / `withdrawn` / `invalidated` / `expired`（§4.1）。 */
@@ -61,6 +70,8 @@ export interface CreateApprovalInput {
 
 export interface DecideApprovalInput {
   id: string
+  /** 会话里的孩子上下文（屏障一验过）—— 与行上的 `childId` 不等 ⇒ 按不存在处理。 */
+  childId: string
   outcome: 'approved' | 'rejected'
   decidedByUserId: string
   /**
@@ -69,6 +80,19 @@ export interface DecideApprovalInput {
    *   端口自己去 `ChildMember` 再查一遍会多一份真相，而两份迟早不一致。
    */
   decidedByRole: Role | 'viewer'
+}
+
+/**
+ * 撤回（`02` §4.1 的 `withdrawn`）的入参。
+ *
+ * ★ 申请人身份与孩子上下文都由上层传下来：端口**不猜**「谁在撤回」——
+ *   它只负责在**行锁下**再验一遍（与 service 消费同一个 `withdrawDenial()`）。
+ */
+export interface WithdrawApprovalInput {
+  id: string
+  childId: string
+  requesterUserId: string
+  requesterRole: Role | 'viewer'
 }
 
 export interface ApprovalsPort {
@@ -81,14 +105,23 @@ export interface ApprovalsPort {
    */
   createSelfApproved(input: CreateApprovalInput): Promise<ApprovalRow>
 
-  /** 取一条（未找到返回 `null`，**不抛异常** —— 「没有这条」是正常分支，404 由上层决定）。 */
-  findById(id: string): Promise<ApprovalRow | null>
+  /**
+   * 取一条（未找到返回 `null`，**不抛异常** —— 「没有这条」是正常分支，404 由上层决定）。
+   * ★ `childId` 是**查询条件**（W3-B）：另一家的审批与「不存在」必须长得一模一样。
+   */
+  findById(id: string, childId: string): Promise<ApprovalRow | null>
 
   /**
-   * 批准 / 拒绝，**乐观锁**：`UPDATE … WHERE id = ? AND status = 'pending'`（§4.4）。
-   * 未命中（已被决过 / 已过期）⇒ 抛 `ConflictException(ALREADY_DECIDED)`，**绝不覆盖**终端态。
+   * 批准 / 拒绝，**乐观锁**：`UPDATE … WHERE id = ? AND childId = ? AND status = 'pending'`（§4.4）。
+   * 未命中（已被决过 / 已过期 / 不是这个孩子）⇒ 409 或 404，**绝不覆盖**终端态。
    */
   decide(input: DecideApprovalInput): Promise<ApprovalRow>
+
+  /**
+   * 申请人撤回（`02` §4.1）：`pending → withdrawn`，**不写流水、不动余额**。
+   * 只有申请人本人可撤回；已终态 ⇒ 409；TTL 已过 ⇒ 先惰性置 `expired` 再 409。
+   */
+  withdraw(input: WithdrawApprovalInput): Promise<ApprovalRow>
 }
 
 /**
@@ -120,13 +153,19 @@ export class NotImplementedApprovalsRepository implements ApprovalsPort {
     return Promise.resolve(this.fail('createSelfApproved'))
   }
 
-  findById(id: string): Promise<ApprovalRow | null> {
+  findById(id: string, childId: string): Promise<ApprovalRow | null> {
     void id
+    void childId
     return Promise.resolve(this.fail('findById'))
   }
 
   decide(input: DecideApprovalInput): Promise<ApprovalRow> {
     void input
     return Promise.resolve(this.fail('decide'))
+  }
+
+  withdraw(input: WithdrawApprovalInput): Promise<ApprovalRow> {
+    void input
+    return Promise.resolve(this.fail('withdraw'))
   }
 }

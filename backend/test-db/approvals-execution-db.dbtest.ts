@@ -17,6 +17,15 @@
  *      **不产生任何流水**（负余额在库里不应该存在）；
  *   ④ 自批与“他人批准”走**同一条执行路径**，但审计动作不同（`approval.self_approved`）。
  *
+ * ── W3-B 追加（组 D，2026-10-18）─────────────────────────────────────────────
+ *   ⑤ **撤回**（`pending → withdrawn`）：只改状态，**零流水、零余额变化**；
+ *      重复撤回 / 批准后撤回 → 409，审计只有一条；
+ *   ⑥ **跨孩子隔离**：第二家的 guardian 拿着 child1 的审批 id（她自己的
+ *      `x-kp-child-id` 是 child2，能过屏障一）去 decide / withdraw ⇒ **404**，
+ *      child1 的行与账、child2 的账都不许有任何变化；本家 guardian 仍能处理（对照组）。
+ *   ★ 这两条是“离线替身证明不了”的：`findById(id)` 少写一个 `childId` 条件，
+ *     替身测试全绿，真库却会真的批准并扣另一家的分。
+ *
  * 入口：`npm run test:db`；只许对着开发/实验库跑（脚本硬拒绝 `NODE_ENV=production`）。
  */
 import assert from 'node:assert/strict'
@@ -40,24 +49,35 @@ const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 const ID = {
   dad: `dbtest-${RUN}-exec-dad`,
   kid: `dbtest-${RUN}-exec-kid`,
+  mom: `dbtest-${RUN}-exec-mom`,
   child: `dbtest-${RUN}-exec-child`,
+  /** 第二家：只为了证明“拿到别家审批 id”不会越权。 */
+  child2: `dbtest-${RUN}-exec-child-2`,
   devDad: `dbtest-${RUN}-exec-dev-dad`,
   devKid: `dbtest-${RUN}-exec-dev-kid`,
   devDad2: `dbtest-${RUN}-exec-dev-dad-2`,
+  devMom2: `dbtest-${RUN}-exec-dev-mom-2`,
   wishMain: `dbtest-${RUN}-exec-wish-main`,
   wishInsuff: `dbtest-${RUN}-exec-wish-insuff`,
   wishDel: `dbtest-${RUN}-exec-wish-del`,
   wishSelf: `dbtest-${RUN}-exec-wish-self`,
   wishExpire: `dbtest-${RUN}-exec-wish-expire`,
   wishReject: `dbtest-${RUN}-exec-wish-reject`,
-  wishRace: `dbtest-${RUN}-exec-wish-race`
+  wishRace: `dbtest-${RUN}-exec-wish-race`,
+  wishWithdraw: `dbtest-${RUN}-exec-wish-withdraw`,
+  wishNonRequester: `dbtest-${RUN}-exec-wish-non-requester`,
+  wishAfterApprove: `dbtest-${RUN}-exec-wish-after-approve`,
+  wishExpiredWithdraw: `dbtest-${RUN}-exec-wish-expired-withdraw`,
+  wishCross: `dbtest-${RUN}-exec-wish-cross`
 } as const
 
 const H = {
   dad: { 'x-kp-device-id': ID.devDad, 'x-kp-child-id': ID.child },
   kid: { 'x-kp-device-id': ID.devKid, 'x-kp-child-id': ID.child },
   // 第二台家长设备：并发双批准用（同一用户、不同设备 ⇒ 仍是一个 guardian）。
-  dad2: { 'x-kp-device-id': ID.devDad2, 'x-kp-child-id': ID.child }
+  dad2: { 'x-kp-device-id': ID.devDad2, 'x-kp-child-id': ID.child },
+  // 第二家的 guardian：她对自己家（child2）是合法成员 —— 这正是越权的前置条件。
+  mom2: { 'x-kp-device-id': ID.devMom2, 'x-kp-child-id': ID.child2 }
 } as const
 
 /** 起始余额：走**真账本**写进去，而不是直接改 `Child.pointsBalance`。 */
@@ -95,23 +115,29 @@ async function send(
 async function seed(): Promise<void> {
   const future = new Date(Date.now() + 60 * 60_000)
   await prisma.child.create({ data: { id: ID.child, name: `审批执行套件 ${RUN}` } })
+  await prisma.child.create({ data: { id: ID.child2, name: `审批执行套件·第二家 ${RUN}` } })
   await prisma.user.createMany({
     data: [
       { id: ID.dad, displayName: 'DB 执行套件家长' },
-      { id: ID.kid, displayName: 'DB 执行套件孩子' }
+      { id: ID.kid, displayName: 'DB 执行套件孩子' },
+      { id: ID.mom, displayName: 'DB 执行套件第二家家长' }
     ]
   })
   await prisma.childMember.createMany({
     data: [
       { childId: ID.child, userId: ID.dad, role: 'guardian' },
-      { childId: ID.child, userId: ID.kid, role: 'child' }
+      { childId: ID.child, userId: ID.kid, role: 'child' },
+      // ★ 第二家：妈妈只属于 child2。她穿过屏障一（对 child2 是 guardian），
+      //   但**不该**能碰 child1 的任何审批 —— 这就是组 D 的越权场景。
+      { childId: ID.child2, userId: ID.mom, role: 'guardian' }
     ]
   })
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future },
       { deviceId: ID.devKid, childId: ID.child, userId: ID.kid, activeRole: 'child', expiresAt: future },
-      { deviceId: ID.devDad2, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future }
+      { deviceId: ID.devDad2, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future },
+      { deviceId: ID.devMom2, childId: ID.child2, userId: ID.mom, activeRole: 'guardian', expiresAt: future }
     ]
   })
   await prisma.wish.createMany({
@@ -122,7 +148,12 @@ async function seed(): Promise<void> {
       { id: ID.wishSelf, childId: ID.child, title: '画笔', cost: 25, emoji: '🎨' },
       { id: ID.wishExpire, childId: ID.child, title: '漫画书', cost: 15, emoji: '📚' },
       { id: ID.wishReject, childId: ID.child, title: '拼图', cost: 10, emoji: '🧩' },
-      { id: ID.wishRace, childId: ID.child, title: '风筝', cost: 20, emoji: '🪁' }
+      { id: ID.wishRace, childId: ID.child, title: '风筝', cost: 20, emoji: '🪁' },
+      { id: ID.wishWithdraw, childId: ID.child, title: '泡泡机', cost: 20, emoji: '🫧' },
+      { id: ID.wishNonRequester, childId: ID.child, title: '贴画册', cost: 10, emoji: '📒' },
+      { id: ID.wishAfterApprove, childId: ID.child, title: '水彩笔', cost: 15, emoji: '🖌️' },
+      { id: ID.wishExpiredWithdraw, childId: ID.child, title: '小夜灯', cost: 10, emoji: '💡' },
+      { id: ID.wishCross, childId: ID.child, title: '跳绳', cost: 25, emoji: '🪢' }
     ]
   })
 
@@ -143,7 +174,7 @@ async function seed(): Promise<void> {
   await ledger.append(draft)
 
   assert.equal(await prisma.child.count({ where: { id: ID.child } }), 1)
-  assert.equal(await prisma.wish.count({ where: { childId: ID.child } }), 7)
+  assert.equal(await prisma.wish.count({ where: { childId: ID.child } }), 12)
   assert.equal((await prisma.child.findUniqueOrThrow({ where: { id: ID.child } })).pointsBalance, START_BALANCE)
 }
 
@@ -406,15 +437,202 @@ describe('组 B：自批与其它终态', () => {
   })
 })
 
+// ══ 组 D：撤回（withdrawn）与跨孩子隔离（W3-B）═══════════════════════════════════
+describe('组 D：撤回（withdrawn）与跨孩子隔离', () => {
+  it('★ 申请人撤回 pending ⇒ 200 `withdrawn`；不写流水、不扣分、心愿不置已兑换；审计 1 条', async () => {
+    const created = await send('/approvals', {
+      body: { action: 'redeem', targetId: ID.wishWithdraw },
+      headers: H.kid
+    })
+    assert.equal(created.status, 202)
+    const id = String(created.body.id)
+    const before = (await prisma.child.findUniqueOrThrow({ where: { id: ID.child } })).pointsBalance
+
+    const r = await send(`/approvals/${id}/withdraw`, { headers: H.kid })
+    assert.equal(r.status, 200, `撤回到 ${r.status}：${JSON.stringify(r.body)}`)
+    assert.equal(r.body.status, 'withdrawn')
+    assert.equal(r.body.decidedByUserId, null, '撤回不是“谁批准了”，不该写批准人')
+    assert.equal(r.body.executedRecordId, null, '撤回不该产生流水')
+
+    const row = await prisma.approvalRequest.findUniqueOrThrow({ where: { id } })
+    assert.equal(row.status, 'withdrawn')
+    assert.equal(row.decidedByUserId, null, '撤回不该记批准人（统计“谁批的”时会被算成批准）')
+    assert.equal(row.decidedAt, null, '撤回不是 decision —— 时间线看 updatedAt / 审计行')
+    assert.equal(row.executedRecordId, null)
+
+    assert.equal(
+      await prisma.pointRecord.count({ where: { childId: ID.child, idempotencyKey: `approval:${id}` } }),
+      0,
+      '撤回写了流水 —— “取消申请”被实现成了“冲正”'
+    )
+    assert.equal(
+      (await prisma.child.findUniqueOrThrow({ where: { id: ID.child } })).pointsBalance,
+      before,
+      '撤回改了余额 —— 它只该改状态'
+    )
+    assert.equal(
+      (await prisma.wish.findUniqueOrThrow({ where: { id: ID.wishWithdraw } })).redeemed,
+      false,
+      '撤回把心愿置成了已兑换 —— 孩子白白少了这个心愿'
+    )
+    assert.equal(
+      await prisma.auditLog.count({ where: { targetId: id, action: 'approval.withdrawn' } }),
+      1,
+      '撤回没有留审计 —— 之后无法回答“这条为什么没批”'
+    )
+    assert.equal(
+      await prisma.auditLog.count({ where: { targetId: id, action: 'approval.approved' } }),
+      0,
+      '撤回落成了“批准”审计 —— 两种完全不同的语义被混在一起'
+    )
+  })
+
+  it('★ 重复撤回 ⇒ 409 `ALREADY_DECIDED`，审计仍只有 1 条（乐观锁只认 pending）', async () => {
+    const created = await send('/approvals', {
+      body: { action: 'redeem', targetId: ID.wishWithdraw },
+      headers: H.kid
+    })
+    const id = String(created.body.id)
+
+    const first = await send(`/approvals/${id}/withdraw`, { headers: H.kid })
+    assert.equal(first.status, 200)
+    const second = await send(`/approvals/${id}/withdraw`, { headers: H.kid })
+    assert.equal(second.status, 409)
+    assert.equal(second.body.code, 'ALREADY_DECIDED')
+
+    assert.equal(
+      await prisma.auditLog.count({ where: { targetId: id, action: 'approval.withdrawn' } }),
+      1,
+      '第二次撤回写了第二条审计 —— 单条请求只能撤回一次'
+    )
+  })
+
+  it('非申请人撤回 ⇒ 403 `NOT_REQUESTER`，行仍 `pending`（另一位家长该用 rejected）', async () => {
+    const created = await send('/approvals', {
+      body: { action: 'redeem', targetId: ID.wishNonRequester },
+      headers: H.kid
+    })
+    const id = String(created.body.id)
+
+    const r = await send(`/approvals/${id}/withdraw`, { headers: H.dad })
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'NOT_REQUESTER')
+    assert.equal(
+      (await prisma.approvalRequest.findUniqueOrThrow({ where: { id } })).status,
+      'pending',
+      '非本人撤回落了状态 —— 家长的“不同意”会被记成孩子自己反悔'
+    )
+  })
+
+
+  it('§9.7 批准后撤回 ⇒ 409 `ALREADY_DECIDED`（已扣的分不会倒着改）', async () => {
+    const created = await send('/approvals', {
+      body: { action: 'redeem', targetId: ID.wishAfterApprove },
+      headers: H.kid
+    })
+    const id = String(created.body.id)
+    const approved = await send(`/approvals/${id}/decide`, {
+      body: { decision: 'approved' },
+      headers: H.dad
+    })
+    assert.equal(approved.status, 200)
+
+    const r = await send(`/approvals/${id}/withdraw`, { headers: H.kid })
+    assert.equal(r.status, 409)
+    assert.equal(r.body.code, 'ALREADY_DECIDED')
+    assert.equal(
+      (await prisma.approvalRequest.findUniqueOrThrow({ where: { id } })).status,
+      'approved',
+      '撤回覆盖了已批准的终态 —— 流水还在，状态却变成“没批过”'
+    )
+    assert.equal(
+      await prisma.pointRecord.count({ where: { childId: ID.child, idempotencyKey: `approval:${id}` } }),
+      1
+    )
+  })
+
+  it('★ TTL 到期后撤回 ⇒ 409 `APPROVAL_EXPIRED`，库里留 `expired`（与 decide 同一口径）', async () => {
+    const created = await send('/approvals', {
+      body: { action: 'redeem', targetId: ID.wishExpiredWithdraw },
+      headers: H.kid
+    })
+    const id = String(created.body.id)
+    await prisma.approvalRequest.update({ where: { id }, data: { expiresAt: new Date(Date.now() - 1000) } })
+
+    const r = await send(`/approvals/${id}/withdraw`, { headers: H.kid })
+    assert.equal(r.status, 409)
+    assert.equal(r.body.code, 'APPROVAL_EXPIRED')
+
+    const row = await prisma.approvalRequest.findUniqueOrThrow({ where: { id } })
+    assert.equal(row.status, 'expired', '409 之后行仍是 pending —— 惰性过期的历史被回滚了')
+    assert.equal(
+      await prisma.auditLog.count({ where: { targetId: id, action: 'approval.expired' } }),
+      1
+    )
+  })
+
+  it('★ 跨孩子：另一家的 guardian 拿 child1 的审批 id ⇒ decide / withdraw 都是 404，且不动 child1 的账', async () => {
+    const created = await send('/approvals', {
+      body: { action: 'redeem', targetId: ID.wishCross },
+      headers: H.kid
+    })
+    assert.equal(created.status, 202)
+    const id = String(created.body.id)
+    const before = (await prisma.child.findUniqueOrThrow({ where: { id: ID.child } })).pointsBalance
+
+    // H.mom2 的 `x-kp-child-id` 是 child2 —— 她对 child2 是合法 guardian（屏障一会放行），
+    // 但这条审批属于 child1。修复前：service 只按 id 读，会真的批准并扣 child1 的分。
+    const decide = await send(`/approvals/${id}/decide`, {
+      body: { decision: 'approved' },
+      headers: H.mom2
+    })
+    assert.equal(decide.status, 404, `跨孩子 approve 得到 ${decide.status} —— 租户隔离失效`)
+    assert.equal(decide.body.code, 'APPROVAL_NOT_FOUND')
+
+    const withdraw = await send(`/approvals/${id}/withdraw`, { headers: H.mom2 })
+    assert.equal(withdraw.status, 404, `跨孩子 withdraw 得到 ${withdraw.status}`)
+    assert.equal(withdraw.body.code, 'APPROVAL_NOT_FOUND')
+
+    const row = await prisma.approvalRequest.findUniqueOrThrow({ where: { id } })
+    assert.equal(row.status, 'pending', '跨孩子请求改动了 child1 的行')
+    assert.equal(
+      await prisma.pointRecord.count({ where: { childId: ID.child, idempotencyKey: `approval:${id}` } }),
+      0,
+      '跨孩子批准写了流水 —— 别人家的孩子被扣了分'
+    )
+    assert.equal(
+      (await prisma.child.findUniqueOrThrow({ where: { id: ID.child } })).pointsBalance,
+      before
+    )
+    assert.equal(
+      await prisma.pointRecord.count({ where: { childId: ID.child2 } }),
+      0,
+      '第二家的账被写入了 —— 跨孩子请求把数据挂到了错误的 childId'
+    )
+
+    // 对照组：真正的 guardian 仍然能处理（证明上面的 404 不是“谁都动不了”）。
+    const control = await send(`/approvals/${id}/decide`, {
+      body: { decision: 'rejected' },
+      headers: H.dad
+    })
+    assert.equal(control.status, 200, '对照失败：本家的家长也处理不了这条审批')
+    assert.equal(control.body.status, 'rejected')
+  })
+})
+
 // ══ 组 C：账本自洽 —— 所有执行路径合起来仍然是一条可对账的链 ═══════════════════
 describe('组 C：跑完这一圈之后，账本仍然自洽（I2）', () => {
   it('★ `Σ流水 == Child.pointsBalance`，且链上没有断裂', async () => {
     const rows = await ledger.readChain(ID.child)
     assert.deepEqual(verifyBalanceChain(rows), [], 'I2 断了 —— 审批写入了无法对账的余额')
-    assert.equal(rows.length, 4, '应当有 4 笔：初始 100、批准 -30、自批 -25、并发批准 -20')
+    assert.equal(
+      rows.length,
+      5,
+      '应当有 5 笔：初始 100、批准 -30、自批 -25、并发批准 -20、批准后撤回那条的 -15（撤回本身不写）'
+    )
 
     const balance = await ledger.readBalance(ID.child)
-    assert.equal(balance, START_BALANCE - 30 - 25 - 20)
+    assert.equal(balance, START_BALANCE - 30 - 25 - 20 - 15)
     assert.equal(rows[rows.length - 1].balanceAfter, balance, '链尾 balanceAfter 与余额不一致（B6 那种“账不平”）')
   })
 })

@@ -23,7 +23,7 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, it } from 'node:test'
 
-import { ConflictException, type INestApplication } from '@nestjs/common'
+import { ConflictException, NotFoundException, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 
 import { applyGlobalPipes } from '../src/app.setup'
@@ -125,6 +125,7 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
     seq += 1
     const created: ApprovalRow = {
       id: `ap-${seq}`,
+      childId: input.childId,
       action: input.action,
       requesterUserId: input.requesterUserId,
       status,
@@ -147,15 +148,21 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
       // 同一事务：一落库就是 approved，且批准人 == 申请人（自批的唯一判据，不新增字段）
       return build(input, 'approved', input.requesterUserId)
     },
-    async findById(id) {
-      calls.push({ method: 'findById', input: id })
-      return rows.get(id) ?? null
+    async findById(id, childId) {
+      calls.push({ method: 'findById', input: { id, childId } })
+      const row = rows.get(id)
+      // ★ 与真适配器同一语义（W3-B）：`childId` 是查询条件，不是事后比较。
+      return row !== undefined && row.childId === childId ? row : null
     },
     async decide(input) {
       calls.push({ method: 'decide', input })
       const existing = rows.get(input.id)
-      // 乐观锁未命中（已被决过 / 不存在）⇒ 409，绝不覆盖终态（02 §4.4）
-      if (existing === undefined || existing.status !== 'pending') {
+      // 乐观锁未命中（已被决过 / 不存在 / 不是这个孩子）⇒ 409，绝不覆盖终态（02 §4.4）
+      if (
+        existing === undefined ||
+        existing.childId !== input.childId ||
+        existing.status !== 'pending'
+      ) {
         throw new ConflictException({ code: 'ALREADY_DECIDED' })
       }
       const updated: ApprovalRow = {
@@ -163,6 +170,20 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
         status: input.outcome,
         decidedByUserId: input.decidedByUserId
       }
+      rows.set(updated.id, updated)
+      return updated
+    },
+    async withdraw(input) {
+      calls.push({ method: 'withdraw', input })
+      const existing = rows.get(input.id)
+      if (existing === undefined || existing.childId !== input.childId) {
+        throw new NotFoundException({ code: 'APPROVAL_NOT_FOUND' })
+      }
+      if (existing.status !== 'pending') {
+        throw new ConflictException({ code: 'ALREADY_DECIDED' })
+      }
+      // 撤回**不写账本**：替身里除了状态，什么都不改（真适配器同理）。
+      const updated: ApprovalRow = { ...existing, status: 'withdrawn' }
       rows.set(updated.id, updated)
       return updated
     }
@@ -585,6 +606,194 @@ describe('生产闸门与 decide 边界', () => {
     assert.equal(r.status, 200)
     assert.equal(r.body.selfApproved, false)
     assert.equal(r.body.auditAction, null, '别人批准不该记成 self_approved')
+  })
+
+  it('★ W3-B：跨孩子的审批 id **与不存在相同** → 404，且绝不调用 decide（不扣别家的分）', async () => {
+    // 「另一家」的一条 pending：`child-2`，申请人 u-other。
+    port.rows.set('ap-other', {
+      id: 'ap-other',
+      childId: 'child-2',
+      action: 'redeem',
+      requesterUserId: 'u-other',
+      status: 'pending',
+      decidedByUserId: null,
+      executedRecordId: null
+    })
+
+    const r = await send(url, '/approvals/ap-other/decide', {
+      body: { decision: 'approved' },
+      headers: GUARDIAN // 屏障一看的是 x-kp-child-id = child-1 —— 他对 child-1 是合法 guardian
+    })
+    assert.equal(
+      r.status,
+      404,
+      '跨孩子的审批被批准了 —— 家长只要拿到别家的 id 就能扣别人家的分（租户隔离失效）'
+    )
+    assert.equal(r.body.code, 'APPROVAL_NOT_FOUND')
+    assert.equal(
+      port.calls.some((c) => c.method === 'decide'),
+      false,
+      '跨孩子却调用了 decide —— service 只是把 id 原样交给端口，没有把 childId 当键'
+    )
+    // 读也必须带 childId（否则“先读后比”还能被竞态绕开）。
+    const read = port.calls.find((c) => c.method === 'findById')
+    assert.deepEqual(read?.input, { id: 'ap-other', childId: CHILD_ID })
+    assert.equal(port.rows.get('ap-other')?.status, 'pending', '跨孩子请求改动了别家的行')
+  })
+
+  it('已是 `expired` 的 decide（重试）→ 409 `APPROVAL_EXPIRED`，不是 `ALREADY_DECIDED`', async () => {
+    port.rows.set('ap-expired', {
+      id: 'ap-expired',
+      childId: CHILD_ID,
+      action: 'redeem',
+      requesterUserId: 'u-dad',
+      status: 'expired',
+      decidedByUserId: null,
+      executedRecordId: null
+    })
+    const r = await send(url, '/approvals/ap-expired/decide', {
+      body: { decision: 'approved' },
+      headers: GUARDIAN
+    })
+    assert.equal(r.status, 409)
+    assert.equal(
+      r.body.code,
+      'APPROVAL_EXPIRED',
+      '过期重试变成了 ALREADY_DECIDED —— 同一个事实两种错误码，客户端无法统一提示'
+    )
+    assert.equal(port.calls.some((c) => c.method === 'decide'), false)
+  })
+})
+
+
+// ── 组 F：撤回（W3-B）—— 第 5 个终态只能由申请人本人、在 pending 上触发 ─────────
+describe('撤回（W3-B）：`withdrawn` 是申请人的动作，不是批准', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+
+  before(async () => {
+    port = makeFakePort()
+    ;({ app, url } = await startApp(port))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+  })
+
+  /** 建一条请求并返回 id（替身不校验 targetId / 执行器，只测状态机）。 */
+  async function create(headers: Record<string, string>, action = 'redeem'): Promise<string> {
+    const r = await send(url, '/approvals', { body: { action }, headers })
+    assert.ok(r.status === 202, `建请求失败：${r.status} ${JSON.stringify(r.body)}`)
+    return String(r.body.id)
+  }
+
+  it('★ 申请人撤回自己的 pending → 200 `withdrawn`；端口收到的是**申请人 + childId**', async () => {
+    const id = await create(GUARDIAN)
+    const r = await send(url, `/approvals/${id}/withdraw`, { headers: GUARDIAN })
+
+    assert.equal(r.status, 200)
+    assert.equal(r.body.status, 'withdrawn')
+    assert.equal(r.body.decidedByUserId, null, '撤回不是“谁批准了”，不该写批准人')
+    assert.equal(r.body.executedRecordId, null, '撤回不该产生流水')
+
+    const call = port.calls.find((c) => c.method === 'withdraw')
+    assert.deepEqual(call?.input, {
+      id,
+      childId: CHILD_ID,
+      requesterUserId: 'u-dad',
+      requesterRole: 'guardian'
+    })
+    assert.equal(port.rows.get(id)?.status, 'withdrawn')
+  })
+
+  it('★ 另一位家长撤回 → 403 `NOT_REQUESTER`，且**不调用**端口（语义必须用 rejected）', async () => {
+    const id = await create(GUARDIAN) // 申请人 u-dad
+    const r = await send(url, `/approvals/${id}/withdraw`, { headers: OTHER_GUARDIAN })
+
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'NOT_REQUESTER')
+    assert.equal(
+      port.calls.some((c) => c.method === 'withdraw'),
+      false,
+      '非本人却走到了写库 —— “谁能撤回”被抄成了 controller 里的角色判断'
+    )
+    assert.equal(port.rows.get(id)?.status, 'pending')
+  })
+
+  it('孩子撤回**自己**的申请 → 200（矩阵 `withdraw_request` 对孩子是 ALLOW）', async () => {
+    const id = await create(CHILD, 'request_redeem')
+    const r = await send(url, `/approvals/${id}/withdraw`, { headers: CHILD })
+    assert.equal(r.status, 200)
+    assert.equal(r.body.status, 'withdrawn')
+    assert.equal((port.calls.find((c) => c.method === 'withdraw')?.input as { requesterUserId: string }).requesterUserId, 'u-kid')
+  })
+
+  it('§9.7 批准后撤回 → 409 `ALREADY_DECIDED`，且**不调用** withdraw（已扣的分不会倒着改）', async () => {
+    const id = await create(GUARDIAN)
+    const ok = await send(url, `/approvals/${id}/decide`, { body: { decision: 'approved' }, headers: GUARDIAN })
+    assert.equal(ok.status, 200)
+    port.calls.length = 0
+
+    const r = await send(url, `/approvals/${id}/withdraw`, { headers: GUARDIAN })
+    assert.equal(r.status, 409)
+    assert.equal(r.body.code, 'ALREADY_DECIDED')
+    assert.equal(port.calls.some((c) => c.method === 'withdraw'), false)
+  })
+
+  it('已撤回再撤 → 409 `ALREADY_DECIDED`（只认 pending，与 §4.4 同一口径）', async () => {
+    const id = await create(GUARDIAN)
+    assert.equal((await send(url, `/approvals/${id}/withdraw`, { headers: GUARDIAN })).status, 200)
+    const again = await send(url, `/approvals/${id}/withdraw`, { headers: GUARDIAN })
+    assert.equal(again.status, 409)
+    assert.equal(again.body.code, 'ALREADY_DECIDED')
+  })
+
+  it('已是 `expired` 的撤回（重试）→ 409 `APPROVAL_EXPIRED`（与 decide 同一口径）', async () => {
+    port.rows.set('ap-expired', {
+      id: 'ap-expired',
+      childId: CHILD_ID,
+      action: 'redeem',
+      requesterUserId: 'u-dad',
+      status: 'expired',
+      decidedByUserId: null,
+      executedRecordId: null
+    })
+    const r = await send(url, '/approvals/ap-expired/withdraw', { headers: GUARDIAN })
+    assert.equal(r.status, 409)
+    assert.equal(r.body.code, 'APPROVAL_EXPIRED')
+    assert.equal(port.calls.some((c) => c.method === 'withdraw'), false)
+  })
+
+  it('不存在的 id → 404 `APPROVAL_NOT_FOUND`', async () => {
+    const r = await send(url, '/approvals/ap-nope/withdraw', { headers: GUARDIAN })
+    assert.equal(r.status, 404)
+    assert.equal(r.body.code, 'APPROVAL_NOT_FOUND')
+  })
+
+  it('★ 跨孩子撤回 → 404（与不存在同一回答），端口 withdraw 未被调用', async () => {
+    port.rows.set('ap-other', {
+      id: 'ap-other',
+      childId: 'child-2',
+      action: 'redeem',
+      requesterUserId: 'u-dad', // 同一个人，但这条属于**另一家**
+      status: 'pending',
+      decidedByUserId: null,
+      executedRecordId: null
+    })
+    const r = await send(url, '/approvals/ap-other/withdraw', { headers: GUARDIAN })
+    assert.equal(r.status, 404)
+    assert.equal(r.body.code, 'APPROVAL_NOT_FOUND')
+    assert.equal(port.calls.some((c) => c.method === 'withdraw'), false)
+  })
+
+  it('viewer 撤回 → 403 `MEMBER_NOT_FOUND`（屏障一先于矩阵，02 §3）', async () => {
+    const r = await send(url, '/approvals/ap-whatever/withdraw', { headers: VIEWER })
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'MEMBER_NOT_FOUND')
   })
 })
 

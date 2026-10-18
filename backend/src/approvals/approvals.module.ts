@@ -58,6 +58,10 @@ export function resolveApprovalsRepositoryClass(hasDatabase: boolean): Type<Appr
  *     `Child.pointsBalance` ＋ `AuditLog`；无库 ⇒ 仍显式 501（不假装写入成功）。
  *     即：**有库时\"批准\"真的会扣分**，且双击只扣一次（乐观锁 + 幂等键）。
  *     ⚠️ 执行器目前只覆盖 `redeem`（兑换心愿）；其余动作建请求时 400，不做\"永远批不动的 pending\"。
+ *   · **W3-B（2026-10-18）**：① `decide` / `withdraw` / `findById` 全部按 `childId` 收口，
+ *     跨孩子的审批 id 与「不存在」一样返回 **404**（此前只验请求头里的孩子是不是自己的，
+ *     拿到别家 id 就能批别家的账）；② 新增 `POST /approvals/:id/withdraw` —— 第 5 个终态
+ *     `withdrawn` 可达，**只有申请人本人**能撤回，且**不写流水、不动余额**；重复撤回 → 409。
  *   · 身份是**服务端确立的**（W1-C，2026-10-15）：`DeviceSessionGuard` 按
  *     `x-kp-device-id` ＋ `x-kp-child-id` 查会话 ⇒ 角色/ userId **由会话行给出**
  *     （客户端自报的 `x-kp-role` / `x-kp-user-id` 已废弃、不被读取）。生产 503
@@ -71,7 +75,7 @@ export function resolveApprovalsRepositoryClass(hasDatabase: boolean): Type<Appr
  *     即：**有库时这三道屏障的输入全部来自库**——`x-kp-role` / `x-kp-user-id` 早已不被读取，
  *     现在连"有没有这个会话""是不是这个孩子的成员"也都是查出来的。
  *   · **W2-D（2026-10-16，第二处）**：本模块**也**改成动态模块（`register({ hasDatabase? })`）。
- *     它自己**不选实现**（`ApprovalsPort` 仍是显式 501），它做的是把"在哪个世界"这个决定
+ *     它当时**不选实现**（`ApprovalsPort` 当时仍是显式 501；✅ W3-A 起自己选），它做的是把"在哪个世界"这个决定
  *     **向下传递**：同一个 `hasDatabase` 交给 `DeviceSessionModule` / `MembershipModule`。
  *     ★ 为什么非传不可（这不是整齐，是**可复现性**）：那两个子模块按环境推断，
  *     而 `Test.createTestingModule({ imports: [ApprovalsModule] })` 的用例**够不着**它们的

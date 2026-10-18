@@ -205,7 +205,7 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   （并 `imports: [PrismaModule]`，共用全仓唯一连接池）；**没有** ⇒ 两个 `NotImplemented*Repository`
   （**显式 501**，且 `PrismaService` **不会被实例化**）。`app.module.ts` 仍用 `register()`（不传参 ⇒ 按环境推断）。
 - **`ApprovalsModule` 也变成动态模块，但它只做转发**：`options.hasDatabase ?? hasDatabaseUrl()` 之后
-  **原样**交给上述两个子模块；它**自己不选实现** ⇒ **`ApprovalsPort` 仍是 501（★ 有库也是）** ——
+  **原样**交给上述两个子模块；它**当时不选实现** ⇒ **`ApprovalsPort` 在 W2-D 时仍是 501（★ 有库也是）**（✅ W3-A 起改为自己选实现，见 §4.5）——
   三个端口里**唯一**还留在账上的那个。
 - **为什么非转发不可**（不是整齐，是**可复现性**）：两个子模块若各自按环境推断，
   `Test.createTestingModule({ imports: [ApprovalsModule] })` 的离线用例**够不着**它们的 options ——
@@ -225,8 +225,8 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   `@@unique` 的 **P2002** 真的会拦、过期行照样读得出、组 D 用真 `register()` 建图取端口读真库）。
 - ★ **第三半（2026-10-17 补）**：`test-db/approvals-db.dbtest.ts` —— **真库 × 真 HTTP**（真 `AppModule` ＋ 真守卫链 ＋
   真 `fetch`）。前两半都够不着这一格：离线 HTTP 用例把世界钉在无库、真库用例只验适配器**不发请求**；
-  于是"有库时最终状态码是什么"此前只有**预期**。现在 12 条把它钉住（含"`ApprovalsPort` 有库也是 501"的端到端证据）。
-- **仍未落地**：`ApprovalsPort`（有库也是 501）、§7 四行**写路径**（PIN／锁／审计／TTL 刷新）、
+  于是"有库时最终状态码是什么"此前只有**预期**。现在 12 条把它钉住（含"`ApprovalsPort` 有库也是 501"的端到端证据；⚠️ 那条 501 已被 W3-A 取代，见 §4.5）。
+- **仍未落地（W2-D 当时）**：~~`ApprovalsPort`（有库也是 501）~~（✅ W3-A 已接真库）、§7 四行**写路径**（PIN／锁／审计／TTL 刷新）、
   `deviceId` 的**凭据认证**（生产 **503**，未变）。
 
 ### ✅ W1-C 落地注（2026-10-15）：身份（Identity）**也是真的了**
@@ -274,7 +274,7 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   一注入 `PrismaService`，**无库 CI 会在启动阶段就崩**。~~
   → ✅ **W2-D（2026-10-16）已结清**：**有库** ⇒ `PrismaDeviceSessionRepository`（真查 `DeviceSession`，
   复合唯一键 `(deviceId, childId)`）；**无库** ⇒ 仍 501。
-  ★ **`ApprovalsPort` 不在这笔账里** —— 它**仍是 501（有库也是）**（W2-D 的模块只把世界转发给另两个子模块）。
+  ★ **`ApprovalsPort` 不在这笔账里（W2-D 当时）** —— 它**当时仍是 501（有库也是）**（W2-D 的模块只把世界转发给另两个子模块）；✅ **W3-A 已结清**。
   ⇒ **"身份由服务端确立"说的是机制，不是"已经能登录了"**（`deviceId` 仍不可验证 ⇒ 生产 503，见下一条）。
 - ⚠️ **`deviceId` 本身不可验证** ⇒ 生产 503（见上表）。**"身份层已完成"这句话现在还不能说**，
   能说的是**"角色不再由客户端自选"**。
@@ -323,6 +323,10 @@ Prisma 无法表达 `Json` 的内部形状，所以定形落在应用层）。�
 ```
 
 **终态集合**：`approved` / `rejected` / `withdrawn` / `invalidated` / `expired`（TTL 触发）
+
+> ✅ **W3-B（2026-10-18）：5 个终态全部可达。** `withdrawn` 走
+> `POST /approvals/:id/withdraw`（§4.6）；`invalidated` 由批准时的前提复查产生；
+> `expired` 目前只有**惰性判定**（读/决/撤回时顺手判），后台扫描任务尚未落地。
 
 ### 4.2 为什么需要 `invalidated`（不能只靠 `rejected`）
 
@@ -424,20 +428,28 @@ model ApprovalRequest {
 故孩子的申请照旧受 §9.16 / §9.17 的每日配额与 ±50 上限约束 —— **自批不是绕过配额的通道**。
 
 **唯一实现点**：`backend/src/contracts/approval-policy.ts`
-（`canReview()` / `canSelfApprove()` / `decideRequestOutcome()` / `canDecide()` / `isSelfApproved()`），
-配 `backend/test/approval-policy.test.ts`（10 条性质测试：含"不勾选一律 `pending`"与
+（`canReview()` / `canSelfApprove()` / `decideRequestOutcome()` / `canDecide()` / `isSelfApproved()`；
+W3-B 起再加 `withdrawDenial()` / `canWithdraw()`），
+配 `backend/test/approval-policy.test.ts`（12 条性质测试：含"不勾选一律 `pending`"与
 "孩子自批被拒"两条会失败的对照）。
-**落地状态（2026-10-14 阶段 B4，**上一版标注已被证伪**）**：✅ **HTTP 路径已建成并消费本文件** ——
-`POST /approvals`（本文 §9.3 / §9.25 / §9.26 / §9.27 的状态码口径）与
-`POST /approvals/:id/decide`（§9.10 的「双击同意 → 409」等），实现见 `backend/src/approvals/`，
-用例见 `backend/test/approvals-http.test.ts`（**真起 Nest 服务 + 真发 HTTP 请求**）。
-⚠️ 但**落库 / 账本流水 / 审计写入仍未落地**：`ApprovalsPort` 的默认实现是**显式 501**
-（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不是静默成功。
-★ **W2-D（2026-10-16）之后这条仍在，且是三个端口里唯一的那个**：本模块已改成**动态模块**并把
-`hasDatabase` **转发**给身份层 / 屏障一两个子模块，但它**自己不选实现** ⇒ **有库世界也仍是 501**。
-即：现在（有库时）"你是谁 / 是不是这个孩子的成员"都**真的查过库**了，而"这条审批有没有落库"**仍然没有**。
-★ ✅ **2026-10-17 端到端实测**：合法 guardian 的 `POST /approvals` 与 `POST /approvals/:id/decide` 都返回
-**501 `APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`**（此前守卫全过、真库读通）—— 见 `test-db/approvals-db.dbtest.ts` 组 E。
+**落地状态（2026-10-18，W3-A / W3-B —— 这一段是当前事实，下面的旧标注已不再成立）**：
+✅ **HTTP 路径**：`POST /approvals`、`POST /approvals/:id/decide`，
+W3-B 新增 `POST /approvals/:id/withdraw`；用例 `backend/test/approvals-http.test.ts`
+（**真起 Nest 服务 + 真发 HTTP 请求**）。
+✅ **落库（W3-A）**：有库 ⇒ `PrismaApprovalsRepository`，批准 / 自批在**同一事务**里写
+`ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`；
+无库 ⇒ **显式 501**（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`），不假装成功。
+✅ **撤回（W3-B）**：第 5 个终态 `withdrawn` 可达 —— **只有申请人本人**、**只有 `pending`**；
+`decidedByUserId` / `decidedAt` 保持 `null`（撤回不是批准决定）；**不写流水、不动余额**；
+重复撤回 / 批准后撤回 ⇒ `409 ALREADY_DECIDED`；TTL 已过 ⇒ `409 APPROVAL_EXPIRED`；
+审计动作 `approval.withdrawn`。
+✅ **租户隔离（W3-B）**：`findById` / `decide` / `withdraw` 都把 `childId` 放进 `WHERE`。
+跨孩子的审批 id 与「不存在」返回**同一个 404** —— 修复前 service 只按 id 读，
+任何一位 guardian 拿到别家 id 就能批准并扣别家的分。
+⚠️ **历史留档（已被 W3-A 取代，别照着做）**：W2-D 之后 `ApprovalsPort` 仍是 501（有库也是）；
+2026-10-17 的端到端实测结论正是「合法 guardian 也 501」—— 那是 W3-A 之前的真实状态。
+⚠️ **仍有限制**：执行器只覆盖 `redeem`；`expired` 只有惰性判定（无后台扫描任务）；
+设备凭据仍不可验证（`NODE_ENV=production` ⇒ 503，等 L2 的会话 token）。
 ★ 身份口径**已于 W1-C 更换**（2026-10-15）：W1-A/W1-B 时代的
 `x-kp-role` / `x-kp-user-id` / `x-kp-child-id` **三个自报头**已改为
 `x-kp-device-id` / `x-kp-child-id` **两个头 ＋ 服务端会话行**（角色与 userId 由 `DeviceSession` 给出，
@@ -458,6 +470,30 @@ fail-closed：此刻**没有人**被放过去）；缺 `x-kp-child-id` → **401
 > `removed` ⇒ 403 `MEMBER_REMOVED`、多余键 ⇒ **400**（`statusCode:400`，无业务 code）、
 > 合法 guardian ⇒ **501 `APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`**。同一矩阵已入库为
 > `backend/test-db/approvals-db.dbtest.ts`（12 条，`npm run test:db`；含"空 `DATABASE_URL` ⇒ 真 AppModule 起不来"一条）。
+
+### 4.6 撤回（`withdrawn`，W3-B）—— **申请人的动作，不是「批准」**
+
+`POST /approvals/:id/withdraw`（矩阵动作 `withdraw_request`，两个角色都是 `ALLOW`）。
+
+| 判据 | 结果 | 为什么 |
+|---|---|---|
+| 不是申请人本人 | `403 NOT_REQUESTER` | 另一位家长想表达不同意，语义是 `decide(rejected)`；混用会让孩子以为「是我自己反悔的」 |
+| 状态不是 `pending` | `409 ALREADY_DECIDED` | 与 §4.4 同一乐观锁口径；**绝不**覆盖已批准（流水已经写了） |
+| TTL 已过 | `409 APPROVAL_EXPIRED` | 先把行惰性置 `expired`（**独立提交**），再拒绝 —— 历史必须留下 |
+| 孩子的审批挂到别家 id | `404 APPROVAL_NOT_FOUND` | `childId` 是**查询条件**：跨孩子与不存在必须长得一模一样 |
+
+**写什么、不写什么**：
+
+- 只把 `ApprovalRequest.status` 改成 `withdrawn`；
+- **不写** `PointRecord`、**不动** `Child.pointsBalance`、**不改** `Wish.redeemed`
+  —— 撤回是「取消申请」，不是「冲正」；
+- `decidedByUserId` / `decidedAt` 保持 `null`（撤回不是批准决定），时间线看 `updatedAt`
+  与审计行；审计动作 `approval.withdrawn`；
+- 并发：`FOR UPDATE` ＋ `WHERE status='pending'` ⇒ 与「家长同一刻点同意」只有一个赢家，
+  输家 409，绝不会出现「已扣分却显示撤回」。
+
+> ★ 这一条修的是**第 5 个终态不可达**：此前矩阵有 `withdraw_request`、状态机文档也写了
+> `withdrawn`，但**没有任何端点/端口方法**——孩子只能等 72h 过期。
 
 ---
 
@@ -721,7 +757,7 @@ rec#1 的 (ruleId, ruleVersion) 指向空
 - ⚠️ **I2 在真库套件里的可见边界**：套件**故意不做全库 I2 扫描** —— 它自己就会造"并列 / 未来时间戳"的脏行，
   全库扫必红。真库侧只做**计数类红线**（全库无负余额、孤儿版本引用 = 0），
   逐笔滚动求和只对**每个用例自己新建的孩子**做。
-- **仍未落地（W2-D 之后收窄）**：三个端口里**只剩一个** —— `ApprovalsPort` **仍是 501（★ 有库也是）**；
+- **仍未落地（W2-D 当时的账；✅ 已被 W3-A 结清）**：当时三个端口里只剩 `ApprovalsPort` **501（★ 有库也是）**；
   `LEDGER_REPOSITORY` 那一半已于 **W2-C** 接好、`Membership` / `DeviceSession` 两个端口已于 **W2-D** 接真库（见下）。
   另外：真库套件会**写入真实流水且删不掉**（`DELETE` 被 REVOKE、`Child` 是 `onDelete: Restrict`），
   故用随机 `RUN` 前缀隔离，且入口有 `NODE_ENV=production` 拒跑的守卫。
@@ -922,4 +958,7 @@ model InviteCode {
 | 9.28 | 客户端自报 `x-kp-role: guardian`，而**服务端会话**是 `child` | 仍按 `child` 判定（自报头**被忽略**，不产生任何提权）（✅ W1-C：`device-session-http.test.ts` 组 A / `approvals-http.test.ts`） |
 | 9.29 | 缺 `x-kp-device-id` 或 `x-kp-child-id` | **401 `UNAUTHENTICATED`**（**不**退化成匿名 `child`）（✅ W1-C：`device-session-http.test.ts` 组 A） |
 | 9.30 | 会话查询适配器**忽略** `childId` 参数（返回别人档案的行） | **500 `SESSION_CHILD_MISMATCH`**，**不放行**（✅ W1-C：内核组 D ＋ `w1c-canfail.mjs` ④） |
+| 9.31 | 申请人撤回自己的 `pending`（W3-B） | `200 withdrawn`；**零流水、余额不变、心愿不置已兑换**；审计 `approval.withdrawn`（✅ `approvals-execution-db` 组 D） |
+| 9.32 | 另一位 guardian 撤回 / 已批准后撤回（W3-B） | `403 NOT_REQUESTER` / `409 ALREADY_DECIDED`；行状态不变（✅ 离线组 F ＋ 真库组 D） |
+| 9.33 | **另一家的 guardian** 拿别家审批 id 去 decide / withdraw（W3-B） | **`404 APPROVAL_NOT_FOUND`**，两家账本均无变化（`childId` 是查询键，不是事后过滤） |
 

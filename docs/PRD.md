@@ -381,10 +381,13 @@ User（自然人）
 | 撤回同意 | `GuardianConsent` 撤回后**全链路写入停止**，导出仍可下载 |
 | 孩子限制 | 孩子不可扣分（`403 CHILD_CANNOT_DEDUCT`）；每日申请加分有配额；单次金额 ±50 上限 |
 
-**验收标准**：9.1–**9.27** 全部通过（含 9.9 Agent 伪造角色 → `401` 整份 plan 作废；
+| 撤回 | 申请人本人可撤回 `pending`（`POST /approvals/:id/withdraw`）：`withdrawn`；**不写流水、不动余额**；另一位家长撤回 → `403 NOT_REQUESTER`；已终态 → `409`；跨孩子 → `404`（W3-B） |
+| 租户隔离 | 审批的读 / 批 / 撤回都以 `childId` 为查询键：另一家的审批 id 与「不存在」同样 `404`（W3-B） |
+
+**验收标准**：9.1–**9.33** 全部通过（含 9.9 Agent 伪造角色 → `401` 整份 plan 作废；
 9.22 成员级 `restrictions` 试图放宽 `DENY` 被忽略；**9.25–9.27 自批三条** —— 家长显式自批 → 直接 `approved`；
 孩子传 `autoApprove` → `400 SELF_APPROVAL_NOT_ALLOWED`；单家长家庭**不勾选** → `pending`（**不自动批准**）、
-本人二次确认 → `approved`）。
+本人二次确认 → `approved`；**9.31–9.33 撤回与跨孩子隔离**）。
 
 ---
 
@@ -739,7 +742,7 @@ User（自然人）
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
 | 跨语言契约 | ✅ `contracts/permission-matrix.json`（25 动作，由 TS 生成） | `contracts:emit` |
-| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径**：`approval-policy.ts` ＋ `test/approval-policy.test.ts`（10 用例）＋ `test/approvals-http.test.ts`（27 条真 HTTP）；**落库/账本/审计仍未落地（默认 501）** | `npm run test` → 9 个用例文件 / **144 用例全通过**（W1-C 收口时的全套基线；四条证伪均变红并点名） |
+| **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径 + 真库执行**：`approval-policy.ts`（含 W3-B 的 `withdrawDenial()`）＋ 真 HTTP `test/approvals-http.test.ts` ＋ 真库同事务 `test-db/approvals-execution-db.dbtest.ts`；W3-A / W3-B 见 `design/README` | `npm test` → **14 个文件 / 254 条**；`npm run test:db` → **4 个文件 / 62 条**（均全绿） |
 | 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
 | 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **14 步全绿，`CI_EXIT=0`** |
 | 首启空态 + 演示数据守卫 | ✅（E18 收口） | release/profile 构建入口被树摇 |
@@ -749,8 +752,8 @@ User（自然人）
 | 项 | 状态 | 影响 |
 |---|---|---|
 | **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），但**绝大多数端点尚不存在** | W1–W3、W6 的主体工作量 |
-| **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但~~**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）~~ → **W2-D（2026-10-16）已结清：有库真查库、无库才是 501**、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | W2（三个端口的 Prisma 实现；`Membership` / `DeviceSession` ✅ 已由 **W2-D** 交付，**`Approvals` 仍未**）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
-| **审批写入路径的落库部分** | ⚠️ 判定与 HTTP 路径**已上线**（`POST /approvals`、`POST /approvals/:id/decide`）；**落库 / 账本流水 / 审计写入未落地** —— `ApprovalsPort` 默认实现**显式 501**（不静默成功；★ **有库也是**，已由真库 × 真 HTTP 用例端到端证实） | W1/W2；别把判定绿灯读成"审批已验收" |
+| **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但~~**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）~~ → **W2-D（2026-10-16）已结清：有库真查库、无库才是 501**、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | 三个端口的 Prisma 实现**均已交付**（`Membership` / `DeviceSession` = W2-D；`Approvals` = **W3-A**）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
+| **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。⚠️ 仍有限制：执行器只覆盖 `redeem`；`expired` 无后台扫描；`idempotencyKey` 未接到 HTTP | W3 剩余：其它动作的执行器、TTL 扫描任务、幂等键接线 |
 | **双端接 API** | ❌ 未开始；`AppStore` 仍为**内存态**（重启回到空态） | W4 |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
 | **通知 / 推送** | ❌ 无依赖、无凭据（L3） | W6 |
@@ -760,14 +763,21 @@ User（自然人）
 
 ### 15.3 计划的下一步
 
-按 §11 顺序推进：**W1 的三段（W1-A 矩阵 / W1-B 屏障一・三 / W1-C 身份）已在 2026-10-14 ~ 15 落地**
-（见 `design/README` 第 16／17／18 条与 `design/02` §3），**下一步是 W2（账本内核）**，
-并在**第 1 天并行启动 L2 / L4**；W5 的引导与模板需 L5 法务文本到位。
+按 §11 顺序推进：**W1（身份 ＋ 三道屏障）／ W2（账本内核 ＋ 三个端口真库实现）／
+W3-A / W3-B（审批执行路径 ＋ 撤回 ＋ 租户隔离）均已落地**（见 `design/README` 的 W2-D / W3-A / W3-B 段）。
 
-W2 除账本外还包含**三个端口的真实实现**（`Approvals` / `Membership` / `DeviceSession` ——
-W1 时期三个都是**显式 501** 的内存替身；**W2-D（2026-10-16）之后 `Membership` / `DeviceSession`
-已接真库，`Approvals` 仍是 501（有库也是）**），W1 落地**审批落库 / 账本流水 / 审计**时**必须继续消费**
-`backend/src/contracts/approval-policy.ts`（P4），不得在 controller / service 里另写一份"谁可以批准"。
+**下一步（W3 收尾 → W4）**：
+1. **W3 剩余**：`request_points_bonus` 等其它动作的执行器（目前只有 `redeem`；
+   未支持的动作在建请求时即 400，不落永远批不动的 `pending`）、`expired` 的后台扫描任务、
+   `idempotencyKey` 的重放保护接到 HTTP。
+2. **W4 双端接 API**：`AppStore` 目前仍是内存态；W4 exit = 双端同一用例结论一致，
+   断网 / 超时 / 401 / 403 / 202 都有可读 UI。
+3. **并行启动 L2 / L4**（微信 AppID / 域名备案）；W5 引导与模板需 L5 法务文本；
+   L3 推送凭据须在 W4 前到位。
+
+审批的任何新写入路径**必须继续消费** `backend/src/contracts/approval-policy.ts`（P4 ＋ W3-B 的
+`withdrawDenial()`），不得在 controller / service 里另写一份「谁可以批准 / 谁能撤回」。
+
 
 > **W1-C 的两句真话（别读错）**：① **"角色不再由客户端自选"≠"身份已完成"** ——
 > 会话来源已可信，但**设备凭据（`deviceId`）仍可伪造**，故 `NODE_ENV=production` 一律 503

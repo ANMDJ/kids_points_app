@@ -23,6 +23,11 @@
 
 ## 当前落地进度
 
+> ⚠️ **读法**：以下按阶段留档，**后面的阶段会推翻前面的结论**。当前（2026-10-18）最关键的一条：
+> `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
+> **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口。前文所有「审批有库也是 501」都是
+> **W2-D 当时**的事实；以本目录最后两段（W3-A / W3-B）为准。
+
 ### ✅ 已完成并验证
 
 **D12 —— 测试器花括号嵌套错位 → CI 假通过**
@@ -677,6 +682,9 @@
     403 `MEMBER_REMOVED` / 403 `FORBIDDEN` / 400（管道）/ 501 `APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`**。
     另有一条世界口径：**空 `DATABASE_URL` ⇒ 真 `AppModule` 起不来**（`PrismaService` 构造即抛错）——
     "无库装配"只存在于子模块/用例里，生产不会静默落进 501 世界。
+    > ⚠️ **W3-A（2026-10-18）之后，最后那个 501 已不成立**：有库时合法请求会**真的落库**
+    > （`202 / 200 / 201`），并同事务写流水 / 余额 / 审计。上面这一段是 **W2-D 当时**的事实，留档不改写；
+    > W3-B 起跨孩子的审批 id 还会得到 `404`（见紧下面的 W3 段）。
     ⑤ 基线（真跑，**不是推断**）：`npm test` ⇒ **14 个用例文件 / 241 条**（`ℹ suites 44`）全绿
     （W2-C 时 11 / 211）；`npm run test:db` ⇒ **3 个文件 / 40 条**（`ℹ suites 20`）全绿（W2-D 首跑时 2 / 28）；
     真库 × 真 HTTP 的探针 `tools/_scratch/w2d-live-probe.mjs` ⇒ **12/12**（`PROBE_EXIT=0`，夹具自清、残留计数 0）；
@@ -690,11 +698,61 @@
     `where` 不匹配 ⇒ 红；读时筛掉过期行 ⇒ "适配器改写了会话行"红；筛掉 `removed` ⇒ "适配器改写了成员位"红；
     把非法 `restrictions` 洗成 `{}` ⇒ "过滤成了 {}"红；**真库**侧：单键退化（`where: { deviceId }`）⇒
     跨孩子串行 ⇒ "childId 被当成过滤器了"红、筛掉 `removed` ⇒ "读成了 null"红。
-    **仍未落地（收窄后只剩这些）**：① **`ApprovalsPort` 仍是 501**（**有库、无库都是**）——
-    落库 / 同事务写账本 / 审计写入属下一段；② **设备凭据仍不可验证**（`x-kp-device-id` 可伪造 ⇒
+    **仍未落地（W2-D 当时的状态；① 已由 W3-A 结清，见紧下面那一段）**：
+    ① ~~**`ApprovalsPort` 仍是 501**（**有库、无库都是**）—— 落库 / 同事务写账本 / 审计写入属下一段~~
+    → ✅ **W3-A（2026-10-18）已结清**：有库 ⇒ `PrismaApprovalsRepository`（同一事务写四张表）；
+    无库 ⇒ 仍显式 501。② **设备凭据仍不可验证**（`x-kp-device-id` 可伪造 ⇒
     `NODE_ENV=production` 一律 **503**；解药是 L2 之后的会话 token）；③ **会话刷新 / PIN 切换 /
     锁 15 分钟 / 切换写审计**（`02` §7 那四行）**一行都没做** —— W2-D 交付的是**读路径**；
     ④ `idempotencyKey` 的重放保护仍**未接线**到 HTTP。
+
+
+**W3-A 进展（2026-10-18）：审批执行路径接真库 —— 批准 / 自批在同一事务写账本与余额**
+
+    ① 装配：`ApprovalsModule.register({ hasDatabase })` 在**有库**时把 `APPROVALS_REPOSITORY`
+    绑到 `PrismaApprovalsRepository`（无库仍是 `NotImplementedApprovalsRepository` 的显式 501）。
+    service / controller **一行都没改** —— 这正是端口存在的意义（判世界与做写入互不污染）。
+    ② 事务顺序（每一步都有理由，见 `approvals.prisma.repository.ts` 文件头）：
+    `SELECT … FOR UPDATE` 锁审批行 → 状态守卫 ＋ TTL 惰性过期 → 锁 `Child` 余额行 →
+    **只在 `ledger.gate` 判定**（`buildRecordDraft()` 生成草稿）→ 余额 CAS → 写 `PointRecord`
+    （`idempotencyKey = approval:<id>`）→ 条件更新请求终态（`WHERE status='pending'`）→ 写 `AuditLog`。
+    ③ ★ **`invalidated` / `expired` 一律“先提交、再返回”**，绝不在事务里抛 409：
+    在事务里抛会让刚写下的终态回滚 ⇒ 客户端重试永远看到 `pending`（死循环）。
+    HTTP 的 409 由 `ApprovalsService.assertTerminalWithoutExecution()` 翻 —— 它只看状态。
+    ④ payload 在**建请求时**快照 `{ wishId, titleSnapshot, costSnapshot }`（`02` §4.3）：
+    家长 3 小时后同意时，扣分必须等于孩子申请时看到的价格，而不是现价。
+    ⑤ 用例：离线 `test/approvals-wiring.test.ts` 钉装配；真库 `test-db/approvals-execution-db.dbtest.ts`
+    组 A–C 钉「四张表同一事务」「双击只扣一次」「余额不足 / 心愿被删 → invalidated 且零流水」
+    「Σ流水 == 余额 ＋ 链完整」。
+    ⑥ **W3-A 留下的一个真实缺陷（已由 W3-B 修，留档防复发）**：`decide` 只按 `id` 读/写，
+    **没有把 `childId` 当键**。屏障一只验「你对请求头里的孩子是不是成员」⇒ 一位 guardian
+    只要拿到别家审批 id，就能批准并扣那一家的分。离线替身**证明不了**这一点（替身按 id 返回）。
+    ⑦ 基线（真跑）：`npm test` ⇒ **14 个文件 / 254 条**（`ℹ suites 45`）全绿；
+    `npm run test:db` ⇒ **4 个文件 / 62 条**（`ℹ suites 24`）全绿；`npm run ci` ⇒ **`CI_EXIT=0`（15 步）**。
+
+    **W3-B 进展（2026-10-18）：第 5 个终态可达 ＋ 审批读写按孩子收口**
+
+    ① **租户隔离（修 ⑥ 那个缺陷）**：`findById` / `decide` / `withdraw` 的 `childId` 是
+    **查询条件**（`WHERE id = ? AND childId = ?`），不是读出来再比较；TTL 的
+    `updateMany` 也带 `childId`（否则跨孩子请求会把别家的 `pending` 提前置过期）。
+    跨孩子的 id 与「不存在」返回**同一个 404 `APPROVAL_NOT_FOUND`** —— 403/404 的差别
+    本身就在泄露「另一家存在这条审批」。
+    ② **撤回**：新增 `POST /approvals/:id/withdraw`，第 5 个终态 `withdrawn` 可达。
+    判定只有一处：`approval-policy.ts` 的 `withdrawDenial()`（角色 → 是否本人 → 是否 `pending`），
+    service 与 Prisma 适配器**消费同一份**。语义：只有申请人本人（另一位家长 → `403 NOT_REQUESTER`，
+    不同意请用 `decide(rejected)`）；已终态 → `409 ALREADY_DECIDED`；TTL 已过 →
+    `409 APPROVAL_EXPIRED`；**不写流水、不动余额、不改心愿**；`decidedByUserId` / `decidedAt`
+    保持 `null`；审计 `approval.withdrawn`。并发上与批准同一个 `FOR UPDATE` ＋ 条件 UPDATE，
+    两边只有一个赢家。
+    ③ 用例：离线 `approvals-http` 组 D（跨孩子 decide → 404，且**不调用** decide）＋
+    组 F（撤回 8 条：本人 / 非本人 / 孩子本人 / 批准后 / 重复 / 不存在 / 跨孩子 / viewer）；
+    真库 `approvals-execution-db` 组 D（撤回零账本 ＋ 审计；重复撤回审计仍 1 条；
+    TTL 过期留历史；**第二家的 guardian 拿 child1 的 id 去 decide / withdraw ⇒ 404，
+    child1 的行与账、child2 的账都不变**；本家 guardian 仍能处理作对照）。
+    ④ 仍未落地（不粉饰）：执行器只覆盖 `redeem`；`expired` 只有惰性判定、**没有后台扫描任务**；
+    `idempotencyKey` 的重放保护仍**未接线**到 HTTP；设备凭据仍不可验证（生产 503）；
+    会话刷新 / PIN 切换 / 锁 15 分钟未做。
+    ⑤ 基线同 W3-A 的 ⑦（本轮真跑）：**254 / 62 / `CI_EXIT=0`**。
 
 
 ### 文档缺陷修正记录

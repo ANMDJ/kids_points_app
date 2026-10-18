@@ -39,9 +39,8 @@ import type {
  * ✅ 目前的真实状态（W2-C）：真适配器 `PrismaLedgerRepository` 已写出**并已接进装配** ——
  *    `LedgerModule.register()` 按 `hasDatabaseUrl()` 分叉（有库 ⇒ 真实现 / 无库 ⇒ 501 兜底）。
  *    I1–I6 真库套件见 `test-db/ledger-db.dbtest.ts`（组 J：走真 DI 取端口读写真库）。
- * ⚠️ 仍为 501 的**只剩一个**：`Approvals` 端口（★ **有库也是 501** —— W2-D 只让 `ApprovalsModule`
- *    把世界转发给另两个子模块，不给审批端口自己选实现）。`Membership` / `DeviceSession` 两个端口
- *    已于 **W2-D（2026-10-16）** 各自分叉到 `PrismaMembershipRepository` / `PrismaDeviceSessionRepository`。
+ * ✅ **W3-A（2026-10-18）起三个端口全部有真实现**：`Approvals` 有库 ⇒ `PrismaApprovalsRepository`
+ *    （同事务写流水 / 余额 / 审计）；无库 ⇒ 501。`Membership` / `DeviceSession` 已于 **W2-D** 分叉。
  */
 
 /** Nest 注入令牌（用 unique symbol 避免字符串撞名）。 */

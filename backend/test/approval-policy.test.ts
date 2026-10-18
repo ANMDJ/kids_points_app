@@ -15,12 +15,15 @@ import assert from 'node:assert/strict'
 
 import {
   AUDIT_ACTION_SELF_APPROVED,
+  AUDIT_ACTION_WITHDRAWN,
   SELF_APPROVAL_NOT_ALLOWED,
   canDecide,
   canReview,
   canSelfApprove,
+  canWithdraw,
   decideRequestOutcome,
-  isSelfApproved
+  isSelfApproved,
+  withdrawDenial
 } from '../src/contracts/approval-policy'
 import { ALL_ACTIONS, PERMISSION_MATRIX, type ActionType, type Role } from '../src/contracts/permission-matrix'
 
@@ -150,4 +153,53 @@ test('三种结果互斥且穷尽（消费方按 kind 分支，不会把"没资�
     ['PENDING', 'REJECTED', 'SELF_APPROVED'],
     '穷举 25 动作 × 3 角色 × 勾选/不勾选 时漏了某种结果 —— 判定分支有洞'
   )
+})
+
+test('撤回（W3-B）：只有申请人本人、只有 pending 能撤 —— 三种拒绝原因必须分得开', () => {
+  const pending = { status: 'pending', requesterUserId: 'u-kid' }
+
+  assert.equal(withdrawDenial(pending, { userId: 'u-kid', role: 'child' }), null)
+  assert.equal(canWithdraw(pending, { userId: 'u-kid', role: 'child' }), true, '孩子撤自己的申请应当允许')
+
+  // 另一位家长：不是“没资格”，而是“不是你提的”。两种 403 的语义不同
+  // （NOT_REQUESTER 要提示“请用拒绝”；FORBIDDEN 才是角色不允许）。
+  assert.equal(
+    withdrawDenial(pending, { userId: 'u-dad', role: 'guardian' }),
+    'NOT_REQUESTER',
+    '非申请人被压成了普通 FORBIDDEN —— 客户端无法提示“另一位家长请用 decide(rejected)”'
+  )
+
+  // viewer 在矩阵里没有 withdraw_request 列 ⇒ 先按角色拒绝（fail-closed）。
+  assert.equal(
+    withdrawDenial(pending, { userId: 'u-kid', role: 'viewer' }),
+    'WITHDRAW_FORBIDDEN_ROLE'
+  )
+
+  // 五个终态都不可撤回（含 withdrawn 本身 —— 与 §4.4 只认 pending 同一口径）。
+  for (const status of ['approved', 'rejected', 'withdrawn', 'invalidated', 'expired']) {
+    assert.equal(
+      withdrawDenial({ status, requesterUserId: 'u-kid' }, { userId: 'u-kid', role: 'child' }),
+      'ALREADY_DECIDED',
+      `${status} 是终态，竟还能撤回`
+    )
+  }
+
+  assert.equal(AUDIT_ACTION_WITHDRAWN, 'approval.withdrawn')
+})
+
+test('撤回：角色判据直接来自矩阵（改矩阵 ⇒ 判定跟着变，不存在第二份名单）', () => {
+  const row = PERMISSION_MATRIX.withdraw_request as unknown as { child: string }
+  const pending = { status: 'pending', requesterUserId: 'u-kid' }
+
+  assert.equal(withdrawDenial(pending, { userId: 'u-kid', role: 'child' }), null)
+  Object.assign(row, { child: 'DENY' })
+  try {
+    assert.equal(
+      withdrawDenial(pending, { userId: 'u-kid', role: 'child' }),
+      'WITHDRAW_FORBIDDEN_ROLE',
+      '矩阵改了判定却没变 —— “谁能撤回”被抄到了 approval-policy 之外'
+    )
+  } finally {
+    Object.assign(row, { child: 'ALLOW' }) // 矩阵是共享单例，必须还原
+  }
 })

@@ -88,7 +88,7 @@
 > ★ **2026-10-17 补实测**：有库世界的那一半已经用**真库 ＋ 真 HTTP** 验过
 > （`backend/test-db/approvals-db.dbtest.ts`，12 条）：会话 / 成员位**真的查库**，
 > 错误码为 **401 `SESSION_NOT_FOUND` / 403 `MEMBER_NOT_FOUND|MEMBER_REMOVED`**；
-> 而"审批落库"**有库、无库都是 501**（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`）。
+> 而"审批落库"**W2-D 当时有库、无库都是 501**（`APPROVALS_PERSISTENCE_NOT_IMPLEMENTED`）；✅ **W3-A（2026-10-18）起有库时是真落库**（同事务写流水 / 余额 / 审计），无库才 501。
 
 ---
 

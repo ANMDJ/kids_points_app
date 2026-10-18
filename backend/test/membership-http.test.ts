@@ -196,6 +196,7 @@ function makeApprovalsFake(): ApprovalsFake {
   const calls: ApprovalsFake['calls'] = []
   const build = (input: CreateApprovalInput, status: string): ApprovalRow => ({
     id: 'ap-1',
+    childId: input.childId,
     action: input.action,
     requesterUserId: input.requesterUserId,
     status,
@@ -212,13 +213,17 @@ function makeApprovalsFake(): ApprovalsFake {
       calls.push({ method: 'createSelfApproved', input })
       return build(input, 'approved')
     },
-    async findById(id) {
-      calls.push({ method: 'findById', input: id })
+    async findById(id, childId) {
+      calls.push({ method: 'findById', input: { id, childId } })
       return null // 没有这条 —— 非成员用例必须**在**这次调用之前就被拦下
     },
     async decide(input) {
       calls.push({ method: 'decide', input })
       throw new Error('不该走到这里：能被 decide 的用例不在本文件范围内')
+    },
+    async withdraw(input) {
+      calls.push({ method: 'withdraw', input })
+      throw new Error('不该走到这里：撤回用例不在本文件范围内')
     }
   }
 }
