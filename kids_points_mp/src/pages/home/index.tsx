@@ -1,4 +1,5 @@
 import { View, Text } from '@tarojs/components'
+import { stopPullDownRefresh, usePullDownRefresh } from '@tarojs/taro'
 
 import AppBottomNav from '../../components/AppBottomNav'
 import GradientPage from '../../components/GradientPage'
@@ -6,6 +7,7 @@ import HabitTile from '../../components/HabitTile'
 import AnimatedPointText from '../../components/AnimatedPointText'
 import PointsJar from '../../components/PointsJar'
 import SoftButton from '../../components/SoftButton'
+import ReadStatusBanner from '../../components/ReadStatusBanner'
 import { SectionTitle } from '../../components/PageHeader'
 import QuickNoteSheet from '../../sheets/QuickNoteSheet'
 import { useStore } from '../../data/store'
@@ -20,12 +22,24 @@ export default function Home() {
   const store = useStore()
   const sheet = useSheet()
 
+  // 与 Flutter 首页一致：下拉是新数据入口；失败时由 ReadStatusBanner 显示原因，
+  // 已有内容保留（store 内部保证），这里只负责收起原生下拉动画。
+  usePullDownRefresh(() => {
+    void store.refreshFromServer().finally(() => {
+      stopPullDownRefresh()
+    })
+  })
+
   // 修 A2 / A3 / E17：首页消费**派生视图**（checked / limitText / doneText 都由
   // 结构字段 ＋ 当天流水现算），习惯上那些状态字段已不复存在。
   const habits = store.habitViews()
   const doneCount = habits.filter((habit) => habit.checked).length
 
   const handleCheckIn = (habit: Habit) => {
+    if (store.isReadOnly) {
+      toast(store.readOnlyWriteMessage)
+      return
+    }
     const message = store.checkIn(habit)
     if (message) {
       toast(message)
@@ -35,6 +49,10 @@ export default function Home() {
   }
 
   const handleUndo = (habit: Habit) => {
+    if (store.isReadOnly) {
+      toast(store.readOnlyWriteMessage)
+      return
+    }
     // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因。
     // 这里不再预读 `habit.checked` —— 能不能撤销由 store 按当天流水判定（修 A3）。
     const message = store.undoCheckIn(habit)
@@ -53,6 +71,7 @@ export default function Home() {
         }
       >
         <View className='kp-home'>
+          <ReadStatusBanner />
           <Text className='kp-home__caption'>当前可用积分</Text>
           <View className='kp-home__points'>
             <AnimatedPointText
@@ -83,7 +102,13 @@ export default function Home() {
             <SoftButton
               label='记一笔'
               icon='editNote'
-              onClick={() => sheet.show()}
+              onClick={() => {
+                if (store.isReadOnly) {
+                  toast(store.readOnlyWriteMessage)
+                  return
+                }
+                sheet.show()
+              }}
             />
           </View>
           <View className='kp-home__hint'>

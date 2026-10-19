@@ -10,6 +10,7 @@ import { useStore } from '../../data/store'
 import type { PointRule } from '../../data/types'
 import { useViewport } from '../../utils/layout'
 import { goBack } from '../../utils/nav'
+import { toast } from '../../utils/toast'
 import { usePayloadSheet, useSheet } from '../../utils/useSheet'
 import './index.scss'
 
@@ -22,6 +23,18 @@ export default function Rule() {
   // 修 C10：编辑规则复用同一张表单（编辑态）—— 与新增共用一个组件，
   // 页面不做版本运算（currentVersion 由 store 递增）。
   const editSheet = usePayloadSheet<PointRule>()
+
+  // live 模式没有规则写端点：编辑 / 新建都会骗用户「改了」，所以入口先拦。
+  const guardReadOnly = (): boolean => {
+    if (!store.isReadOnly) return false
+    toast(store.readOnlyWriteMessage)
+    return true
+  }
+
+  const openRuleActions = (rule: PointRule) => {
+    if (guardReadOnly()) return
+    actions.show(rule)
+  }
 
   return (
     <>
@@ -58,8 +71,8 @@ export default function Rule() {
                   <RuleTile
                     key={rule.id}
                     rule={rule}
-                    onClick={() => actions.show(rule)}
-                    onLongPress={() => actions.show(rule)}
+                    onClick={() => openRuleActions(rule)}
+                    onLongPress={() => openRuleActions(rule)}
                   />
                 ))}
               </View>
@@ -69,7 +82,10 @@ export default function Rule() {
             <SoftButton
               label='新增规则'
               icon='book'
-              onClick={() => addSheet.show()}
+              onClick={() => {
+                if (guardReadOnly()) return
+                addSheet.show()
+              }}
             />
           </View>
         </View>

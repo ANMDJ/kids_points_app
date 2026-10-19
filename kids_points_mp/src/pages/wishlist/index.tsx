@@ -6,6 +6,7 @@ import AppBottomNav from '../../components/AppBottomNav'
 import FloatingAddButton from '../../components/FloatingAddButton'
 import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
+import ReadStatusBanner from '../../components/ReadStatusBanner'
 import WishCard from '../../components/WishCard'
 import AddWishSheet from '../../sheets/AddWishSheet'
 import { useStore } from '../../data/store'
@@ -96,11 +97,19 @@ export default function Wishlist() {
   }
 
   const handleRedeem = (wish: Wish) => {
+    if (store.isReadOnly) {
+      toast(store.readOnlyWriteMessage)
+      return
+    }
     const ok = store.redeem(wish)
     toast(ok ? `兑换成功：${wish.title}` : '积分还不够，继续加油打卡吧！')
   }
 
   const handleRemove = async (wish: Wish) => {
+    if (store.isReadOnly) {
+      toast(store.readOnlyWriteMessage)
+      return
+    }
     // 修 C9：删除是**软删**（移到回收站，90 天内可恢复），不是物理删除 ——
     // 这样已发生的兑换流水仍能找到它回指的心愿（wishId 不指向空）。
     const ok = await confirm(
@@ -134,6 +143,7 @@ export default function Wishlist() {
             paddingBottom: `${designToPx(NAV_HEIGHT) + viewport.safeBottom}px`
           }}
         >
+          <ReadStatusBanner />
           <View className='kp-wishlist__header'>
             <Text className='kp-wishlist__title'>甜的心愿单</Text>
             <View className='kp-wishlist__title-icon'>
@@ -192,7 +202,13 @@ export default function Wishlist() {
               expanded={expanded}
               expandedWidth={DESIGN_WIDTH - FAB_MARGIN * 2}
               height={FAB_HEIGHT}
-              onClick={() => sheet.show()}
+              onClick={() => {
+                if (store.isReadOnly) {
+                  toast(store.readOnlyWriteMessage)
+                  return
+                }
+                sheet.show()
+              }}
             />
           </View>
         </View>

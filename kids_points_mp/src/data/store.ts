@@ -3,6 +3,13 @@ import { useDidShow } from '@tarojs/taro'
 
 import { buildSeedData } from './seed'
 import { isKnownIconName } from '../components/Icon/icons'
+import {
+  createReadApiFromEnvironment,
+  ReadApiClient
+} from './read_api'
+import { ReadApiException } from './read_api_errors'
+import { mapHome, mapRecordsPage } from './read_mapper'
+import type { RecordsPage } from './read_mapper'
 import type {
   ActorContext,
   AuditAction,
@@ -62,6 +69,17 @@ export function demoResetAllowed(env: string = process.env.NODE_ENV ?? ''): bool
 export const ALLOW_DEMO_RESET = demoResetAllowed()
 
 /**
+ * 只读数据的状态机 —— 与 Flutter `ReadStatus` 同值同义。
+ *
+ * - `idle`：还没发过请求（预览数据 / 尚未进入页面）
+ * - `loading`：第一页或整页刷新在途（首屏显示 spinner）
+ * - `loadingMore`：游标翻页在途（页尾显示 spinner，列表保持可读）
+ * - `ready`：最近一次读取成功
+ * - `error`：最近一次读取失败；**失败不抹掉已有数据**
+ */
+export type ReadStatus = 'idle' | 'loading' | 'loadingMore' | 'ready' | 'error'
+
+/**
  * 应用状态中心：积分余额、习惯、心愿、流水、规则。
  *
  * 与 Flutter 版 lib/data/app_store.dart 一一对应，模块级单例，
@@ -112,6 +130,75 @@ export class AppStore {
   private seq = 0
   private listeners = new Set<() => void>()
 
+  // ------------------------------------------------------- 只读 API（W4-C）
+  // 与 Flutter `AppStore` 同构：读端点真数据 + 本地写仍留在内存。
+
+  /** 一页流水条数 —— 与后端 DTO 上限（200）同口径，50 是「首屏够用」的折中。 */
+  private static readonly recordsPageSize = 50
+
+  private readonly readApi: ReadApiClient | null
+  private readStatusValue: ReadStatus = 'idle'
+  private readErrorValue: ReadApiException | null = null
+  private usingPreviewValue = true
+  private moreAvailable = false
+  private nextCursorValue: string | null = null
+  private recordFilterValue: RecordCategory | null = null
+
+  /**
+   * 每次「整页刷新 / 切分类」都 +1；在途的旧响应据此丢弃（防串页）。
+   * 翻页（loadMore）**不**递增：它读取的是刷新当时那一版游标。
+   */
+  private readEpoch = 0
+
+  /** 是否接入了后端（与「当前是否已加载成功」是两件事）。 */
+  get isLiveMode(): boolean {
+    return this.readApi !== null
+  }
+
+  /** 只读模式：接后端时**不提供写入口**（W4 只实现了读端点）。 */
+  get isReadOnly(): boolean {
+    return this.isLiveMode
+  }
+
+  get readStatus(): ReadStatus {
+    return this.readStatusValue
+  }
+
+  get readError(): ReadApiException | null {
+    return this.readErrorValue
+  }
+
+  /** 当前展示的是本地预览数据（未配置后端，或首次加载尚未成功）。 */
+  get usingPreview(): boolean {
+    return this.usingPreviewValue
+  }
+
+  /** 服务端还有下一页（仅 live 有效）。 */
+  get hasMoreRecords(): boolean {
+    return this.moreAvailable
+  }
+
+  get recordFilter(): RecordCategory | null {
+    return this.recordFilterValue
+  }
+
+  /** 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。 */
+  get readOnlyWriteMessage(): string {
+    return '只读模式：后端写入接口还没上线（W4），这次操作没有保存到服务器。'
+  }
+
+  /**
+   * 记录页要展示的流水：
+   *   · 预览模式：对本地流水按分类过滤（原逻辑）；
+   *   · live 模式：服务端已按 `category` 过滤，这里不再二次过滤，
+   *     否则「全部」只加载 50 条时会漏掉后面的同类记录。
+   */
+  get visibleRecords(): PointRecord[] {
+    return this.usingPreviewValue
+      ? this.recordsOf(this.recordFilterValue)
+      : this.records.slice()
+  }
+
   /**
    * 首启是**空态**（修 E18 第二半）。
    *
@@ -119,8 +206,12 @@ export class AppStore {
    * “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的，
    * 而且屏幕上没有任何一个数字能被当真。
    * seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
+   *
+   * [readApi] 默认按 `TARO_APP_*` 环境变量构造；三项缺一项就是 null，
+   * 应用继续使用本地预览数据（这是正常的本地开发状态，不是错误）。
    */
-  constructor() {
+  constructor(readApi: ReadApiClient | null = createReadApiFromEnvironment()) {
+    this.readApi = readApi
     this.resetToEmpty()
   }
 
@@ -199,6 +290,177 @@ export class AppStore {
   habitViews(): HabitView[] {
     return this.habits.map((habit) => habitView(habit, this.records))
   }
+
+  /**
+   * 从后端拉取首页快照 + 第一页流水；失败时**保留已有数据**并记录错误。
+   *
+   * 两个请求并发：首页和流水各自独立，任何一个失败都会走 catch，
+   * 不会出现「首页更新了、流水还是旧的」这种半新半旧的静默状态。
+   */
+  async refreshFromServer(): Promise<void> {
+    const api = this.readApi
+    if (api === null) return
+
+    const epoch = ++this.readEpoch
+    this.readStatusValue = 'loading'
+    this.readErrorValue = null
+    this.persist()
+
+    try {
+      const [homeDto, pageDto] = await Promise.all([
+        api.fetchHome(),
+        api.fetchRecords({
+          category: this.recordFilterValue,
+          limit: AppStore.recordsPageSize
+        })
+      ])
+      if (epoch !== this.readEpoch) return
+
+      this.applyHomeSnapshot(mapHome(homeDto))
+      this.applyRecordsPage(mapRecordsPage(pageDto), false)
+      this.usingPreviewValue = false
+      this.readStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.readEpoch) return
+      this.readErrorValue = toReadApiException(error)
+      this.readStatusValue = 'error'
+    }
+    this.persist()
+  }
+
+  /**
+   * 追加下一页。**必须**用服务端给的 `nextCursor` 原样请求；
+   * 没有更多 / 正在加载 / 预览模式时直接返回（不会重复请求同一页）。
+   */
+  async loadMoreRecords(): Promise<void> {
+    const api = this.readApi
+    const cursor = this.nextCursorValue
+    if (
+      api === null ||
+      this.usingPreviewValue ||
+      !this.moreAvailable ||
+      cursor === null ||
+      this.readStatusValue === 'loading' ||
+      this.readStatusValue === 'loadingMore'
+    ) {
+      return
+    }
+
+    // 翻页跟随当前 epoch：期间若切分类 / 刷新，旧页响应作废。
+    const epoch = this.readEpoch
+    this.readStatusValue = 'loadingMore'
+    this.readErrorValue = null
+    this.persist()
+
+    try {
+      const dto = await api.fetchRecords({
+        category: this.recordFilterValue,
+        limit: AppStore.recordsPageSize,
+        cursor
+      })
+      if (epoch !== this.readEpoch) return
+
+      this.applyRecordsPage(mapRecordsPage(dto), true)
+      this.readStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.readEpoch) return
+      this.readErrorValue = toReadApiException(error)
+      this.readStatusValue = 'error'
+    }
+    this.persist()
+  }
+
+  /**
+   * 切换记录页分类。live 模式下**重新向服务端要第一页**（带 `category`），
+   * 因为本地只过滤已加载的 50 条会漏掉后面的同类记录（那是假「共 N 条」）。
+   */
+  async setRecordFilter(category: RecordCategory | null): Promise<void> {
+    if (this.recordFilterValue === category) return
+    this.recordFilterValue = category
+
+    if (this.readApi === null) {
+      this.persist()
+      return
+    }
+    // 首次加载还没成功时，切分类不能只改本地筛选：服务端那页仍按旧分类在途，
+    // 回来后会和 chip 对不上。整页刷新会递增 epoch，把旧响应作废。
+    if (this.usingPreviewValue) {
+      await this.refreshFromServer()
+      return
+    }
+    const api = this.readApi
+
+    const epoch = ++this.readEpoch
+    this.readStatusValue = 'loading'
+    this.readErrorValue = null
+    this.nextCursorValue = null
+    this.moreAvailable = false
+    this.records = []
+    this.persist()
+
+    try {
+      const dto = await api.fetchRecords({
+        category,
+        limit: AppStore.recordsPageSize
+      })
+      if (epoch !== this.readEpoch) return
+
+      this.applyRecordsPage(mapRecordsPage(dto), false)
+      this.readStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.readEpoch) return
+      this.readErrorValue = toReadApiException(error)
+      this.readStatusValue = 'error'
+    }
+    this.persist()
+  }
+
+  /**
+   * 页面首帧后触发一次读取。已读过（成功或失败）就不再自动重试 ——
+   * 失败后的重试是**用户的动作**（顶部提示条 / 下拉刷新）。
+   */
+  ensureInitialRead(): void {
+    if (!this.isLiveMode || this.readStatusValue !== 'idle') return
+    void this.refreshFromServer()
+  }
+
+  /** 服务端快照覆盖本地列表（软删状态一律来自服务端：active）。 */
+  private applyHomeSnapshot(snapshot: {
+    childName: string
+    childId: string
+    pointsBalance: number
+    goodHabitCount: number
+    rewardCount: number
+    habits: Habit[]
+    rules: PointRule[]
+    wishes: Wish[]
+  }): void {
+    this.points = snapshot.pointsBalance
+    this.profile = {
+      name: snapshot.childName,
+      childId: snapshot.childId,
+      goodHabitCount: snapshot.goodHabitCount,
+      rewardCount: snapshot.rewardCount
+    }
+    this.habitList = snapshot.habits.slice()
+    this.ruleList = snapshot.rules.slice()
+    this.wishList = snapshot.wishes.slice()
+  }
+
+  private applyRecordsPage(page: RecordsPage, append: boolean): void {
+    if (!append) this.records = []
+    // 按 id 去重：键集翻页本不该重叠，但客户端多一道保险 ——
+    // 宁可少显示一条重复，也不能让「加载更多」把同一笔流水堆两遍。
+    const known = new Set(this.records.map((record) => record.id))
+    page.records.forEach((record) => {
+      if (known.has(record.id)) return
+      known.add(record.id)
+      this.records.push(record)
+    })
+    this.nextCursorValue = page.nextCursor
+    this.moreAvailable = page.hasMore
+  }
+
 
   /** 单个习惯的派生视图（用于“刚打完卡”的单点查询）。 */
   habitViewOf(habit: Habit): HabitView {
@@ -946,16 +1208,38 @@ export class AppStore {
 
 }
 
+/**
+ * 非 `ReadApiException` 的意外错误也归一成可展示异常 ——
+ * 页面永远只处理一种错误类型。
+ */
+function toReadApiException(error: unknown): ReadApiException {
+  if (error instanceof ReadApiException) return error
+  return new ReadApiException(
+    'malformed',
+    '读取数据时发生意外错误。请重试；若持续出现请反馈。',
+    {
+      code: 'UNEXPECTED_READ_ERROR',
+      detail: String(error)
+    }
+  )
+}
+
 /** 全局唯一的状态中心。 */
 export const store = new AppStore()
 
 /**
  * 订阅状态中心的 Hook（只在页面组件里调用），
  * 页面每次 show 时也会刷新一次，保证从二级页返回后展示最新数据。
+ *
+ * live 模式下的首帧读取也在这里触发：store 的 `idle` 守卫保证
+ * 无论先挂载哪个页面，都只发一次请求。
  */
 export function useStore(): AppStore {
   const [, setTick] = useState(0)
   useEffect(() => store.subscribe(() => setTick((tick) => tick + 1)), [])
+  useEffect(() => {
+    store.ensureInitialRead()
+  }, [])
   useDidShow(() => setTick((tick) => tick + 1))
   return store
 }

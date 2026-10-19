@@ -4,6 +4,8 @@
  * Flutter lib/data/app_store.dart + lib/data/seed_data.dart 一致。
  */
 const assert = require('assert')
+const { spawnSync } = require('node:child_process')
+const { join } = require('node:path')
 
 /**
  * ⚠️ 纯 Node 无法 require 真实的 @tarojs/taro：
@@ -20,6 +22,7 @@ require.cache[taroPath] = {
   exports: {
     __esModule: true,
     default: {},
+    request: async () => ({ statusCode: 200, data: null }),
     useDidShow: () => undefined,
     useReady: () => undefined
   },
@@ -927,7 +930,17 @@ check('D9 渲染兜底：未登记的名字画「未知」占位，而不是空�
   assert.strictEqual(Array.isArray(def.d) && def.d.length > 0, true, '兜底图案必须真有可画的 path')
 })
 
-console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
+// ── W4-C 异步只读用例：交给 ESM 子进程（CommonJS 没有顶层 await）──────────
+//    子进程真的 await 完所有用例后才退出；这里用 spawnSync 同步等它，
+//    汇总/退出码仍留在本文件**顶层**，D12 守卫可以继续静态检查。
+const w4c = spawnSync(process.execPath, [join(__dirname, 'run-w4c.mjs')], {
+  stdio: 'inherit'
+})
+if (w4c.error || w4c.status !== 0) {
+  failed += 1
+  console.log('FAIL  W4-C 异步只读用例（run-w4c.mjs） -> 子进程未通过')
+}
+
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exitCode = failed === 0 ? 0 : 1
 

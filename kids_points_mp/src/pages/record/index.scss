@@ -90,6 +90,53 @@
 }
 
 .kp-record__empty-text {
+  padding: 0 f2r(20);
   font-size: f2r(13.5);
+  line-height: 1.5;
   color: $text-secondary;
+  text-align: center;
+  white-space: pre-line;
+}
+
+// 加载更多 / 没有更多了（对应 Flutter `_buildFooter`）
+.kp-record__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: f2r(14) 0 f2r(4);
+}
+
+.kp-record__more {
+  padding: f2r(7) f2r(18);
+  border-radius: f2r(999);
+  background: $primary-soft;
+}
+
+.kp-record__more-text {
+  font-size: f2r(12);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-record__no-more {
+  font-size: f2r(11);
+  color: $text-hint;
+}
+
+.kp-record__spinner {
+  width: f2r(18);
+  height: f2r(18);
+  border: f2r(2) solid $divider;
+  border-top-color: $primary-deep;
+  border-radius: 50%;
+  animation: kp-record-spin 0.8s linear infinite;
+}
+
+@keyframes kp-record-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }

@@ -293,8 +293,14 @@ class AppStore extends ChangeNotifier {
     if (_recordFilter == category) return;
     _recordFilter = category;
 
-    if (_readApi == null || _usingPreview) {
+    if (_readApi == null) {
       _notify();
+      return;
+    }
+    // 首次加载还没成功时，切分类不能只改本地筛选：服务端那页仍按旧分类在途，
+    // 回来后会和 chip 对不上。整页刷新会递增 epoch，把旧响应作废。
+    if (_usingPreview) {
+      await refreshFromServer();
       return;
     }
     final ReadApiClient api = _readApi!;

@@ -404,8 +404,10 @@ const DEFECTS = [
     A.has(F_STORE, /const bool allowDemoReset = !_isReleaseBuild;/, '守卫常量必须是可常量折叠的 !_isReleaseBuild（与判据同源）'),
     A.has(F_STORE, /if \(!allowDemoReset\) return false;/, 'resetToSeed 未被生产闸门拦住'),
     // ② 首启空态：构造函数只走空态，不再注入 seed（E18 第二半）
-    A.has(T_STORE, /constructor\(\) \{\s*this\.resetToEmpty\(\)/, '构造函数未改为空态初始化'),
-    A.lack(T_STORE, /constructor\(\)[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
+    // ★ W4-C：构造函数允许注入只读客户端（`AppStore(readApi?)`），与 Flutter 的
+    //   `AppStore({ReadApiClient? readApi})` 同构；要守的仍是「构造即空态」。
+    A.has(T_STORE, /constructor\([^)]*\)[^{]*\{[^}]*this\.resetToEmpty\(\)/, '构造函数未改为空态初始化'),
+    A.lack(T_STORE, /constructor\([^)]*\)[^{]*\{[^}]*buildSeedData\(\)/, '构造函数仍在注入演示数据（回退）'),
     A.has(T_STORE, /resetToEmpty\(\): void \{[\s\S]{0,200}?this\.points = 0/, '空态初始化不完整'),
     // ★ W4-B：构造函数允许注入只读客户端（`AppStore({ReadApiClient? readApi})`），
     //   因此这里匹配「任意参数列表」，而不是旧的空参 `AppStore()`；

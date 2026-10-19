@@ -4,7 +4,7 @@ import type { IconName } from '../components/Icon/icons'
 export type RecordCategory = 'praise' | 'exchange' | 'adjust'
 
 /** 成员角色。对应后端 ChildMember.role（见 docs/design/02）。 */
-export type MemberRole = 'guardian' | 'child'
+export type MemberRole = 'guardian' | 'child' | 'viewer'
 
 /**
  * 积分记录的**操作来源**。

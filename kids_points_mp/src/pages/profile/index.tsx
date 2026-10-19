@@ -6,6 +6,7 @@ import AppCard from '../../components/AppCard'
 import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
 import type { IconName } from '../../components/Icon/icons'
+import ReadStatusBanner from '../../components/ReadStatusBanner'
 import TrashSheet from '../../sheets/TrashSheet'
 import { ALLOW_DEMO_RESET, useStore } from '../../data/store'
 import { withAlpha } from '../../utils/color'
@@ -59,6 +60,10 @@ export default function Profile() {
   const trashCount = store.trashItems().length
 
   const handleRename = async () => {
+    if (store.isReadOnly) {
+      toast(store.readOnlyWriteMessage)
+      return
+    }
     const name = await prompt('修改昵称', store.profile.name, '输入新的昵称')
     if (name === null) return
     const trimmed = name.trim()
@@ -74,6 +79,10 @@ export default function Profile() {
   }
 
   const handleReset = () => {
+    if (store.isReadOnly) {
+      toast(store.readOnlyWriteMessage)
+      return
+    }
     // 修 E18：生产环境禁止恢复演示数据（否则用户可一键清空真实数据）
     if (!store.resetToSeed()) {
       toast('正式环境不支持恢复演示数据')
@@ -93,6 +102,7 @@ export default function Profile() {
       }
     >
       <View className='kp-profile'>
+        <ReadStatusBanner />
         <View className='kp-profile__head'>
           <View
             className='kp-profile__avatar'
@@ -148,7 +158,13 @@ export default function Profile() {
             <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
-              onClick={() => trashSheet.show()}
+              onClick={() => {
+                if (store.isReadOnly) {
+                  toast(store.readOnlyWriteMessage)
+                  return
+                }
+                trashSheet.show()
+              }}
             >
               <View
                 className='kp-profile__menu-icon'

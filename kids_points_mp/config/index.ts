@@ -18,6 +18,25 @@ const config = {
   outputRoot: 'dist',
   plugins: [],
   defineConstants: {},
+  /**
+   * 只读后端配置的**白名单**（W4-C）。
+   *
+   * Taro 只把 `env` 里列出的键注入 `process.env.*`；`.env` / `.env.local`
+   * 中其余变量只在 Node 侧可见，运行时读不到。留空是正常的：三项缺一项时
+   * 小程序继续使用本地预览数据（见 `src/data/read_api.ts`）。
+   * `.env.local` 已在 `.gitignore` 里，凭据不会入库。
+   */
+  env: {
+    TARO_APP_KP_API_BASE_URL: JSON.stringify(
+      process.env.TARO_APP_KP_API_BASE_URL ?? ''
+    ),
+    TARO_APP_KP_DEVICE_ID: JSON.stringify(
+      process.env.TARO_APP_KP_DEVICE_ID ?? ''
+    ),
+    TARO_APP_KP_CHILD_ID: JSON.stringify(
+      process.env.TARO_APP_KP_CHILD_ID ?? ''
+    )
+  },
   copy: {
     patterns: [{ from: 'src/sitemap.json', to: 'dist/sitemap.json' }],
     options: {}

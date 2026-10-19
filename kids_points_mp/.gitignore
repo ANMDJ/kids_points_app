@@ -10,6 +10,11 @@ npm-install.log
 # 微信开发者工具的个人配置（含本地路径/编译设置，不应入库）
 project.private.config.json
 
+# 只读后端的本地配置（设备凭据 + 孩子 id）—— 模板见 .env.example
+.env
+.env.local
+.env.*.local
+
 # ⚠️ 不要写成 `.tmp_test/`（整目录忽略）—— 该目录里混着两类东西：
 #   · 产物：dist/（tsc 编译输出）、chrome-profile/、*.png 截图、*.log 探针日志
 #   · 资产：run.js / h5_probe.js / h5_serve.js / h5_compat_check.js（手写验证脚本）

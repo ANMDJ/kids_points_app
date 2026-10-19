@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -272,6 +273,49 @@ void main() {
       expect(transport.categories, <String?>[null, 'praise']);
       expect(transport.recordCursors, <String?>[null, null]);
     });
+    test('首屏未完成时切分类：旧分类响应作废，按新分类取第一页', () async {
+      final Completer<void> gate = Completer<void>();
+      final _ScriptedTransport transport = _ScriptedTransport(
+        homeJson: homeJson,
+        firstHomeGate: gate,
+        pages: <String, String>{
+          '': pageJson(
+            records: <Object?>[
+              record('r1', '2026-10-19T10:00:00.000Z'),
+              record('r2', '2026-10-19T09:00:00.000Z'),
+              record('r3', '2026-10-19T08:00:00.000Z'),
+            ],
+            hasMore: false,
+            nextCursor: null,
+          ),
+          'praise': pageJson(
+            records: <Object?>[record('r9', '2026-10-18T10:00:00.000Z')],
+            hasMore: false,
+            nextCursor: null,
+          ),
+        },
+      );
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(config: config, transport: transport),
+      );
+      addTearDown(store.dispose);
+
+      final Future<void> initial = store.refreshFromServer();
+      await store.setRecordFilter(RecordCategory.praise);
+
+      expect(store.recordFilter, RecordCategory.praise);
+      expect(store.usingPreview, isFalse);
+      expect(store.records.map((PointRecord r) => r.id), <String>['r9'],
+          reason: '新分类的第一页应立即可见');
+
+      gate.complete();
+      await initial;
+
+      expect(store.records.map((PointRecord r) => r.id), <String>['r9'],
+          reason: '旧分类的响应回来晚了一步，也不许覆盖新分类列表');
+      expect(store.readStatus, ReadStatus.ready);
+      expect(transport.categories, <String?>[null, 'praise']);
+    });
   });
 
   testWidgets('live 模式：首帧后自动拉取，并显示「只读模式」而不是空态', (WidgetTester tester) async {
@@ -312,12 +356,20 @@ void main() {
 
 /// 按 `cursor` / `category` 选脚本响应的假传输层。
 class _ScriptedTransport implements ReadTransport {
-  _ScriptedTransport({required this.homeJson, required this.pages});
+  _ScriptedTransport({
+    required this.homeJson,
+    required this.pages,
+    this.firstHomeGate,
+  });
 
   final String homeJson;
 
   /// key：`''` = 第一页；其余为 cursor 或分类名（见 `send`）。
   final Map<String, String> pages;
+
+  /// 只挂起**第一次** `/home`，用于复现「首屏未完成就切分类」的竞态。
+  final Completer<void>? firstHomeGate;
+  int _homeCalls = 0;
 
   final List<String?> recordCursors = <String?>[];
   final List<String?> categories = <String?>[];
@@ -326,6 +378,10 @@ class _ScriptedTransport implements ReadTransport {
   @override
   Future<ReadHttpResponse> send(Uri uri, Map<String, String> headers) async {
     if (uri.path.endsWith('/home')) {
+      _homeCalls += 1;
+      if (_homeCalls == 1 && firstHomeGate != null) {
+        await firstHomeGate!.future;
+      }
       return ReadHttpResponse(statusCode: 200, body: homeJson);
     }
     if (!uri.path.endsWith('/records')) {

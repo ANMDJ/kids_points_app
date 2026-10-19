@@ -1,0 +1,47 @@
+@import '../../styles/vars.scss';
+
+.kp-read-banner {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  box-sizing: border-box;
+  width: auto;
+  margin: f2r(8) f2r(12) 0;
+  padding: f2r(8) f2r(8) f2r(8) f2r(12);
+  border-radius: f2r(14);
+}
+
+.kp-read-banner--info {
+  background: $primary-soft;
+}
+
+.kp-read-banner--error {
+  background: #fff1e8;
+}
+
+.kp-read-banner__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.kp-read-banner__text {
+  font-size: f2r(11.5);
+  line-height: 1.45;
+  font-weight: 500;
+  color: $primary-text;
+  word-break: break-all;
+}
+
+.kp-read-banner--error .kp-read-banner__text {
+  color: #9a4b1e;
+}
+
+.kp-read-banner__action {
+  flex-shrink: 0;
+  margin-left: f2r(8);
+  padding: f2r(4) f2r(8);
+  font-size: f2r(12);
+  font-weight: 600;
+  color: #9a4b1e;
+}
