@@ -24,6 +24,7 @@
 | [`15-w4c-handoff.md`](./15-w4c-handoff.md) | **阶段 W4-C 交接单**（小程序只读接入）：三项 env 编译期注入与缺一降级、Taro `ReadApiClient` / 严格 DTO / `readEpoch` 防竞态、记录页服务端分类过滤 ＋ 游标翻页、只读写入口拦截、首页/记录页下拉刷新、**首屏未完成时切分类的双端同款竞态修复**、可复跑基线 | ✅ W4-C 已收口 |
 | [`16-w4d-handoff.md`](./16-w4d-handoff.md) | **阶段 W4-D 交接单**（打卡 / 撤销写入）：`POST /records/check-in` / `:id/reverse` 的单事务 8 步、共用 `appendDraftInTx()`（锁 + 库钟 + 严格递增 + 余额 CAS）、业务日 `[start,end)` 与撤销释放名额、幂等三态与 `undo:<recordId>`、**真库抓到的 naive timestamp +8h / 未来边界行推后所有打卡 / 快照必须来自规则版本行**、前端写入口仍未放开 | ✅ W4-D 已收口 |
 | [`17-w4e-handoff.md`](./17-w4e-handoff.md) | **阶段 W4-E 交接单**（双端 live 打卡 / 撤销）：独立 `WriteTransport`（不改只读路径）、`submitCheckIn` / `submitUndoCheckIn`、写成功后先落地返回流水再刷新快照、`executedRecordId==record.id` 强校验、业务码优先的 409 / 404 文案、双击串行与幂等键、**live 无写客户端必须拒绝而不是本地假写** | ✅ W4-E 已收口 |
+| [`18-w5a-handoff.md`](./18-w5a-handoff.md) | **阶段 W5-A 交接单**（规则写端点）：四条路由（建 / 改 / 软删 / 按规则加习惯）＋三道屏障 ＋ `Idempotency-Key`、`expectedVersion` 乐观锁与 409 文案、**DELETE 无 body 也无 `Content-Type`**、回包 `ruleId` / `executedRecordId` 类同款「验明正身」、带符号分值原样发出、写回包与 `GET /home` 共用 `mapRule` / `mapHabit`、删除先改本地镜像再刷新、**缺陷闸门 E15 改为钉参数形状** | ✅ W5-A 已收口 |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
@@ -37,8 +38,10 @@
 > **W4-D** 起后端补上两条写入口：`POST /records/check-in` / `POST /records/:id/reverse`
 > 有库时真事务落库（流水 + 余额 + 审计），撤销是 append-only 冲正。
 > **W4-E** 起双端 live 首页真正调用这两条端点（不再只提示只读）：
-> 打卡 / 长按撤销会落库并刷新服务端快照；**其它写入口（记一笔 / 心愿 / 规则 / 档案）仍只读**。
-> 规则 / 习惯 CRUD / 心愿 / 邀请等其余写端点仍未建。
+> 打卡 / 长按撤销会落库并刷新服务端快照；**其它写入口（记一笔 / 心愿 / 档案）仍只读**。
+> **W5-A** 起规则页四条写入口也不再只读：`POST /point-rules`、`PATCH`（带 `expectedVersion`
+> 乐观锁）、`DELETE`（软删进回收站）、`POST /point-rules/:id/habits`，双端同构。
+> 记一笔 / 心愿 / 习惯 CRUD / 档案 / 邀请等其余写端点仍未建。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
@@ -947,6 +950,31 @@
     ⑩ 仍不粉饰：习惯 CRUD / 心愿 / 规则 / 邀请 / 记一笔仍未接后端；
     未做真机联调与高并发压测。
     交接单：[`17-w4e-handoff.md`](./17-w4e-handoff.md)。
+
+
+**W5-A 进展（2026-10-20）：规则写端点 + 双端接线**
+
+    ① **四条路由**：`POST /point-rules`、`PATCH /point-rules/:id`、
+    `DELETE /point-rules/:id`、`POST /point-rules/:id/habits`，挂在 `/point-rules` 下 ——
+    「加入习惯」是规则的派生动作，`ruleId` 在路径里，不可能漏传。
+    ② **三道屏障 + 幂等**：设备会话 → 成员 → 权限；孩子一律 403；
+    四个入口都接 `Idempotency-Key`，双击保存 / 删除不会多出版本行或审计。
+    ③ **乐观锁**：`PATCH` 必须带 `expectedVersion`（= 界面上看到的版本），不一致 409
+    `RULE_VERSION_CONFLICT`；客户端保留原内容并提示刷新，**不静默覆盖**别人刚改的规则。
+    ④ **DELETE 无 body**：不声明 `Content-Type`（空 JSON 会被严格后端拒）；
+    回包 `{ruleId}` 必须等于被删的那条，否则按 `malformed` 显式失败。
+    ⑤ **分值带符号**：客户端原样发 `points`（负 = 扣分），服务端落库拆成正数 + `direction`；
+    任一端再取反一次，扣分就会静默变加分。
+    ⑥ **同一套映射**：`mapRule` / `mapHabit` 从 `mapHome` 抽出，GET 与写回包共用；
+    映射异常统一归一成 `WriteApiException.malformed`，页面只处理一种错误。
+    ⑦ **先落地再刷新**：写成功先把回包落进列表再 `refreshFromServer()`；
+    删除额外**先**把本地镜像标 `deleted`，刷新失败也不会留下「删过却还在列表里」。
+    ⑧ **live 缺写客户端必须拒绝**：`isRuleWriteReadOnly` 时四个入口只提示、不改内存。
+    ⑨ 真跑基线（2026-10-20）：`backend npm test` → **382/382**；`npm run test:db` → **127/127**；
+    `npm run ci` → **0**；小程序 `tsc --noEmit` → **0**；`.tmp_test/run.js` → **60/60**（W5-A 12 条）；
+    `flutter analyze` → **0 issue**；`flutter test` → **75/75**。无新增迁移。
+    ⑩ 仍不粉饰：习惯 CRUD / 心愿 / 档案 / 邀请 / 记一笔仍未接后端；未做真机联调与压测。
+    交接单：[`18-w5a-handoff.md`](./18-w5a-handoff.md)。
 
 
 ### 文档缺陷修正记录

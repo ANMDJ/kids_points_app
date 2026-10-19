@@ -102,9 +102,19 @@ class AppStore extends ChangeNotifier {
   /// 首页打卡 / 长按撤销是否可用。
   bool get canWriteCheckIns => !isCheckInReadOnly;
 
-  /// 其它写入口（记一笔 / 心愿 / 规则 / 档案）仍只读 —— W4-E 只接了两条打卡端点。
+  /// 其它写入口（记一笔 / 心愿 / 档案）仍只读 —— W4-E 只接了两条打卡端点。
   /// 本地预览数据不受影响，可以随便点 —— 那本来就是演示。
   bool get isReadOnly => isLiveMode;
+
+  /// 规则写入口是否被只读拦截（W5-A：新建 / 编辑 / 删除 / 加入习惯）。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下这四条已经接了后端，不该再被全局
+  /// 「写入口未接」拦掉；只有**没注入写客户端**时才拦。
+  bool get isRuleWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下规则写操作的文案 —— 页面直接展示，不另编理由。
+  String get ruleReadOnlyWriteMessage =>
+      '只读模式：规则写入还没有接上后端，这次操作没有保存到服务器。';
 
   ReadStatus get readStatus => _readStatus;
 
@@ -120,7 +130,7 @@ class AppStore extends ChangeNotifier {
   RecordCategory? get recordFilter => _recordFilter;
 
   /// 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。
-  String get readOnlyWriteMessage => '只读模式：记一笔 / 心愿 / 规则等写入还没接后端，这次操作没有保存到服务器。';
+  String get readOnlyWriteMessage => '只读模式：记一笔 / 心愿等写入还没接后端，这次操作没有保存到服务器。';
 
   /// 记录页要展示的流水：
   ///   · 预览模式：对本地流水按分类过滤（原逻辑）；
@@ -647,6 +657,249 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  // ------------------------------------------------- 服务端写入口（W5-A：规则）
+
+  /// 新增规则（服务端写入口）。
+  ///
+  /// · 预览模式：走本地 [addRule]，返回值语义不变；
+  /// · live 模式：POST `/point-rules`，服务端在一个事务里写规则 + 第 1 版版本行
+  ///   + 审计日志；成功后把回包落到本地，再用服务端快照校正。
+  ///
+  /// 图标白名单 / 每日次数在**发请求前**按双端同一口径校验 —— 输入错误不值得
+  /// 让用户等一个 400。
+  Future<String?> submitAddRule({
+    required String title,
+    required String condition,
+    required int dailyLimit,
+    required int points,
+    required String iconName,
+    required Color color,
+    ActorContext actor = const ActorContext(),
+  }) async {
+    final String? invalid =
+        _validateRuleFields(dailyLimit: dailyLimit, iconName: iconName);
+    if (invalid != null) return invalid;
+    if (!isLiveMode) {
+      return addRule(
+        title: title,
+        condition: condition,
+        dailyLimit: dailyLimit,
+        points: points,
+        iconName: iconName,
+        color: color,
+        actor: actor,
+      );
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return ruleReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final RuleDto dto = await api.createRule(
+        title: title,
+        condition: condition,
+        dailyLimit: dailyLimit,
+        points: points,
+        icon: iconName,
+        color: hexColorOf(color),
+        idempotencyKey: _newIdempotencyKey('rule-create'),
+      );
+      if (_disposed) return null;
+      _applyRuleDto(dto);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '规则请求已发出，但结果无法确认。请刷新后查看，避免重复提交。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 编辑规则（服务端写入口）。
+  ///
+  /// `expectedVersion` 取的是**界面上看到的**版本号：服务端只接受「改的是当前版」，
+  /// 否则 409 `RULE_VERSION_CONFLICT` —— 不会悄悄覆盖另一位家长刚做的修改。
+  Future<String?> submitUpdateRule(
+    PointRule rule, {
+    required String title,
+    required String condition,
+    required int dailyLimit,
+    required int points,
+    ActorContext actor = const ActorContext(),
+  }) async {
+    final String? invalid = _validateRuleFields(
+      dailyLimit: dailyLimit,
+      iconName: rule.iconName,
+    );
+    if (invalid != null) return invalid;
+    if (!isLiveMode) {
+      return updateRule(
+        rule,
+        title: title,
+        condition: condition,
+        dailyLimit: dailyLimit,
+        points: points,
+        actor: actor,
+      );
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return ruleReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final RuleDto dto = await api.updateRule(
+        rule.id,
+        title: title,
+        condition: condition,
+        dailyLimit: dailyLimit,
+        points: points,
+        expectedVersion: rule.currentVersion,
+        idempotencyKey: _newIdempotencyKey('rule-update'),
+      );
+      if (_disposed) return null;
+      _applyRuleDto(dto);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '规则请求已发出，但结果无法确认。请刷新后查看，避免重复提交。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 软删规则（服务端写入口）：删除只改状态位，版本行与历史流水保留。
+  ///
+  /// 服务端是幂等的（重复删除同样回 200），这里也照常返回 null。
+  Future<String?> submitRemoveRule(
+    PointRule rule, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) {
+      removeRule(rule, actor: actor);
+      return null;
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return ruleReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      await api.deleteRule(
+        rule.id,
+        idempotencyKey: _newIdempotencyKey('rule-delete'),
+      );
+      if (_disposed) return null;
+      // 先让本地镜像跟上：即使随后的刷新失败，也不会留一条「已删却还在列表里」
+      // 的规则（回收站条目的 deletedAt 用本地时间，刷新成功后以服务端为准）。
+      final PointRule? local = _findById(_ruleList, rule.id);
+      if (local != null && local.status != RecordStatus.deleted) {
+        local.status = RecordStatus.deleted;
+        local.deletedAt = DateTime.now();
+        _persist();
+      }
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '删除请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 按规则生成首页习惯（服务端写入口）。
+  ///
+  /// 扣分规则 / 重复添加在本地先拦一次（即时反馈），最终仍以服务端判定为准：
+  /// 服务端按 `sourceRuleId` 判重，改过标题也不会重复生成。
+  Future<String?> submitAddHabitFromRule(
+    PointRule rule, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) return addHabitFromRule(rule, actor: actor);
+    if (rule.points < 0) {
+      return '“${rule.title}”是扣分规则，不能加入今天的习惯';
+    }
+    if (habits.any((Habit habit) => habit.ruleId == rule.id)) {
+      return '“${rule.title}”已经在今天的习惯里了';
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return ruleReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final HabitDto dto = await api.addHabitFromRule(
+        rule.id,
+        idempotencyKey: _newIdempotencyKey('rule-habit'),
+      );
+      if (_disposed) return null;
+      _applyHabitDto(dto);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 每日次数 / 图标白名单 —— 本地与写入口**共用**同一套校验与文案。
+  String? _validateRuleFields({
+    required int dailyLimit,
+    required String iconName,
+  }) {
+    if (!isDailyLimitValid(dailyLimit)) {
+      return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
+    }
+    if (!isKnownIconName(iconName)) {
+      return '图标「$iconName」不在可选列表里';
+    }
+    return null;
+  }
+
+  /// 写回包 → UI 规则模型（与服务端快照同一套映射）。
+  void _applyRuleDto(RuleDto dto) {
+    final PointRule rule;
+    try {
+      rule = mapRule(dto, 'rule');
+    } on ReadApiException catch (error) {
+      throw WriteApiException.malformed(
+        'rule',
+        detail: error.detail ?? error.userMessage,
+      );
+    }
+    _ruleList
+      ..removeWhere((PointRule item) => item.id == rule.id)
+      ..insert(0, rule);
+    _persist();
+  }
+
+  /// 写回包 → UI 习惯模型。
+  void _applyHabitDto(HabitDto dto) {
+    final Habit habit;
+    try {
+      habit = mapHabit(dto, 'habit');
+    } on ReadApiException catch (error) {
+      throw WriteApiException.malformed(
+        'habit',
+        detail: error.detail ?? error.userMessage,
+      );
+    }
+    _habitList
+      ..removeWhere((Habit item) => item.id == habit.id)
+      ..add(habit);
+    _persist();
+  }
+
   /// 把写端点返回的流水立即落到本地（随后仍会用服务端快照校正）。
   void _applyWrittenRecord(RecordDto dto) {
     final PointRecord record;
@@ -889,12 +1142,9 @@ class AppStore extends ChangeNotifier {
     required Color color,
     ActorContext actor = const ActorContext(),
   }) {
-    if (!isDailyLimitValid(dailyLimit)) {
-      return '每天次数只能是 $dailyLimitMin–$dailyLimitMax 之间的整数';
-    }
-    if (!isKnownIconName(iconName)) {
-      return '图标「$iconName」不在可选列表里';
-    }
+    final String? invalid =
+        _validateRuleFields(dailyLimit: dailyLimit, iconName: iconName);
+    if (invalid != null) return invalid;
     final PointRule rule = PointRule(
       id: _newId('rule'),
       title: title.trim(),

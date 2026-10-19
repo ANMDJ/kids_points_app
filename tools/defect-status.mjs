@@ -350,7 +350,9 @@ const DEFECTS = [
     A.has(T_STORE, /dailyLimit: rule\.dailyLimit/, '规则→习惯未直取结构字段（频次）'),
     A.has(F_STORE, /condition: rule\.condition/, '规则→习惯未直取结构字段（条件）'),
     A.has(F_STORE, /dailyLimit: rule\.dailyLimit/, '规则→习惯未直取结构字段（频次）'),
-    A.has(T_RULE_SHEET, /store\.addRule\(\s*trimmed,\s*condition,\s*dailyLimit,/, '新增规则表单未收集结构字段'),
+    // W5-A：表单改为先走 `submitAddRule`（预览模式内部转调 addRule，live 模式真 POST），
+    // 但「收集的是结构字段」这条不变 —— 断言钉在**参数形状**上，而不是某个函数名。
+    A.has(T_RULE_SHEET, /store\.(?:submit)?[aA]ddRule\(\s*trimmed,\s*condition,\s*dailyLimit,/, '新增规则表单未收集结构字段'),
     A.has(F_RULE_SHEET, /condition: conditionController\.text,/, '新增规则表单未收集结构字段'),
     A.has(T_RUNNER, /展示串一律由结构字段派生/, 'run.js 缺少 E15 回归用例'),
     A.has(F_TESTS, /结构字段是唯一真相/, 'app_test.dart 缺少 E15 回归用例'),

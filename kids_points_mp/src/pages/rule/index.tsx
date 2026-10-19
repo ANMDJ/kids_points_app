@@ -24,10 +24,11 @@ export default function Rule() {
   // 页面不做版本运算（currentVersion 由 store 递增）。
   const editSheet = usePayloadSheet<PointRule>()
 
-  // live 模式没有规则写端点：编辑 / 新建都会骗用户「改了」，所以入口先拦。
+  // live 模式但没注入写客户端：规则写入口仍只读 —— 编辑 / 新建 / 删除都会
+  // 让用户以为「改了」，所以入口先拦。已接入写端点时不再拦截（W5-A）。
   const guardReadOnly = (): boolean => {
-    if (!store.isReadOnly) return false
-    toast(store.readOnlyWriteMessage)
+    if (!store.isRuleWriteReadOnly) return false
+    toast(store.ruleReadOnlyWriteMessage)
     return true
   }
 

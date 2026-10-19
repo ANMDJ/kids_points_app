@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kids_points_app/data/app_store.dart';
 import 'package:kids_points_app/data/read_api.dart';
+import 'package:kids_points_app/data/read_dto.dart';
 import 'package:kids_points_app/data/write_api.dart';
 import 'package:kids_points_app/data/write_api_errors.dart';
 import 'package:kids_points_app/data/write_dto.dart';
 import 'package:kids_points_app/main.dart';
+import 'package:kids_points_app/models/point_rule.dart';
 
 /// W4-E：写端点（打卡 / 撤销）的客户端与 store 行为。
 ///
@@ -73,6 +76,47 @@ void main() {
       ),
       'executedRecordId': executedRecordId ?? id,
     });
+  }
+
+  Map<String, Object?> ruleJson({
+    String id = 'rule-1',
+    String title = '每天练琴',
+    String condition = '认真练习不断开',
+    int points = 2,
+    String direction = 'reward',
+    String icon = 'book',
+    String color = '#7fbf55',
+    int dailyLimit = 1,
+    int currentVersion = 1,
+  }) {
+    return <String, Object?>{
+      'id': id,
+      'title': title,
+      'condition': condition,
+      'points': points,
+      'direction': direction,
+      'icon': icon,
+      'color': color,
+      'dailyLimit': dailyLimit,
+      'currentVersion': currentVersion,
+    };
+  }
+
+  Map<String, Object?> habitJson({
+    String id = 'habit-9',
+    String title = '每天练琴',
+    String? ruleId = 'rule-1',
+  }) {
+    return <String, Object?>{
+      'id': id,
+      'title': title,
+      'points': 2,
+      'icon': 'book',
+      'color': '#7fbf55',
+      'condition': '认真练习不断开',
+      'dailyLimit': 1,
+      'ruleId': ruleId,
+    };
   }
 
   group('WriteApiClient：请求形状', () {
@@ -155,6 +199,176 @@ void main() {
     });
   });
 
+  group('规则写端点（W5-A）：方法 / 路径 / 带符号分值', () {
+    test('新建 POST /point-rules：扣分原样发 -3（客户端不取反）', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 201,
+            body: jsonEncode(
+              ruleJson(points: -3, direction: 'penalty', title: '打人'),
+            ),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final RuleDto rule = await client.createRule(
+        title: ' 打人 ',
+        condition: '  ',
+        dailyLimit: 2,
+        points: -3,
+        icon: 'book',
+        color: '#7fbf55',
+        idempotencyKey: 'key-rule',
+      );
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'POST');
+      expect(call.uri.path, '/api/point-rules');
+      expect(jsonDecode(call.body), <String, Object?>{
+        'title': '打人',
+        'condition': '',
+        'dailyLimit': 2,
+        'points': -3,
+        'icon': 'book',
+        'color': '#7fbf55',
+      });
+      expect(call.headers['idempotency-key'], 'key-rule');
+      expect(call.headers['content-type'], contains('application/json'));
+      expect(rule.points, -3);
+      expect(rule.direction, 'penalty');
+      expect(rule.currentVersion, 1);
+    });
+
+    test('编辑 PATCH /point-rules/:id：expectedVersion 随请求发出', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 200,
+            body: jsonEncode(ruleJson(currentVersion: 3)),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final RuleDto rule = await client.updateRule(
+        'rule-1',
+        title: '每天练琴',
+        condition: '认真练习',
+        dailyLimit: 2,
+        points: 2,
+        expectedVersion: 2,
+      );
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'PATCH');
+      expect(call.uri.path, '/api/point-rules/rule-1');
+      expect(
+        (jsonDecode(call.body) as Map<String, Object?>)['expectedVersion'],
+        2,
+        reason: '乐观锁靠它：客户端只能声明「我改的是第几版」',
+      );
+      expect(rule.currentVersion, 3);
+    });
+
+    test('删除 DELETE /point-rules/:id：无请求体，回包 ruleId 必须一致', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 200,
+            body: jsonEncode(<String, Object?>{'ruleId': 'rule-1'}),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      expect(await client.deleteRule('rule-1'), 'rule-1');
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'DELETE');
+      expect(call.uri.path, '/api/point-rules/rule-1');
+      expect(call.body, isEmpty, reason: 'DELETE 不带 body（幂等哈希按 null 算）');
+
+      final _FakeWriteTransport drifted = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 200,
+            body: jsonEncode(<String, Object?>{'ruleId': 'other'}),
+          );
+        },
+      );
+      final WriteApiClient other = WriteApiClient(
+        config: config,
+        transport: drifted,
+      );
+      await expectLater(
+        other.deleteRule('rule-1'),
+        throwsA(isA<WriteApiException>().having(
+          (WriteApiException e) => e.kind,
+          'kind',
+          WriteFailureKind.malformed,
+        )),
+      );
+    });
+
+    test('加入习惯 POST /point-rules/:id/habits：解析 HabitDto，保留 ruleId', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 201,
+            body: jsonEncode(habitJson()),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final HabitDto habit = await client.addHabitFromRule('rule-1');
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'POST');
+      expect(call.uri.path, '/api/point-rules/rule-1/habits');
+      expect(call.body, isEmpty, reason: '目标规则已在路径里，不需要 body');
+      expect(habit.id, 'habit-9');
+      expect(habit.ruleId, 'rule-1');
+    });
+
+    test('回包缺字段 ⇒ malformed，不把坏数据塞进 UI', () async {
+      final Map<String, Object?> broken = ruleJson()
+        ..remove('currentVersion');
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 201,
+            body: jsonEncode(broken),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      await expectLater(
+        client.createRule(
+          title: '练琴',
+          condition: '',
+          dailyLimit: 1,
+          points: 1,
+          icon: 'book',
+          color: '#7fbf55',
+        ),
+        throwsA(isA<WriteApiException>().having(
+          (WriteApiException e) => e.kind,
+          'kind',
+          WriteFailureKind.malformed,
+        )),
+      );
+    });
+  });
+
   group('WriteApiException：业务码优先于状态码', () {
     test('409 每日上限 → conflict + 面向用户的文案', () {
       final WriteApiException error = WriteApiException.fromHttp(
@@ -214,7 +428,12 @@ void main() {
     late _ScriptedReadTransport readTransport;
     late _FakeWriteApi writeApi;
 
-    String homeJson({int points = 11}) => jsonEncode(<String, Object?>{
+    String homeJson({
+      int points = 11,
+      List<Object?>? rules,
+      List<Object?>? habits,
+    }) =>
+        jsonEncode(<String, Object?>{
           'child': <String, Object?>{
             'id': 'child-1',
             'name': '小明',
@@ -222,19 +441,20 @@ void main() {
           },
           'goodHabitCount': 1,
           'rewardCount': 0,
-          'habits': <Object?>[
-            <String, Object?>{
-              'id': 'habit-1',
-              'title': '认真刷牙',
-              'points': 1,
-              'icon': 'spray',
-              'color': '#7fbf55',
-              'condition': '早晚各一次',
-              'dailyLimit': 2,
-              'ruleId': null,
-            },
-          ],
-          'rules': <Object?>[],
+          'habits': habits ??
+              <Object?>[
+                <String, Object?>{
+                  'id': 'habit-1',
+                  'title': '认真刷牙',
+                  'points': 1,
+                  'icon': 'spray',
+                  'color': '#7fbf55',
+                  'condition': '早晚各一次',
+                  'dailyLimit': 2,
+                  'ruleId': null,
+                },
+              ],
+          'rules': rules ?? <Object?>[],
           'wishes': <Object?>[],
         });
 
@@ -382,6 +602,122 @@ void main() {
       expect(message, contains('没有接上后端'));
       expect(store.points, beforePoints);
     });
+
+    test('规则新建：live 下走 POST，扣分不被二次取反', () async {
+      readTransport.homeJson = homeJson(
+        rules: <Object?>[
+          ruleJson(points: -3, direction: 'penalty', title: '打人'),
+        ],
+      );
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      expect(store.isRuleWriteReadOnly, isFalse);
+      writeApi.createRuleResult = RuleDto.fromJson(
+        ruleJson(points: -3, direction: 'penalty', title: '打人'),
+        r'$',
+      );
+
+      final String? message = await store.submitAddRule(
+        title: '打人',
+        condition: '',
+        dailyLimit: 2,
+        points: -3,
+        iconName: 'book',
+        color: const Color(0xFF7FBF55),
+      );
+
+      expect(message, isNull);
+      expect(writeApi.createRuleCalls, 1);
+      expect(writeApi.lastPoints, -3);
+      expect(writeApi.lastColor, '#7fbf55');
+      expect(store.rules.single.id, 'rule-1');
+      expect(store.rules.single.points, -3,
+          reason: '服务端回包已带符号，客户端只能转换一次');
+    });
+
+    test('规则编辑：expectedVersion 取界面版本，成功后本地跟到新版本', () async {
+      readTransport.homeJson = homeJson(rules: <Object?>[ruleJson()]);
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      final PointRule rule = store.rules.single;
+      writeApi.updateRuleResult = RuleDto.fromJson(
+        ruleJson(title: '每天练琴 20 分钟', currentVersion: 2),
+        r'$',
+      );
+      readTransport.homeJson = homeJson(
+        rules: <Object?>[
+          ruleJson(title: '每天练琴 20 分钟', currentVersion: 2),
+        ],
+      );
+
+      final String? message = await store.submitUpdateRule(
+        rule,
+        title: '每天练琴 20 分钟',
+        condition: '认真练习不断开',
+        dailyLimit: 1,
+        points: 2,
+      );
+
+      expect(message, isNull);
+      expect(writeApi.lastExpectedVersion, 1);
+      expect(writeApi.lastRuleId, 'rule-1');
+      expect(store.rules.single.currentVersion, 2);
+    });
+
+    test('规则编辑冲突：409 文案交给界面，本地版本不动', () async {
+      readTransport.homeJson = homeJson(rules: <Object?>[ruleJson()]);
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      writeApi.ruleError = WriteApiException(
+        WriteFailureKind.conflict,
+        '这条规则刚被别人改过，请刷新后再改',
+        code: 'RULE_VERSION_CONFLICT',
+      );
+
+      final String? message = await store.submitUpdateRule(
+        store.rules.single,
+        title: '每天练琴',
+        condition: '认真练习不断开',
+        dailyLimit: 1,
+        points: 2,
+      );
+
+      expect(message, contains('刚被别人改过'));
+      expect(store.rules.single.currentVersion, 1);
+    });
+
+    test('规则删除：调 DELETE /point-rules/:id，本地不再出现在规则页', () async {
+      readTransport.homeJson = homeJson(rules: <Object?>[ruleJson()]);
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      readTransport.homeJson = homeJson(); // 服务端视角：已经软删
+
+      final String? message = await store.submitRemoveRule(store.rules.single);
+
+      expect(message, isNull);
+      expect(writeApi.deleteRuleCalls, 1);
+      expect(writeApi.lastRuleId, 'rule-1');
+      expect(store.rules, isEmpty);
+    });
+
+    test('加入今天的习惯：POST 生成，习惯记得来自哪条规则', () async {
+      readTransport.homeJson = homeJson(rules: <Object?>[ruleJson()]);
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      writeApi.addHabitResult = HabitDto.fromJson(habitJson(), r'$');
+      readTransport.homeJson = homeJson(
+        rules: <Object?>[ruleJson()],
+        habits: <Object?>[habitJson()],
+      );
+
+      final String? message =
+          await store.submitAddHabitFromRule(store.rules.single);
+
+      expect(message, isNull);
+      expect(writeApi.addHabitCalls, 1);
+      expect(writeApi.lastRuleId, 'rule-1');
+      expect(store.habits.single.ruleId, 'rule-1');
+    });
   });
 
   testWidgets('live 首页：点习惯会调用写端点，不再显示只读拦截', (WidgetTester tester) async {
@@ -438,8 +774,9 @@ void main() {
 }
 
 class _WriteCall {
-  _WriteCall(this.uri, this.headers, this.body);
+  _WriteCall(this.method, this.uri, this.headers, this.body);
 
+  final String method;
   final Uri uri;
   final Map<String, String> headers;
   final String body;
@@ -459,9 +796,10 @@ class _FakeWriteTransport implements WriteTransport {
   Future<WriteHttpResponse> send(
     Uri uri,
     Map<String, String> headers,
-    String body,
-  ) {
-    calls.add(_WriteCall(uri, Map<String, String>.from(headers), body));
+    String body, {
+    String method = 'POST',
+  }) {
+    calls.add(_WriteCall(method, uri, Map<String, String>.from(headers), body));
     return handler(uri, headers, body);
   }
 
@@ -472,13 +810,30 @@ class _FakeWriteTransport implements WriteTransport {
 class _FakeWriteApi implements WriteApi {
   int checkInCalls = 0;
   int reverseCalls = 0;
+  int createRuleCalls = 0;
+  int updateRuleCalls = 0;
+  int deleteRuleCalls = 0;
+  int addHabitCalls = 0;
   String? lastHabitId;
   String? lastIdempotencyKey;
   String? lastRecordId;
   String? lastNote;
+  String? lastRuleId;
+  String? lastTitle;
+  String? lastCondition;
+  String? lastIcon;
+  String? lastColor;
+  int? lastDailyLimit;
+  int? lastPoints;
+  int? lastExpectedVersion;
   WrittenRecordDto? checkInResult;
   WrittenRecordDto? reverseResult;
+  RuleDto? createRuleResult;
+  RuleDto? updateRuleResult;
+  HabitDto? addHabitResult;
+  String? deleteRuleResult;
   Object? checkInError;
+  Object? ruleError;
   Completer<WrittenRecordDto>? checkInGate;
 
   @override
@@ -507,13 +862,81 @@ class _FakeWriteApi implements WriteApi {
   }
 
   @override
+  Future<RuleDto> createRule({
+    required String title,
+    required String condition,
+    required int dailyLimit,
+    required int points,
+    required String icon,
+    required String color,
+    String? idempotencyKey,
+  }) async {
+    createRuleCalls += 1;
+    lastTitle = title;
+    lastCondition = condition;
+    lastDailyLimit = dailyLimit;
+    lastPoints = points;
+    lastIcon = icon;
+    lastColor = color;
+    lastIdempotencyKey = idempotencyKey;
+    if (ruleError != null) throw ruleError!;
+    return createRuleResult!;
+  }
+
+  @override
+  Future<RuleDto> updateRule(
+    String ruleId, {
+    required String title,
+    required String condition,
+    required int dailyLimit,
+    required int points,
+    required int expectedVersion,
+    String? idempotencyKey,
+  }) async {
+    updateRuleCalls += 1;
+    lastRuleId = ruleId;
+    lastTitle = title;
+    lastPoints = points;
+    lastExpectedVersion = expectedVersion;
+    lastIdempotencyKey = idempotencyKey;
+    if (ruleError != null) throw ruleError!;
+    return updateRuleResult!;
+  }
+
+  @override
+  Future<String> deleteRule(
+    String ruleId, {
+    String? idempotencyKey,
+  }) async {
+    deleteRuleCalls += 1;
+    lastRuleId = ruleId;
+    lastIdempotencyKey = idempotencyKey;
+    if (ruleError != null) throw ruleError!;
+    return deleteRuleResult ?? ruleId;
+  }
+
+  @override
+  Future<HabitDto> addHabitFromRule(
+    String ruleId, {
+    String? idempotencyKey,
+  }) async {
+    addHabitCalls += 1;
+    lastRuleId = ruleId;
+    lastIdempotencyKey = idempotencyKey;
+    if (ruleError != null) throw ruleError!;
+    return addHabitResult!;
+  }
+
+  @override
   void close() {}
 }
 
 class _ScriptedReadTransport implements ReadTransport {
   _ScriptedReadTransport({required this.homeJson, required this.pageJson});
 
-  final String homeJson;
+  /// 可变：写入口成功后 `AppStore` 会重新拉 `/home`，
+  /// 测试里直接在提交前把它改成「服务端此刻的样子」。
+  String homeJson;
   String pageJson;
   final List<Uri> recordCalls = <Uri>[];
 

@@ -1,5 +1,5 @@
 /**
- * 写端点（W4-E：打卡 / 撤销）的**失败分类**。
+ * 写端点（W4-E：打卡 / 撤销，W5-A：规则新增 / 编辑 / 删除 / 加入习惯）的**失败分类**。
  *
  * 与只读错误分开，是因为同一个 HTTP 状态码在两边语义不同：
  * 404 在写里常见的是 `HABIT_NOT_FOUND` / `RECORD_NOT_FOUND`；
@@ -128,6 +128,13 @@ export class WriteApiException extends Error {
           base
         )
       }
+      if (code === 'RULE_NOT_FOUND') {
+        return new WriteApiException(
+          'notFound',
+          '这条规则不存在或已被删除，请刷新后重试。',
+          base
+        )
+      }
       return new WriteApiException(
         'notFound',
         '要操作的数据不存在或已被删除（404），这次操作没有保存。',
@@ -174,6 +181,27 @@ export class WriteApiException extends Error {
         return new WriteApiException(
           'conflict',
           '这个习惯的分值配置不正确，暂时不能打卡。',
+          base
+        )
+      }
+      if (code === 'RULE_VERSION_CONFLICT') {
+        return new WriteApiException(
+          'conflict',
+          '这条规则刚被其他人改动过，请刷新后再改（不会覆盖别人的修改）。',
+          base
+        )
+      }
+      if (code === 'RULE_IS_PENALTY') {
+        return new WriteApiException(
+          'conflict',
+          '这是扣分规则，不能加入今天的习惯。',
+          base
+        )
+      }
+      if (code === 'HABIT_ALREADY_EXISTS') {
+        return new WriteApiException(
+          'conflict',
+          '这个习惯已经在今天的习惯里了。',
           base
         )
       }

@@ -950,6 +950,15 @@ if (w4e.error || w4e.status !== 0) {
   console.log('FAIL  W4-E 异步写入口用例（run-w4e.mjs） -> 子进程未通过')
 }
 
+// ── W5-A 异步写入口用例（规则 CRUD + 加入习惯）：同样交给 ESM 子进程 ──
+const w5a = spawnSync(process.execPath, [join(__dirname, 'run-w5a.mjs')], {
+  stdio: 'inherit'
+})
+if (w5a.error || w5a.status !== 0) {
+  failed += 1
+  console.log('FAIL  W5-A 规则写端点用例（run-w5a.mjs） -> 子进程未通过')
+}
+
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exitCode = failed === 0 ? 0 : 1
 

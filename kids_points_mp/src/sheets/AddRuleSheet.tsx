@@ -43,7 +43,7 @@ export default function AddRuleSheet({
   // —— 允许「改了但不入版本」会让「第 N 版规则长什么样」缺一块（C10 的语义要求快照完整）。
   // 要让编辑也能改图标，得先把 icon 纳入版本快照（契约扩展），本轮不做，见 docs/design/03 §D9 现状。
   const [iconIndex, setIconIndex] = useState(0)
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const trimmed = title.trim()
     if (trimmed === '') {
       toast('规则名称不能为空哦')
@@ -60,7 +60,7 @@ export default function AddRuleSheet({
         checkedCountToday: store.checkedCountTodayOfRule(rule),
         newDailyLimit: dailyLimit
       })
-      const message = store.updateRule(rule, {
+      const message = await store.submitUpdateRule(rule, {
         title: trimmed,
         condition,
         dailyLimit,
@@ -74,7 +74,7 @@ export default function AddRuleSheet({
       toast(notice ?? `已更新规则：${trimmed}（第 ${rule.currentVersion + 1} 版）`)
       return
     }
-    const message = store.addRule(
+    const message = await store.submitAddRule(
       trimmed,
       condition,
       dailyLimit,

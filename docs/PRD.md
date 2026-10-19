@@ -751,10 +751,10 @@ User（自然人）
 
 | 项 | 状态 | 影响 |
 |---|---|---|
-| **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），但**绝大多数端点尚不存在** | W4–W6 的主体工作量（规则 / 习惯 / 心愿 / 邀请等） |
+| **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），**W4 起有只读 `GET /home` / `GET /records`**，**W4-D 起有打卡 / 撤销**，**W5-A 起有规则四条写端点**（`/point-rules` 建 / 改 / 软删 / 加习惯）；**其余端点尚不存在** | 剩余主体工作量（习惯 CRUD / 心愿 / 档案 / 邀请等） |
 | **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但~~**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）~~ → **W2-D（2026-10-16）已结清：有库真查库、无库才是 501**、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | 三个端口的 Prisma 实现**均已交付**（`Membership` / `DeviceSession` = W2-D；`Approvals` = **W3-A**）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
 | **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` / `request_points_bonus` / `add_wish`；`autoReason` **五种全部可复现**；`expired` 有后台扫描（`ApprovalsExpiryService`）；`Idempotency-Key` 已接到 create / decide / withdraw（无库 501）。真库证据：`test-db/approvals-closing-db.dbtest.ts`（5 文件 / 75 条） | 审批状态机本身已收尾；W4 起是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点） |
-| **双端接 API** | ❌ 未开始；`AppStore` 仍为**内存态**（重启回到空态） | W4 |
+| **双端接 API** | ✅ **W4-C** 起双端只读接入；**W4-E** 起首页打卡 / 撤销真写；**W5-A** 起规则四条写入口真写（未配 env 仍为本地预览）；其余写入口仍本地 | 见 `design/` 的 W4 / W5-A 段；**"接了 API"≠"全部写入口都通了"** |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
 | **通知 / 推送** | ❌ 无依赖、无凭据（L3） | W6 |
 | **Agent** | ❌ 待建 | W6 |

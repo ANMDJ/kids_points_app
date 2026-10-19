@@ -20,12 +20,12 @@ class PointsRuleScreen extends StatelessWidget {
     final double bottomInset = MediaQuery.of(context).padding.bottom;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
-    // live 模式没有规则写端点：编辑 / 新建都会骗用户「改了」，所以入口先拦。
+    // 规则写端点已接（W5-A）：只有「live 但没注入写客户端」时才拦。
     bool guardReadOnly() {
-      if (!store.isReadOnly) return false;
+      if (!store.isRuleWriteReadOnly) return false;
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
-        SnackBar(content: Text(store.readOnlyWriteMessage)),
+        SnackBar(content: Text(store.ruleReadOnlyWriteMessage)),
       );
       return true;
     }

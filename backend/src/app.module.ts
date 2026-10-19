@@ -43,7 +43,9 @@ import { WishesModule } from './wishes/wishes.module'
     //   没有 ⇒ 绑 NotImplementedLedgerRepository（六个方法全抛 501，响亮失败而非静默 no-op）。
     //   这里**不传参**＝按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
     LedgerModule.register(),
-    RulesModule,
+    // ★ W5-A（2026-10-19）：写入口 `POST/PATCH/DELETE /point-rules` 与
+    //   `POST /point-rules/:id/habits`。有库 ⇒ PrismaRulesRepository；无库 ⇒ 501。
+    RulesModule.register(),
     // ★ W4-D（2026-10-19）：写入口 `POST /records/check-in` / `POST /records/:id/reverse`。
     //   有库 ⇒ PrismaHabitsRepository（同事务写流水/余额/审计）；无库 ⇒ 501（不假装打卡成功）。
     //   不传参 ⇒ 按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。

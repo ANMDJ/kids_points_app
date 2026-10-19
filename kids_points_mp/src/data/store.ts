@@ -8,9 +8,9 @@ import {
   ReadApiClient
 } from './read_api'
 import { ReadApiException } from './read_api_errors'
-import { mapHome, mapRecord, mapRecordsPage } from './read_mapper'
+import { mapHabit, mapHome, mapRecord, mapRecordsPage, mapRule } from './read_mapper'
 import type { RecordsPage } from './read_mapper'
-import type { RecordDto } from './read_dto'
+import type { HabitDto, RecordDto, RuleDto } from './read_dto'
 import { createWriteApiFromEnvironment, WriteApi } from './write_api'
 import { WriteApiException } from './write_api_errors'
 import type { WrittenRecordDto } from './write_dto'
@@ -188,6 +188,21 @@ export class AppStore {
     return this.isLiveMode
   }
 
+  /**
+   * 规则写入口是否被只读拦截（W5-A：新建 / 编辑 / 删除 / 加入习惯）。
+   *
+   * 与 [isReadOnly] 分开：live 模式下这四条已经接了后端，不该再被全局
+   * 「写入口未接」拦掉；只有**没注入写客户端**时才拦。
+   */
+  get isRuleWriteReadOnly(): boolean {
+    return this.isLiveMode && this.writeApi === null
+  }
+
+  /** 只读模式下规则写操作的文案 —— 页面直接展示，不另编理由。 */
+  get ruleReadOnlyWriteMessage(): string {
+    return '只读模式：规则写入还没有接上后端，这次操作没有保存到服务器。'
+  }
+
   get readStatus(): ReadStatus {
     return this.readStatusValue
   }
@@ -212,7 +227,7 @@ export class AppStore {
 
   /** 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。 */
   get readOnlyWriteMessage(): string {
-    return '只读模式：记一笔 / 心愿 / 规则等写入还没接后端，这次操作没有保存到服务器。'
+    return '只读模式：记一笔 / 心愿等写入还没接后端，这次操作没有保存到服务器。'
   }
 
   /**
@@ -733,6 +748,222 @@ export class AppStore {
     }
   }
 
+  // ------------------------------------------------- 服务端写入口（W5-A：规则）
+
+  /**
+   * 新增规则（服务端写入口）。
+   *
+   * · 预览模式：走本地 [addRule]，返回值语义不变；
+   * · live 模式：POST `/point-rules`，服务端在一个事务里写规则 + 第 1 版版本行
+   *   + 审计日志；成功后把回包落到本地，再用服务端快照校正。
+   *
+   * 图标白名单 / 每日次数在**发请求前**按双端同一口径校验 —— 输入错误不值得
+   * 让用户等一个 400。
+   */
+  async submitAddRule(
+    title: string,
+    condition: string,
+    dailyLimit: number,
+    points: number,
+    icon: IconOption['icon'],
+    color: string,
+    actor: ActorContext = { role: 'guardian' }
+  ): Promise<string | null> {
+    const invalid = this.validateRuleFields(dailyLimit, icon)
+    if (invalid !== null) return invalid
+    if (!this.isLiveMode) {
+      return this.addRule(title, condition, dailyLimit, points, icon, color, actor)
+    }
+    const api = this.writeApi
+    if (api === null) return this.ruleReadOnlyWriteMessage
+    if (this.writeInFlight) return '上一次操作正在保存中，请稍候…'
+
+    this.writeInFlight = true
+    try {
+      const dto = await api.createRule({
+        title,
+        condition,
+        dailyLimit,
+        points,
+        icon,
+        color,
+        idempotencyKey: this.newIdempotencyKey('rule-create')
+      })
+      this.applyRuleDto(dto)
+      await this.refreshFromServer()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) return error.userMessage
+      return '规则请求已发出，但结果无法确认。请刷新后查看，避免重复提交。'
+    } finally {
+      this.writeInFlight = false
+    }
+  }
+
+  /**
+   * 编辑规则（服务端写入口）。
+   *
+   * `expectedVersion` 取的是**界面上看到的**版本号：服务端只接受「改的是当前版」，
+   * 否则 409 `RULE_VERSION_CONFLICT` —— 不会悄悄覆盖另一位家长刚做的修改。
+   */
+  async submitUpdateRule(
+    rule: PointRule,
+    input: {
+      title: string
+      condition: string
+      dailyLimit: number
+      points: number
+      /** 变更说明，写进版本记录（家长回看"为什么改"） */
+      changeNote?: string
+    },
+    actor: ActorContext = { role: 'guardian' }
+  ): Promise<string | null> {
+    const invalid = this.validateRuleFields(input.dailyLimit, rule.icon)
+    if (invalid !== null) return invalid
+    if (!this.isLiveMode) {
+      return this.updateRule(rule, input, actor)
+    }
+    const api = this.writeApi
+    if (api === null) return this.ruleReadOnlyWriteMessage
+    if (this.writeInFlight) return '上一次操作正在保存中，请稍候…'
+
+    this.writeInFlight = true
+    try {
+      const dto = await api.updateRule(rule.id, {
+        title: input.title,
+        condition: input.condition,
+        dailyLimit: input.dailyLimit,
+        points: input.points,
+        expectedVersion: rule.currentVersion,
+        idempotencyKey: this.newIdempotencyKey('rule-update')
+      })
+      this.applyRuleDto(dto)
+      await this.refreshFromServer()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) return error.userMessage
+      return '规则请求已发出，但结果无法确认。请刷新后查看，避免重复提交。'
+    } finally {
+      this.writeInFlight = false
+    }
+  }
+
+  /**
+   * 软删规则（服务端写入口）：删除只改状态位，版本行与历史流水保留。
+   *
+   * 服务端是幂等的（重复删除同样回 200），这里也照常返回 null。
+   */
+  async submitRemoveRule(
+    rule: PointRule,
+    actor: ActorContext = { role: 'guardian' }
+  ): Promise<string | null> {
+    if (!this.isLiveMode) {
+      this.removeRule(rule, actor)
+      return null
+    }
+    const api = this.writeApi
+    if (api === null) return this.ruleReadOnlyWriteMessage
+    if (this.writeInFlight) return '上一次操作正在保存中，请稍候…'
+
+    this.writeInFlight = true
+    try {
+      await api.deleteRule(rule.id, this.newIdempotencyKey('rule-delete'))
+      // 先让本地镜像跟上：即使随后的刷新失败，也不会留一条「已删却还在列表里」
+      // 的规则（回收站条目的 deletedAt 用本地时间，刷新成功后以服务端为准）。
+      const local = this.ruleList.find((item) => item.id === rule.id)
+      if (local && local.status !== 'deleted') {
+        local.status = 'deleted'
+        local.deletedAt = Date.now()
+        this.persist()
+      }
+      await this.refreshFromServer()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) return error.userMessage
+      return '删除请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.writeInFlight = false
+    }
+  }
+
+  /**
+   * 按规则生成首页习惯（服务端写入口）。
+   *
+   * 扣分规则 / 重复添加在本地先拦一次（即时反馈），最终仍以服务端判定为准：
+   * 服务端按 `sourceRuleId` 判重，改过标题也不会重复生成。
+   */
+  async submitAddHabitFromRule(
+    rule: PointRule,
+    actor: ActorContext = { role: 'guardian' }
+  ): Promise<string | null> {
+    if (!this.isLiveMode) return this.addHabitFromRule(rule, actor)
+    if (rule.points < 0) {
+      return `“${rule.title}”是扣分规则，不能加入今天的习惯`
+    }
+    if (this.habits.some((habit) => habit.ruleId === rule.id)) {
+      return `“${rule.title}”已经在今天的习惯里了`
+    }
+    const api = this.writeApi
+    if (api === null) return this.ruleReadOnlyWriteMessage
+    if (this.writeInFlight) return '上一次操作正在保存中，请稍候…'
+
+    this.writeInFlight = true
+    try {
+      const dto = await api.addHabitFromRule(
+        rule.id,
+        this.newIdempotencyKey('rule-habit')
+      )
+      this.applyHabitDto(dto)
+      await this.refreshFromServer()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) return error.userMessage
+      return '请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.writeInFlight = false
+    }
+  }
+
+  /** 每日次数 / 图标白名单 —— 本地写入口与服务端写入口**共用**同一套校验与文案。 */
+  private validateRuleFields(
+    dailyLimit: number,
+    icon: IconOption['icon']
+  ): string | null {
+    if (!isDailyLimitValid(dailyLimit)) {
+      return `每天次数只能是 ${dailyLimitMin}–${dailyLimitMax} 之间的整数`
+    }
+    if (!isKnownIconName(icon)) {
+      return `图标「${icon}」不在可选列表里`
+    }
+    return null
+  }
+
+  /** 写回包 → UI 规则模型（与服务端快照同一套映射）。 */
+  private applyRuleDto(dto: RuleDto): void {
+    let rule: PointRule
+    try {
+      rule = mapRule(dto, 'rule')
+    } catch (error) {
+      throw asWriteMalformed(error, 'rule')
+    }
+    this.ruleList = this.ruleList.filter((item) => item.id !== rule.id)
+    this.ruleList.unshift(rule)
+    this.persist()
+  }
+
+  /** 写回包 → UI 习惯模型。 */
+  private applyHabitDto(dto: HabitDto): void {
+    let habit: Habit
+    try {
+      habit = mapHabit(dto, 'habit')
+    } catch (error) {
+      throw asWriteMalformed(error, 'habit')
+    }
+    this.habitList = this.habitList.filter((item) => item.id !== habit.id)
+    this.habitList.push(habit)
+    this.persist()
+  }
+
   /** 把写端点返回的流水立即落到本地（随后仍会用服务端快照校正）。 */
   private applyWrittenRecord(dto: RecordDto): void {
     let record: PointRecord
@@ -992,13 +1223,8 @@ export class AppStore {
     color: string,
     actor: ActorContext = { role: 'guardian' }
   ): string | null {
-    if (!isDailyLimitValid(dailyLimit)) {
-      return `每天次数只能是 ${dailyLimitMin}–${dailyLimitMax} 之间的整数`
-    }
-    // 修 D9：图标名白名单（与 Flutter 侧 `AppStore.addRule` 同一口径）
-    if (!isKnownIconName(icon)) {
-      return `图标「${icon}」不在可选列表里`
-    }
+    const invalid = this.validateRuleFields(dailyLimit, icon)
+    if (invalid !== null) return invalid
     const rule: PointRule = {
       id: this.newId('rule'),
       title: title.trim(),
@@ -1396,6 +1622,18 @@ export class AppStore {
   // （原先这里有个 private isToday()：现统一用 types.ts 的 isSameDay()，
   //   与 Flutter 侧同一个判据，避免“两端各自实现、各自漂移”）
 
+}
+
+/**
+ * 映射层抛出的只读异常 → 写异常（`malformed`）。
+ *
+ * 页面只处理一种错误类型：不必知道「这次是读 DTO 报的错」还是传输层报的错。
+ */
+function asWriteMalformed(error: unknown, path: string): unknown {
+  if (error instanceof ReadApiException) {
+    return WriteApiException.malformed(path, error.detail ?? error.userMessage)
+  }
+  return error
 }
 
 /**

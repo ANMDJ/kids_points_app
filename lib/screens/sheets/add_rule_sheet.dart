@@ -76,7 +76,7 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
           subtitle: '规则会出现在积分规则页，也可以加入今天的习惯',
           actionLabel: '保存规则',
           actionIcon: Icons.check_rounded,
-          onAction: () {
+          onAction: () async {
             final String title = titleController.text.trim();
             if (title.isEmpty) {
               widget.messenger.showSnackBar(
@@ -94,13 +94,14 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
                 checkedCountToday: widget.store.checkedCountTodayOfRule(rule),
                 newDailyLimit: dailyLimit,
               );
-              final String? message = widget.store.updateRule(
+              final String? message = await widget.store.submitUpdateRule(
                 rule,
                 title: title,
                 condition: conditionController.text,
                 dailyLimit: dailyLimit,
                 points: isGain ? amount : -amount,
               );
+              if (!sheetContext.mounted) return;
               if (message != null) {
                 widget.messenger.showSnackBar(SnackBar(content: Text(message)));
                 return;
@@ -116,7 +117,7 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
               return;
             }
             final IconOption option = ruleIconOptions[iconIndex];
-            final String? message = widget.store.addRule(
+            final String? message = await widget.store.submitAddRule(
               title: title,
               condition: conditionController.text,
               dailyLimit: dailyLimit,
@@ -125,6 +126,7 @@ class _AddRuleSheetState extends State<AddRuleSheet> {
               iconName: option.name,
               color: option.color,
             );
+            if (!sheetContext.mounted) return;
             if (message != null) {
               // 修 A2：频次越界被拒绝时必须说明原因（禁止静默失败）
               widget.messenger.showSnackBar(SnackBar(content: Text(message)));
@@ -233,10 +235,14 @@ Future<void> showRuleActionsSheet(
             _ActionRow(
               icon: Icons.playlist_add_check_rounded,
               label: '加入今天的习惯',
-              onTap: () {
+              onTap: () async {
                 // 修 A1：扣分规则不能生成可打卡习惯（原先 abs 会把扣分变成加分），
-                // 被拒绝时必须把原因告诉家长（禁止静默失败）
-                final String? message = store.addHabitFromRule(rule);
+                // 被拒绝时必须把原因告诉家长（禁止静默失败）。
+                // live 模式走 POST /point-rules/:id/habits，判重由服务端按
+                // sourceRuleId 做（改过标题也不会重复生成）。
+                final String? message =
+                    await store.submitAddHabitFromRule(rule);
+                if (!sheetContext.mounted) return;
                 if (message != null) {
                   messenger.showSnackBar(SnackBar(content: Text(message)));
                   return;
@@ -252,10 +258,16 @@ Future<void> showRuleActionsSheet(
               icon: Icons.delete_outline_rounded,
               label: '移到回收站',
               danger: true,
-              onTap: () {
+              onTap: () async {
                 // 修 C9：删除只改状态位（软删），规则留在数据里 90 天可恢复 ——
                 // 历史流水的回指（ruleId / ruleVersion）因此不会指向空。
-                store.removeRule(rule);
+                // live 模式走 DELETE /point-rules/:id（服务端幂等）。
+                final String? message = await store.submitRemoveRule(rule);
+                if (!sheetContext.mounted) return;
+                if (message != null) {
+                  messenger.showSnackBar(SnackBar(content: Text(message)));
+                  return;
+                }
                 Navigator.of(sheetContext).pop();
                 messenger.showSnackBar(
                   const SnackBar(

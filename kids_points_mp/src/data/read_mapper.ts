@@ -1,4 +1,10 @@
-import type { HomeDto, RecordsPageDto, RecordDto } from './read_dto'
+import type {
+  HabitDto,
+  HomeDto,
+  RecordsPageDto,
+  RecordDto,
+  RuleDto
+} from './read_dto'
 import { ReadApiException } from './read_api_errors'
 import type { IconName } from '../components/Icon/icons'
 import type {
@@ -49,39 +55,8 @@ export function mapHome(dto: HomeDto): HomeSnapshot {
     pointsBalance: dto.pointsBalance,
     goodHabitCount: dto.goodHabitCount,
     rewardCount: dto.rewardCount,
-    habits: dto.habits.map((item, index) => ({
-      id: item.id,
-      title: item.title,
-      points: item.points,
-      condition: item.condition,
-      dailyLimit: item.dailyLimit,
-      // 图标名不做白名单校验：未知图标由 Icon 组件渲染兜底图标，
-      // 不能因为换了一个图标名就让整页读取失败。
-      icon: item.icon as IconName,
-      color: requireHexColor(item.color, `habits[${index}].color`),
-      ruleId: item.ruleId,
-      status: 'active',
-      deletedAt: null
-    })),
-    rules: dto.rules.map((item, index) => {
-      asEnum(
-        item.direction,
-        ['reward', 'penalty'] as const,
-        `rules[${index}].direction`
-      )
-      return {
-        id: item.id,
-        title: item.title,
-        condition: item.condition,
-        dailyLimit: item.dailyLimit,
-        points: item.points,
-        icon: item.icon as IconName,
-        color: requireHexColor(item.color, `rules[${index}].color`),
-        currentVersion: item.currentVersion,
-        status: 'active',
-        deletedAt: null
-      }
-    }),
+    habits: dto.habits.map((item, index) => mapHabit(item, `habits[${index}]`)),
+    rules: dto.rules.map((item, index) => mapRule(item, `rules[${index}]`)),
     wishes: dto.wishes.map((item, index) => ({
       id: item.id,
       title: item.title,
@@ -96,6 +71,48 @@ export function mapHome(dto: HomeDto): HomeSnapshot {
       status: 'active',
       deletedAt: null
     }))
+  }
+}
+
+/**
+ * 单条习惯 DTO → UI 模型（`GET /home` 与 `POST /point-rules/:id/habits` 共用）。
+ *
+ * 图标名不做白名单校验：未知图标由 Icon 组件渲染兜底图标，
+ * 不能因为换了一个图标名就让整页读取失败。
+ */
+export function mapHabit(dto: HabitDto, path = 'habit'): Habit {
+  return {
+    id: dto.id,
+    title: dto.title,
+    points: dto.points,
+    condition: dto.condition,
+    dailyLimit: dto.dailyLimit,
+    icon: dto.icon as IconName,
+    color: requireHexColor(dto.color, `${path}.color`),
+    ruleId: dto.ruleId,
+    status: 'active',
+    deletedAt: null
+  }
+}
+
+/**
+ * 单条规则 DTO → UI 模型（`GET /home` 与写端点回包共用）。
+ *
+ * `direction` 只用来**校验**：DTO 的 `points` 已经带符号，这里不再取反。
+ */
+export function mapRule(dto: RuleDto, path = 'rule'): PointRule {
+  asEnum(dto.direction, ['reward', 'penalty'] as const, `${path}.direction`)
+  return {
+    id: dto.id,
+    title: dto.title,
+    condition: dto.condition,
+    dailyLimit: dto.dailyLimit,
+    points: dto.points,
+    icon: dto.icon as IconName,
+    color: requireHexColor(dto.color, `${path}.color`),
+    currentVersion: dto.currentVersion,
+    status: 'active',
+    deletedAt: null
   }
 }
 

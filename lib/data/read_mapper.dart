@@ -64,13 +64,13 @@ HomeSnapshot mapHome(HomeDto dto) {
         .asMap()
         .entries
         .map((MapEntry<int, HabitDto> entry) =>
-            _mapHabit(entry.value, 'habits[${entry.key}]'))
+            mapHabit(entry.value, 'habits[${entry.key}]'))
         .toList(growable: false),
     rules: dto.rules
         .asMap()
         .entries
         .map((MapEntry<int, RuleDto> entry) =>
-            _mapRule(entry.value, 'rules[${entry.key}]'))
+            mapRule(entry.value, 'rules[${entry.key}]'))
         .toList(growable: false),
     wishes: dto.wishes
         .asMap()
@@ -95,7 +95,8 @@ RecordsPage mapRecordsPage(RecordsPageDto dto) {
   );
 }
 
-Habit _mapHabit(HabitDto dto, String path) {
+/// 单条习惯 DTO → UI 模型（写端点回包也走这里，避免两套字段解释）。
+Habit mapHabit(HabitDto dto, String path) {
   return Habit(
     id: dto.id,
     title: dto.title,
@@ -108,7 +109,10 @@ Habit _mapHabit(HabitDto dto, String path) {
   );
 }
 
-PointRule _mapRule(RuleDto dto, String path) {
+/// 单条规则 DTO → UI 模型（写端点回包也走这里）。
+///
+/// `direction` 只用来**校验**：DTO 的 `points` 已经带符号，这里不再取反。
+PointRule mapRule(RuleDto dto, String path) {
   if (dto.direction != 'reward' && dto.direction != 'penalty') {
     throw ReadApiException.malformed(
       '$path.direction',
@@ -241,6 +245,13 @@ Color parseHexColor(String raw, String path) {
   }
   return Color(0xFF000000 | int.parse(match.group(1)!, radix: 16));
 }
+
+/// `Color` → `#RRGGBB`（写入口只接受这一种写法）。
+///
+/// alpha 一律丢弃：规则 / 习惯的颜色本来就是不透明的，带上 `#AARRGGBB`
+/// 只会被后端 400 拒掉。输出与 seed 数据同口径（小写）。
+String hexColorOf(Color color) =>
+    '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
 // ───────────────────────────── 流水的图标 / 颜色 ─────────────────────────────
 

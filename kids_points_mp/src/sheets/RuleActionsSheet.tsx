@@ -25,10 +25,10 @@ export default function RuleActionsSheet({
 }: RuleActionsSheetProps) {
   if (!rule) return null
 
-  const handleAddToHabits = () => {
+  const handleAddToHabits = async () => {
     // 修 A1：扣分规则不能生成可打卡习惯（原先 Math.abs 会把扣分变成加分），
     // 被拒绝时必须把原因告诉家长（禁止静默失败）
-    const message = store.addHabitFromRule(rule)
+    const message = await store.submitAddHabitFromRule(rule)
     if (message) {
       toast(message)
       return
@@ -37,10 +37,14 @@ export default function RuleActionsSheet({
     toast(`“${rule.title}”已加入首页习惯`)
   }
 
-  const handleRemove = () => {
+  const handleRemove = async () => {
     // 修 C9：删除只改状态位（软删），规则留在数据里 90 天可恢复 ——
     // 历史流水的回指（ruleId / ruleVersion）因此不会指向空。
-    store.removeRule(rule)
+    const message = await store.submitRemoveRule(rule)
+    if (message) {
+      toast(message)
+      return
+    }
     onClose()
     toast('已移到回收站，90 天内可在「我的 · 回收站」恢复')
   }

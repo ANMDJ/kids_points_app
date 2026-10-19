@@ -125,6 +125,12 @@ class WriteApiException implements Exception {
           '这条打卡记录不存在或已被删除，无法撤销。',
         );
       }
+      if (code == 'RULE_NOT_FOUND') {
+        return fail(
+          WriteFailureKind.notFound,
+          '这条规则不存在或已被删除（可能已在别的设备上删掉了）。',
+        );
+      }
       return fail(
         WriteFailureKind.notFound,
         '要操作的数据不存在或已被删除（404），这次操作没有保存。',
@@ -163,6 +169,21 @@ class WriteApiException implements Exception {
           return fail(
             WriteFailureKind.conflict,
             '这个习惯的分值配置不正确，暂时不能打卡。',
+          );
+        case 'RULE_VERSION_CONFLICT':
+          return fail(
+            WriteFailureKind.conflict,
+            '这条规则刚被其他人改动过，请刷新后再改（不会覆盖别人的修改）。',
+          );
+        case 'RULE_IS_PENALTY':
+          return fail(
+            WriteFailureKind.conflict,
+            '这是扣分规则，不能加入今天的习惯。',
+          );
+        case 'HABIT_ALREADY_EXISTS':
+          return fail(
+            WriteFailureKind.conflict,
+            '这个习惯已经在今天的习惯里了。',
           );
       }
       return fail(
