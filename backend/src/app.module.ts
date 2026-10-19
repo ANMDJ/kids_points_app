@@ -44,7 +44,10 @@ import { WishesModule } from './wishes/wishes.module'
     //   这里**不传参**＝按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
     LedgerModule.register(),
     RulesModule,
-    HabitsModule,
+    // ★ W4-D（2026-10-19）：写入口 `POST /records/check-in` / `POST /records/:id/reverse`。
+    //   有库 ⇒ PrismaHabitsRepository（同事务写流水/余额/审计）；无库 ⇒ 501（不假装打卡成功）。
+    //   不传参 ⇒ 按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
+    HabitsModule.register(),
     WishesModule,
     // ★ 动态模块（W2-D，2026-10-16）：它自己不选实现，但把"在哪个世界"转发给
     //   DeviceSessionModule / MembershipModule（同一个 hasDatabase 只有一个来源）。

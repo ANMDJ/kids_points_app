@@ -1,20 +1,78 @@
-import { Module } from '@nestjs/common'
+import { DynamicModule, Module, type Type } from '@nestjs/common'
+
+import { DeviceSessionGuard } from '../device-session/device-session.guard'
+import { DeviceSessionModule } from '../device-session/device-session.module'
+import { IdempotencyModule } from '../idempotency/idempotency.module'
+import { MembershipModule } from '../membership/membership.module'
+import { PermissionsModule } from '../permissions/permissions.module'
+import { hasDatabaseUrl } from '../prisma/database-enabled'
+import { PrismaModule } from '../prisma/prisma.module'
+import { HabitsController } from './habits.controller'
+import { PrismaHabitsRepository } from './habits.prisma.repository'
+import {
+  HABITS_REPOSITORY,
+  NotImplementedHabitsRepository,
+  type HabitsPort
+} from './habits.repository'
+import { HabitsService } from './habits.service'
 
 /**
- * 习惯（docs/design/03 A2 / A3 / E17）
+ * 习惯（docs/design/03 A2 / A3 / E17）—— **W4-D 写入切片**（2026-10-19）。
  *
- * 结构字段：`dailyLimit: Int`（**不是**自由文本）—— 修 A2。
- * 派生字段（**不落库**）：`limitText` / `doneText` / `checked` —— 修 A3 / E17：
- *   limitText = dailyLimit === 1 ? '每天 1 次' : `每天最多 ${dailyLimit} 次`
- *   doneText  = `今日已完成 ${checkedCountToday} 次`
- *   `checked` 由「今日记录数 ≥ dailyLimit」计算，而不是一个可被任意赋值的布尔。
- *   03 E17：它们一旦被外部写入就**必然**与真实状态脱节（seed 里手写的
- *   '今日已完成 1 次' 与实际的 0 次就是这么脱节的）。
+ * ── 本模块负责什么 ────────────────────────────────────────────────────────
+ *   ① `POST /records/check-in`：孩子/家长打卡，经 `ledger.gate` 写一笔 praise 流水；
+ *   ② `POST /records/:id/reverse`：家长撤销一条打卡（append-only 冲正，I5 / I6）。
+ *   两件事都**不是**"直接改余额"：余额、顺序、审计与幂等全部走同一条
+ *   `appendDraftInTx()`（`ledger/ledger.append.ts`）—— 这是 I2 能在真库上成立的前提。
  *
- * `addHabitFromRule` 必须**拒绝** `direction=penalty` 的规则 —— 修 A1
- * （原实现用 `Math.abs()` 把负分抹平成加分，扣分约定变成加分）。
+ * ── 结构字段（不是自由文本）──────────────────────────────────────────────
+ *   `dailyLimit: Int`（修 A2）；`checked` / `doneText` / `limitText` **不落库**，
+ *   由"本业务日仍有效的打卡数"推导（修 A3 / E17）—— 本模块的每日上限判定就是
+ *   那个推导的写侧对应物。时区默认 `Asia/Shanghai`，可用 `KP_TIMEZONE` 覆盖。
  *
- * ⚠ W0 状态：**签名占位**。验收用例见 02 §9.16 / §9.17 与 04 §4.5。
+ * ── 世界钉死（与 `ReadModule` / `ApprovalsModule` 同一手法）────────────────
+ *   有库 ⇒ `PrismaHabitsRepository`；无库 ⇒ `NotImplementedHabitsRepository`（两个方法都 501）。
+ *   `hasDatabase` 同时向下传给身份 / 成员 / 幂等三个子模块，**只有一个来源**。
+ *   用例必须写 `HabitsModule.register({ hasDatabase: false })`，否则同一份用例
+ *   在有 `.env` 的开发机与 CI 上验的是两件事。
+ *
+ * ⚠️ 尚未落地（W5+）：习惯 CRUD（`addHabitFromRule` 仍只有注释里的验收要求）。
  */
+export function resolveHabitsRepositoryClass(hasDatabase: boolean): Type<HabitsPort> {
+  return hasDatabase ? PrismaHabitsRepository : NotImplementedHabitsRepository
+}
+
+export interface HabitsAssemblyOptions {
+  /** 省略 ⇒ 按环境推断（只有生产代码允许省略；用例必须显式钉死世界）。 */
+  hasDatabase?: boolean
+}
+
 @Module({})
-export class HabitsModule {}
+export class HabitsModule {
+  static register(options: HabitsAssemblyOptions = {}): DynamicModule {
+    const hasDatabase = options.hasDatabase ?? hasDatabaseUrl()
+    return {
+      module: HabitsModule,
+      imports: [
+        // 无库时**不**导入 PrismaModule：`PrismaService` 缺连接串会刻意抛错，
+        // 静态导入会让离线 `npm test` 在装配阶段就崩（同 LedgerModule / ReadModule）。
+        ...(hasDatabase ? [PrismaModule] : []),
+        DeviceSessionModule.register({ hasDatabase }),
+        MembershipModule.register({ hasDatabase }),
+        PermissionsModule,
+        // 带 `Idempotency-Key` 的请求要先过幂等层；无库时它自己 501（不假装保护已生效）。
+        IdempotencyModule.register({ hasDatabase })
+      ],
+      controllers: [HabitsController],
+      providers: [
+        HabitsService,
+        // 控制器上的三个 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块的 exports 提供。
+        DeviceSessionGuard,
+        {
+          provide: HABITS_REPOSITORY,
+          useClass: resolveHabitsRepositoryClass(hasDatabase)
+        }
+      ]
+    }
+  }
+}

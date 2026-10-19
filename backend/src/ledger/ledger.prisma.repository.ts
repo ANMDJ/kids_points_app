@@ -2,13 +2,13 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client'
 
 import { PrismaService } from '../prisma/prisma.service'
+import { appendDraftInTx } from './ledger.append'
 import type {
   LedgerChainRow,
   PointRecordDraft,
   ReversibleRecord,
   RuleVersionSnapshot
 } from './ledger.gate'
-import { resolveAppendCreatedAt } from './ledger.gate'
 import type { LedgerPort } from './ledger.repository'
 
 /**
@@ -136,73 +136,7 @@ export class PrismaLedgerRepository implements LedgerPort {
   async append(draft: PointRecordDraft): Promise<{ recordId: string; balanceAfter: number }> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const locked = await tx.$queryRaw<{ pointsBalance: number }[]>`
-          SELECT "pointsBalance" FROM "Child" WHERE "id" = ${draft.childId} FOR UPDATE`
-        if (locked.length === 0) {
-          throw new NotFoundException({
-            code: 'LEDGER_CHILD_NOT_FOUND',
-            message: `孩子 ${draft.childId} 不存在 —— 这笔分无处可记（拒绝，而不是造一条无主流水）。`
-          })
-        }
-
-        // ★ 为什么必须 `AT TIME ZONE 'UTC'`（真库套件抓到的真 bug，别删）：
-        //   `PointRecord.createdAt` 是 **timestamp without time zone**，Prisma 的约定是
-        //   "naive 值 = UTC 墙钟"（它自己写 Date 时就是这么写的）。
-        //   而 `clock_timestamp()` 返回 **timestamp with time zone** ⇒ 直接塞进 naive 列会
-        //   被 PG 按**会话时区**转换（本机是 Asia/Shanghai）⇒ 落库值整体偏移 +8h，
-        //   被读回来就是"8 小时后的未来流水"。离线用例不可能发现这件事（它只看语义），
-        //   所以这条断言留在真库套件里（组 A：「偏离真实时间」）。
-        const [clock] = await tx.$queryRaw<{ ts: Date }[]>`
-          SELECT (clock_timestamp() AT TIME ZONE 'UTC') AS ts`
-        const [latest] = await tx.$queryRaw<{ latest: Date | null }[]>`
-          SELECT MAX("createdAt") AS latest FROM "PointRecord" WHERE "childId" = ${draft.childId}`
-        const createdAt = resolveAppendCreatedAt({
-          dbNow: clock.ts,
-          latestCreatedAt: latest.latest
-        })
-
-        const expectedBefore = draft.balanceAfter - draft.pointsDelta
-        const updated = await tx.child.updateMany({
-          where: { id: draft.childId, pointsBalance: expectedBefore },
-          data: { pointsBalance: draft.balanceAfter }
-        })
-        if (updated.count !== 1) {
-          throw new ConflictException({
-            code: 'LEDGER_BALANCE_CHANGED',
-            message:
-              `余额已被别的写入改过：草稿按 ${expectedBefore} 分算，库里现在是 ` +
-              `${locked[0].pointsBalance} 分 ⇒ 拒绝落库（这笔的 balanceAfter 已经不成立了）。` +
-              '★ 绝不用"就这样吧"把不匹配的余额写下去 —— 那正是 B6（账本不平）的成因；' +
-              '重试请重新读余额、重新构造草稿。'
-          })
-        }
-
-        const record = await tx.pointRecord.create({
-          data: {
-            childId: draft.childId,
-            ruleId: draft.ruleId,
-            ruleVersion: draft.ruleVersion,
-            habitId: draft.habitId,
-            wishId: draft.wishId,
-            titleSnapshot: draft.titleSnapshot,
-            conditionSnapshot: draft.conditionSnapshot,
-            dailyLimitSnapshot: draft.dailyLimitSnapshot,
-            costSnapshot: draft.costSnapshot,
-            pointsDelta: draft.pointsDelta,
-            category: draft.category,
-            source: draft.source,
-            note: draft.note,
-            operatorUserId: draft.operatorUserId,
-            operatorRole: draft.operatorRole,
-            balanceAfter: draft.balanceAfter,
-            idempotencyKey: draft.idempotencyKey,
-            reversesRecordId: draft.reversesRecordId,
-            // ★ 顺序由端口负责：这里刻意**不用** `draft.createdAt`（见文件头 ②）
-            createdAt
-          },
-          select: { id: true, balanceAfter: true }
-        })
-
+        const record = await appendDraftInTx(tx, draft)
         // CAS 已保证库里的余额就是 `draft.balanceAfter` ⇒ 返回的即"写入后的真实余额"，
         // 无需再查一次（查一次也只是把同一事实读回来）。
         return { recordId: record.id, balanceAfter: record.balanceAfter }

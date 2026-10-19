@@ -3,7 +3,7 @@
 > 本目录是**可评审的设计事实源**，所有条目均以现有代码中的真实方法/调用点为依据，非推测。
 
 > **需求侧文档**（面向「做什么、为什么做、做到什么程度算完成」）见 [`../PRD.md`](../PRD.md) ——
-> 它整合本目录 `01`–`14` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
+> 它整合本目录 `01`–`16` 的事实，不重复承载实现细节；两者冲突时**以本目录的设计文档为准**。
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
@@ -21,6 +21,8 @@
 | [`12-w3c-handoff.md`](./12-w3c-handoff.md) | **阶段 W3-C 交接单**（审批链路收尾）：**4 执行器 / 5 种 `autoReason` / `expireDue()` 后台扫描 / `Idempotency-Key`**、真库证据与可复跑基线、**`add_wish` 无流水 / 加分流水不带 `ruleId` / 幂等响应缓存不在业务事务**等 8 条防复发坑、W4 接手顺序与仍未落地边界 | ✅ W3-C 已收口 |
 | [`13-w4a-handoff.md`](./13-w4a-handoff.md) | **阶段 W4-A 交接单**（只读后端 `GET /home` / `GET /records`）：**端口/适配器/映射/三道屏障**、`goodHabitCount` 与 `rewardCount` 的历史口径、`limit + 1` 分页、三层证据（离线 HTTP / 装配 / 真库）、**真库抓到的 `/records` 对已删孩子返回空页**、仍未落地的写端点边界 | ✅ W4-A 已收口 |
 | [`14-w4b-handoff.md`](./14-w4b-handoff.md) | **阶段 W4-B 交接单**（记录页键集分页）：`cursor` / `nextCursor` 契约、同毫秒 `(createdAt, id)` 双条件、非法游标 400、Flutter DTO/AppStore/UI 三态、**live 只读拦截位置**、`didChangeDependencies` 同步 notify 的坑、可复跑基线 | ✅ W4-B 已收口 |
+| [`15-w4c-handoff.md`](./15-w4c-handoff.md) | **阶段 W4-C 交接单**（小程序只读接入）：三项 env 编译期注入与缺一降级、Taro `ReadApiClient` / 严格 DTO / `readEpoch` 防竞态、记录页服务端分类过滤 ＋ 游标翻页、只读写入口拦截、首页/记录页下拉刷新、**首屏未完成时切分类的双端同款竞态修复**、可复跑基线 | ✅ W4-C 已收口 |
+| [`16-w4d-handoff.md`](./16-w4d-handoff.md) | **阶段 W4-D 交接单**（打卡 / 撤销写入）：`POST /records/check-in` / `:id/reverse` 的单事务 8 步、共用 `appendDraftInTx()`（锁 + 库钟 + 严格递增 + 余额 CAS）、业务日 `[start,end)` 与撤销释放名额、幂等三态与 `undo:<recordId>`、**真库抓到的 naive timestamp +8h / 未来边界行推后所有打卡 / 快照必须来自规则版本行**、前端写入口仍未放开 | ✅ W4-D 已收口 |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
@@ -29,11 +31,15 @@
 > ⚠️ **读法**：以下按阶段留档，**后面的阶段会推翻前面的结论**。当前（2026-10-19）最关键的一条：
 > 后端**已有只读入口** —— **W4-A** 起 `GET /home` / `GET /records` 有库时是真 Prisma 查询（无库仍 501）；
 > **W4-B** 起 `/records` 支持键集分页，Flutter 配齐 `--dart-define` 时会接真实只读数据（未配置仍是本地预览）。
-> **小程序端尚未接这两条端点**；写端点（规则 / 习惯 / 心愿 / 邀请）仍未建。
+> **W4-C** 起小程序也接这两条端点：配齐 `TARO_APP_KP_*` 三项 env 时读数来自服务器
+> （未配齐仍是本地预览），记录页分页使用 `nextCursor`；live 模式所有写入口只提示只读。
+> **W4-D** 起后端补上两条写入口：`POST /records/check-in` / `POST /records/:id/reverse`
+> 有库时真事务落库（流水 + 余额 + 审计），撤销是 append-only 冲正；**前端 live 写入口仍未放开**。
+> 规则 / 习惯 CRUD / 心愿 / 邀请等其余写端点仍未建。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
-> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A / W4-B）为准。
+> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A / W4-B / W4-C / W4-D）为准。
 
 ### ✅ 已完成并验证
 
@@ -851,6 +857,67 @@
     `flutter test` → **50 条**（`test/read_api_test.dart` 9 条）。本阶段**没有新增迁移**。
     ⑧ 仍不粉饰：写端点未建（live 只读）；小程序端尚未消费游标；`test:db` 本轮未复跑。
     交接单：[`14-w4b-handoff.md`](./14-w4b-handoff.md)。
+
+
+**W4-C 进展（2026-10-19）：小程序只读接入（`GET /home` / `GET /records`）**
+
+    ① **配置闸门**：`config/index.ts` 用 Taro `env` 白名单注入
+    `TARO_APP_KP_API_BASE_URL` / `TARO_APP_KP_DEVICE_ID` / `TARO_APP_KP_CHILD_ID`；
+    三项缺一即继续用本地预览（不抛错、不白屏），非 `http(s)` 的 baseUrl 直接被拒绝。
+    值在编译期注入，改 `.env.local` 后必须重新 `build:weapp`；`.env.local` 不入库。
+    ② **只读层与 Flutter 同构**：`read_api.ts`（两个 GET ＋ 两个身份头 ＋ 游标原样回传）、
+    `read_dto.ts`（严格解析，不做 `?? 0` / `?? ''` 兜底，`hasMore ⇔ nextCursor` 自洽）、
+    `read_mapper.ts`、`read_api_errors.ts`；`store.ts` 增加 `refreshFromServer()` /
+    `loadMoreRecords()` / `setRecordFilter()` / `ensureInitialRead()`，`readEpoch` 丢弃过期响应。
+    ③ **记录页口径**：live 模式只渲染 `visibleRecords`，**不做本地二次过滤**
+    （服务端已按 `category` 过滤，再过滤会漏掉后续页）；切分类清空列表并从第一页重取，
+    不复用旧游标；页尾「加载更多 / 重试 / 没有更多了」，失败保留已加载页。
+    ④ **一个双端同款竞态（本轮修复）**：首屏尚未成功（`usingPreview === true`）时切分类，
+    若只重取 records，在途的 `/home` 仍会按旧分类生成列表并在晚到时覆盖新分类。
+    现在该分支改为整页 `refreshFromServer()`；Taro 与 Flutter 同步修，并各有一条回归用例。
+    ⑤ **UI 不粉饰**：`ReadStatusBanner` 四态（首次读取 / 失败且无数据 / 失败但有旧数据 / 只读成功）；
+    首页接入 `usePullDownRefresh` ＋ `enablePullDownRefresh`，记录页列表使用 `ScrollView` refresher；
+    live 模式打卡、撤销、记一笔、兑换、心愿增删、改名、回收站、规则新建/编辑、恢复演示数据
+    全部先提示只读，不调用写方法。
+    ⑥ 真跑基线（2026-10-19）：`tsc --noEmit` → **0**；`npm run build:weapp` → **0**；
+    `.tmp_test/run.js` → **37/37 ALL PASS**；`flutter analyze` → **0 issue**；
+    `flutter test` → **51 条**（`test/read_api_test.dart` 10 条）。本阶段未改后端、无新增迁移。
+    ⑦ 仍不粉饰：写端点未建（live 只读）；未做真机/真后端联调（只验证构建与离线用例）；
+    记录页不做自动加载下一页；后端 `test:db` 本轮未复跑。
+    交接单：[`15-w4c-handoff.md`](./15-w4c-handoff.md)。
+
+
+**W4-D 进展（2026-10-19）：打卡 / 撤销写入（`POST /records/check-in` / `:id/reverse`）**
+
+    ① **两条真写入口**：`check_in_habit`（guardian / child）与 `undo_check_in`
+    （guardian ALLOW / child DENY）；`childId` 只来自会话头，DTO 只有 `habitId`
+    或可选 `note`，多传 `childId` / `points` 等未知键一律 400。
+    ② **单事务 8 步**：锁孩子余额行 → 读库钟求业务日 → 验 habit（跨孩子/已删除 404）
+    → 验规则版本（active、currentVersion、direction=reward、分值与 habit 一致）
+    → 数「本业务日仍有效的打卡」→ 内核构造草稿 → `appendDraftInTx()` → 同事务审计。
+    任一步失败全回滚；不会留下「分加了但审计没有」的中间态。
+    ③ **共用写入内核**：`ledger.append.ts` 统一做行锁、库钟、严格递增 `createdAt`
+    与余额 CAS；`PrismaLedgerRepository.append()` 也改为复用，避免第二份实现。
+    ④ **业务日**：默认 `Asia/Shanghai`，`KP_TIMEZONE` 可覆盖；库里 `clock_timestamp()`
+    决定 `[start,end)`，边界左闭右开；被冲正的原记录**不占名额**，撤销后可以再打一次。
+    ⑤ **撤销 append-only**：新写 `category=adjust`、`source=correction`、
+    `reversesRecordId=原id` 的负数行，原行一字未改（I5）；业务幂等键 `undo:<id>`
+    ＋ 库层唯一约束防并发双冲；第二次撤销 409 `ALREADY_REVERSED` / `RECORD_ALREADY_REVERSED`。
+    ⑥ **幂等语义**：无 key 双击 = 两笔（产品语义）；同 key 同体返回首次响应；
+    同 key 不同体 409 `IDEMPOTENCY_KEY_REUSED`；业务 409 不缓存，修正后可重试。
+    ⑦ **真库抓到的三个坑**：`timestamptz` 直接写 naive 列会整体 +8h（必须 `AT TIME ZONE 'UTC'`）；
+    seed 里提前插入「明天 00:00」会让后续打卡全被严格递增推到明天（边界行必须最后插）；
+    规则习惯的快照来自**版本行**而非 habit 标题（I4 对账）。
+    ⑧ **一并修闸门**：W4-C 的 `async main()` 触发 D12 守卫（汇总嵌套），已拆出
+    `.tmp_test/run-w4c.mjs` 由 `run.js` 同步等待；E18 守卫放宽为「构造函数任意参数」，
+    仍守「构造即空态」。
+    ⑨ 真跑基线（2026-10-19）：`npm run ci` → **0**；`npm test` → **21 文件 / 353 条**；
+    `npm run test:db` → **7 文件 / 109 条**；小程序 `tsc --noEmit` → **0**；
+    `.tmp_test/run.js` → **37/37**；`flutter analyze` → **0 issue**；`flutter test` → **51/51**。
+    无新增迁移。
+    ⑩ 仍不粉饰：前端 live 写入口仍拦（W5）；习惯 CRUD / 心愿 / 规则 / 邀请未建；
+    未做并发压测与真机联调。
+    交接单：[`16-w4d-handoff.md`](./16-w4d-handoff.md)。
 
 
 ### 文档缺陷修正记录
