@@ -101,18 +101,24 @@ export function mapHome(dto: HomeDto): HomeSnapshot {
 
 export function mapRecordsPage(dto: RecordsPageDto): RecordsPage {
   return {
-    records: dto.records.map(mapRecord),
+    records: dto.records.map((item, index) =>
+      mapRecord(item, `records[${index}]`)
+    ),
     hasMore: dto.hasMore,
     nextCursor: dto.nextCursor,
     limit: dto.limit
   }
 }
 
-function mapRecord(dto: RecordDto, index: number): PointRecord {
+/**
+ * 单条线格式流水 → 本地模型。写端点返回的记录与 `GET /records` 同构，
+ * 因此复用同一函数（避免“读取一条口径、写入另一条口径”）。
+ */
+export function mapRecord(dto: RecordDto, path = 'record'): PointRecord {
   const category = asEnum(
     dto.category,
     ['praise', 'exchange', 'adjust'] as const,
-    `records[${index}].category`
+    `${path}.category`
   )
   const source = asEnum(
     dto.source,
@@ -124,7 +130,7 @@ function mapRecord(dto: RecordDto, index: number): PointRecord {
       'system',
       'correction'
     ] as const,
-    `records[${index}].source`
+    `${path}.source`
   )
   const operatorRole =
     dto.operatorRole === null
@@ -132,7 +138,7 @@ function mapRecord(dto: RecordDto, index: number): PointRecord {
       : asEnum(
           dto.operatorRole,
           ['guardian', 'child', 'viewer'] as const,
-          `records[${index}].operatorRole`
+          `${path}.operatorRole`
         )
 
   const icon: IconName =

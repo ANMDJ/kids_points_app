@@ -61,10 +61,10 @@ class ReadApiConfig {
       return 'KP_API_BASE_URL 不是合法的 http(s) 地址：$base。';
     }
     if (deviceId.trim().isEmpty) {
-      return '未配置 KP_DEVICE_ID：只读接口需要设备身份（401 之前就拦下）。';
+      return '未配置 KP_DEVICE_ID：请求需要设备身份（401 之前就拦下）。';
     }
     if (childId.trim().isEmpty) {
-      return '未配置 KP_CHILD_ID：只读接口必须指明读哪个孩子。';
+      return '未配置 KP_CHILD_ID：请求必须指明操作哪个孩子。';
     }
     return null;
   }

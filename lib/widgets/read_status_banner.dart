@@ -57,11 +57,13 @@ class ReadStatusBanner extends StatelessWidget {
         text: '正在读取服务器数据…',
       );
     } else {
-      content = const _Banner(
+      content = _Banner(
         background: AppColors.primarySoft,
         foreground: AppColors.primaryText,
         icon: Icons.cloud_done_outlined,
-        text: '只读模式 · 数据来自服务器（写入接口尚未接入）',
+        text: store.usesServerWrites
+            ? '数据来自服务器 · 打卡与撤销会实时保存'
+            : '只读模式 · 数据来自服务器（写入口尚未接入）',
       );
     }
 

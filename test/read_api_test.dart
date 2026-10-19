@@ -338,7 +338,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(store.readStatus, ReadStatus.ready);
-    expect(find.text('只读模式 · 数据来自服务器（写入接口尚未接入）'), findsOneWidget);
+    expect(find.text('只读模式 · 数据来自服务器（写入口尚未接入）'), findsOneWidget);
     expect(find.text('当前可用积分'), findsOneWidget);
 
     // live 模式点「记一笔」：必须明确拒绝，而不是打开一个只改内存的表单。

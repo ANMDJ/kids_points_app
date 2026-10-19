@@ -23,6 +23,7 @@
 | [`14-w4b-handoff.md`](./14-w4b-handoff.md) | **阶段 W4-B 交接单**（记录页键集分页）：`cursor` / `nextCursor` 契约、同毫秒 `(createdAt, id)` 双条件、非法游标 400、Flutter DTO/AppStore/UI 三态、**live 只读拦截位置**、`didChangeDependencies` 同步 notify 的坑、可复跑基线 | ✅ W4-B 已收口 |
 | [`15-w4c-handoff.md`](./15-w4c-handoff.md) | **阶段 W4-C 交接单**（小程序只读接入）：三项 env 编译期注入与缺一降级、Taro `ReadApiClient` / 严格 DTO / `readEpoch` 防竞态、记录页服务端分类过滤 ＋ 游标翻页、只读写入口拦截、首页/记录页下拉刷新、**首屏未完成时切分类的双端同款竞态修复**、可复跑基线 | ✅ W4-C 已收口 |
 | [`16-w4d-handoff.md`](./16-w4d-handoff.md) | **阶段 W4-D 交接单**（打卡 / 撤销写入）：`POST /records/check-in` / `:id/reverse` 的单事务 8 步、共用 `appendDraftInTx()`（锁 + 库钟 + 严格递增 + 余额 CAS）、业务日 `[start,end)` 与撤销释放名额、幂等三态与 `undo:<recordId>`、**真库抓到的 naive timestamp +8h / 未来边界行推后所有打卡 / 快照必须来自规则版本行**、前端写入口仍未放开 | ✅ W4-D 已收口 |
+| [`17-w4e-handoff.md`](./17-w4e-handoff.md) | **阶段 W4-E 交接单**（双端 live 打卡 / 撤销）：独立 `WriteTransport`（不改只读路径）、`submitCheckIn` / `submitUndoCheckIn`、写成功后先落地返回流水再刷新快照、`executedRecordId==record.id` 强校验、业务码优先的 409 / 404 文案、双击串行与幂等键、**live 无写客户端必须拒绝而不是本地假写** | ✅ W4-E 已收口 |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
@@ -34,12 +35,14 @@
 > **W4-C** 起小程序也接这两条端点：配齐 `TARO_APP_KP_*` 三项 env 时读数来自服务器
 > （未配齐仍是本地预览），记录页分页使用 `nextCursor`；live 模式所有写入口只提示只读。
 > **W4-D** 起后端补上两条写入口：`POST /records/check-in` / `POST /records/:id/reverse`
-> 有库时真事务落库（流水 + 余额 + 审计），撤销是 append-only 冲正；**前端 live 写入口仍未放开**。
+> 有库时真事务落库（流水 + 余额 + 审计），撤销是 append-only 冲正。
+> **W4-E** 起双端 live 首页真正调用这两条端点（不再只提示只读）：
+> 打卡 / 长按撤销会落库并刷新服务端快照；**其它写入口（记一笔 / 心愿 / 规则 / 档案）仍只读**。
 > 规则 / 习惯 CRUD / 心愿 / 邀请等其余写端点仍未建。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
-> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A / W4-B / W4-C / W4-D）为准。
+> **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A / W4-B / W4-C / W4-D / W4-E）为准。
 
 ### ✅ 已完成并验证
 
@@ -918,6 +921,32 @@
     ⑩ 仍不粉饰：前端 live 写入口仍拦（W5）；习惯 CRUD / 心愿 / 规则 / 邀请未建；
     未做并发压测与真机联调。
     交接单：[`16-w4d-handoff.md`](./16-w4d-handoff.md)。
+
+
+**W4-E 进展（2026-10-19）：双端 live 打卡 / 撤销写入口**
+
+    ① **只放开两条**：首页打卡 `POST /records/check-in`、长按撤销
+    `POST /records/:id/reverse`；记一笔 / 心愿 / 规则 / 档案仍走只读拦截。
+    ② **独立写传输层**：新增 `WriteTransport` / `TaroWriteTransport`，只读
+    `ReadTransport` 一行未改；写路径不自动重试，重试语义交给幂等键。
+    ③ **live 无写客户端必须拒绝**：`isCheckInReadOnly = isLiveMode && writeApi == null`，
+    绝不退回本地假写；预览模式仍走原本地 `checkIn()`。
+    ④ **先落地、再刷新**：解析 201 `{record, executedRecordId}` → 映射进列表并取
+    `balanceAfter` → `refreshFromServer()` 校正；读失败不会被误报成写失败。
+    ⑤ **契约强校验**：`executedRecordId` 必须等于 `record.id`（撤销时是冲正记录）；
+    读取层解析错误统一归一成 `WriteApiException.malformed`。
+    ⑥ **业务码优先**：409 区分每日上限 / 积分不足 / 重复撤销 / 非打卡记录；
+    404 区分习惯与流水，不再冒充「孩子档案不存在」；重试只对网络 / 超时 / 5xx 为真。
+    ⑦ **双击串行**：`writeInFlight` 拦住第二次点击；每次用户动作生成一个幂等键，
+    自动重试不会变两笔，但无 key 的两次点击语义仍由后端决定。
+    ⑧ **撤销目标兜底**：当前记录页可能被分类过滤，找不到时单独取一页**不分类**
+    的流水（200 条）定位 —— 冲正记录是 `adjust`，只看 `praise` 会误判为未冲正。
+    ⑨ 真跑基线（2026-10-19）：`flutter analyze` → **0 issue**；`flutter test` → **65/65**；
+    小程序 `tsc --noEmit` → **0**；`.tmp_test/run.js` → **48/48**（W4-E 11 条）；
+    `backend npm run ci` → **0**（含 353 条测试与全部闸门）。无新增迁移。
+    ⑩ 仍不粉饰：习惯 CRUD / 心愿 / 规则 / 邀请 / 记一笔仍未接后端；
+    未做真机联调与高并发压测。
+    交接单：[`17-w4e-handoff.md`](./17-w4e-handoff.md)。
 
 
 ### 文档缺陷修正记录

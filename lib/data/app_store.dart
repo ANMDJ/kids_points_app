@@ -15,6 +15,9 @@ import 'read_api.dart';
 import 'read_api_errors.dart';
 import 'read_dto.dart';
 import 'read_mapper.dart';
+import 'write_api.dart';
+import 'write_api_errors.dart';
+import 'write_dto.dart';
 
 /// release / profile 构建的判定 —— **编译期常量**（等价于 `!kDebugMode`）。
 ///
@@ -51,7 +54,9 @@ class AppStore extends ChangeNotifier {
   /// 原先构造即 `_reset()` → 应用一打开就是假数据（124 分 / 324 好习惯 /
   /// “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的。
   /// seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
-  AppStore({ReadApiClient? readApi}) : _readApi = readApi {
+  AppStore({ReadApiClient? readApi, WriteApi? writeApi})
+      : _readApi = readApi,
+        _writeApi = writeApi {
     _resetToEmpty();
   }
 
@@ -60,6 +65,10 @@ class AppStore extends ChangeNotifier {
   /// 只有 `main()` 按 `--dart-define` 注入：测试 / 演示默认走原路径，
   /// 不会因为环境里恰好有变量就偷偷发请求。
   final ReadApiClient? _readApi;
+
+  /// 写 API 客户端（W4-E）；与 [_readApi] 一样只在配置齐全时注入。
+  /// 它只覆盖已经上线的「打卡 / 撤销」两条写入口，其它写功能仍走只读拦截。
+  final WriteApi? _writeApi;
 
   /// 一页流水条数 —— 与后端 DTO 的上限（200）同口径，50 是「首屏够用」的折中。
   static const int _recordsPageSize = 50;
@@ -75,10 +84,25 @@ class AppStore extends ChangeNotifier {
   int _readEpoch = 0;
   bool _disposed = false;
 
+  /// 写请求串行化：防止双击把同一动作提交两次，也防止“撤销”与“打卡”交叉。
+  bool _writeInFlight = false;
+
   /// 是否接入了后端（与「当前是否已加载成功」是两件事）。
   bool get isLiveMode => _readApi != null;
 
-  /// 只读模式：接后端时**不提供写入口**（W4 只实现了读端点）。
+  /// live 模式下是否已接上写端点（W4-E：只覆盖打卡 / 撤销）。
+  bool get usesServerWrites => _readApi != null && _writeApi != null;
+
+  /// 打卡是否被只读拦截。
+  ///
+  /// 本地预览可以照常写（那本来就是演示）；live 但没注入写客户端时**必须拦**，
+  /// 否则会改内存却不落库，用户以为已经保存。
+  bool get isCheckInReadOnly => isLiveMode && _writeApi == null;
+
+  /// 首页打卡 / 长按撤销是否可用。
+  bool get canWriteCheckIns => !isCheckInReadOnly;
+
+  /// 其它写入口（记一笔 / 心愿 / 规则 / 档案）仍只读 —— W4-E 只接了两条打卡端点。
   /// 本地预览数据不受影响，可以随便点 —— 那本来就是演示。
   bool get isReadOnly => isLiveMode;
 
@@ -96,7 +120,7 @@ class AppStore extends ChangeNotifier {
   RecordCategory? get recordFilter => _recordFilter;
 
   /// 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。
-  String get readOnlyWriteMessage => '只读模式：后端写入接口还没上线（W4），这次操作没有保存到服务器。';
+  String get readOnlyWriteMessage => '只读模式：记一笔 / 心愿 / 规则等写入还没接后端，这次操作没有保存到服务器。';
 
   /// 记录页要展示的流水：
   ///   · 预览模式：对本地流水按分类过滤（原逻辑）；
@@ -378,6 +402,7 @@ class AppStore extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _readApi?.close();
+    _writeApi?.close();
     super.dispose();
   }
 
@@ -540,6 +565,155 @@ class AppStore extends ChangeNotifier {
     _persist();
     return null;
   }
+
+  // ------------------------------------------------------- 服务端写入口（W4-E）
+
+  /// 首页打卡的统一入口。
+  ///
+  /// · 预览模式：走原来的本地 [checkIn]（返回值语义不变）；
+  /// · live 模式：POST `/records/check-in`，成功后先把返回的流水落到本地，
+  ///   再刷新服务端快照（余额 / 好习惯次数以服务端为准）。
+  ///
+  /// 写请求全程串行：第二次点击在第一次结束前到达时直接返回提示，
+  /// 不会产生两笔无法解释的重复打卡。
+  Future<String?> submitCheckIn(
+    Habit habit, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) return checkIn(habit, actor: actor);
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return '只读模式：打卡写入还没有接上后端，这次操作没有保存到服务器。';
+    }
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final WrittenRecordDto result = await api.checkIn(
+        habit.id,
+        idempotencyKey: _newIdempotencyKey('checkin'),
+      );
+      if (_disposed) return null;
+      _applyWrittenRecord(result.record);
+      // 写成功后再刷新：即使刷新失败，界面也已经能看到刚写入的那笔流水，
+      // 不会把“写入成功、读取失败”误报成“打卡失败”。
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '打卡请求已发出，但结果无法确认。请刷新后查看，避免重复操作。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 长按撤销今天的打卡（服务端写入口）。
+  ///
+  /// 目标记录优先从已加载流水里找；当前记录页可能被分类过滤 / 只加载了 50 条，
+  /// 找不到时再单独取一页不分类的流水定位，**不修改**记录页正在展示的列表。
+  Future<String?> submitUndoCheckIn(
+    Habit habit, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) return undoCheckIn(habit, actor: actor);
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return '只读模式：撤销写入还没有接上后端，这次操作没有保存到服务器。';
+    }
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final PointRecord? target = await _findUndoRecord(habit.id);
+      if (target == null) {
+        return '没有找到“${habit.title}”今天的打卡记录';
+      }
+      final WrittenRecordDto result = await api.reverse(
+        target.id,
+        idempotencyKey: _newIdempotencyKey('reverse'),
+        note: target.title,
+      );
+      if (_disposed) return null;
+      _applyWrittenRecord(result.record);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '撤销请求已发出，但结果无法确认。请刷新后查看，避免重复操作。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 把写端点返回的流水立即落到本地（随后仍会用服务端快照校正）。
+  void _applyWrittenRecord(RecordDto dto) {
+    final PointRecord record;
+    try {
+      record = mapRecord(dto);
+    } on ReadApiException catch (error) {
+      throw WriteApiException.malformed(
+        'record',
+        detail: error.detail ?? error.userMessage,
+      );
+    }
+    final bool existed = records.any((PointRecord r) => r.id == record.id);
+    records.removeWhere((PointRecord r) => r.id == record.id);
+    records.insert(0, record);
+    _points = dto.balanceAfter;
+
+    if (!existed) {
+      // 只是刷新失败时的兜底计数：刷新成功后会被服务端的 goodHabitCount 覆盖。
+      if (dto.category == 'praise' && dto.source != 'correction') {
+        profile.goodHabitCount += 1;
+      } else if (dto.source == 'correction' &&
+          dto.points < 0 &&
+          profile.goodHabitCount > 0) {
+        profile.goodHabitCount -= 1;
+      }
+    }
+    _persist();
+  }
+
+  /// 在当前列表里找「今天、未冲正」的那笔打卡。
+  PointRecord? _findUndoRecordIn(Iterable<PointRecord> source, String habitId) {
+    final Set<String?> reversedIds = source
+        .where((PointRecord r) => r.reversesRecordId != null)
+        .map((PointRecord r) => r.reversesRecordId)
+        .toSet();
+    for (final PointRecord record in source) {
+      if (record.habitId == habitId &&
+          record.category == RecordCategory.praise &&
+          record.source != RecordSource.correction &&
+          !reversedIds.contains(record.id) &&
+          isSameDay(record.time)) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  Future<PointRecord?> _findUndoRecord(String habitId) async {
+    final PointRecord? local = _findUndoRecordIn(records, habitId);
+    if (local != null) return local;
+
+    final ReadApiClient? read = _readApi;
+    if (read == null) return null;
+    try {
+      // 取一页**不分类**的流水：冲正记录是 adjust，只在 praise 里找会误以为
+      // 原记录仍未冲正。200 是后端 DTO 的上限。
+      final RecordsPageDto page = await read.fetchRecords(limit: 200);
+      return _findUndoRecordIn(mapRecordsPage(page).records, habitId);
+    } on ReadApiException {
+      return null;
+    }
+  }
+
+  /// 幂等键只用于**同一次用户动作**的自动重试；这里每次用户点击生成一个，
+  /// 所以双击仍是两笔（由 [_writeInFlight] 拦住），断线重试不会变成两笔。
+  String _newIdempotencyKey(String prefix) =>
+      '$prefix-${DateTime.now().microsecondsSinceEpoch}-${_seq++}';
 
   // ------------------------------------------------------------ 记一笔
 

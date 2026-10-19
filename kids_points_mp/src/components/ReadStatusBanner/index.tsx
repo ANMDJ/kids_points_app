@@ -66,7 +66,9 @@ function BannerView({ store }: { store: AppStore }) {
   return (
     <View className='kp-read-banner kp-read-banner--info'>
       <Text className='kp-read-banner__text'>
-        只读模式 · 数据来自服务器（写入接口尚未接入）
+        {store.usesServerWrites
+          ? '数据来自服务器 · 打卡与撤销会实时保存'
+          : '只读模式 · 数据来自服务器（写入口尚未接入）'}
       </Text>
     </View>
   )

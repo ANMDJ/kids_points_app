@@ -941,6 +941,15 @@ if (w4c.error || w4c.status !== 0) {
   console.log('FAIL  W4-C 异步只读用例（run-w4c.mjs） -> 子进程未通过')
 }
 
+// ── W4-E 异步写入口用例：同样交给 ESM 子进程（理由见 run-w4e.mjs 头注释）──
+const w4e = spawnSync(process.execPath, [join(__dirname, 'run-w4e.mjs')], {
+  stdio: 'inherit'
+})
+if (w4e.error || w4e.status !== 0) {
+  failed += 1
+  console.log('FAIL  W4-E 异步写入口用例（run-w4e.mjs） -> 子进程未通过')
+}
+
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exitCode = failed === 0 ? 0 : 1
 

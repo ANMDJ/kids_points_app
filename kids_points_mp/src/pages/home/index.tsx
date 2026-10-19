@@ -35,12 +35,8 @@ export default function Home() {
   const habits = store.habitViews()
   const doneCount = habits.filter((habit) => habit.checked).length
 
-  const handleCheckIn = (habit: Habit) => {
-    if (store.isReadOnly) {
-      toast(store.readOnlyWriteMessage)
-      return
-    }
-    const message = store.checkIn(habit)
+  const handleCheckIn = async (habit: Habit) => {
+    const message = await store.submitCheckIn(habit)
     if (message) {
       toast(message)
     } else {
@@ -48,14 +44,10 @@ export default function Home() {
     }
   }
 
-  const handleUndo = (habit: Habit) => {
-    if (store.isReadOnly) {
-      toast(store.readOnlyWriteMessage)
-      return
-    }
+  const handleUndo = async (habit: Habit) => {
     // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因。
     // 这里不再预读 `habit.checked` —— 能不能撤销由 store 按当天流水判定（修 A3）。
-    const message = store.undoCheckIn(habit)
+    const message = await store.submitUndoCheckIn(habit)
     toast(message ?? `已撤销“${habit.title}”的打卡`)
   }
 

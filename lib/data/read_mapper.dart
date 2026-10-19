@@ -87,7 +87,7 @@ RecordsPage mapRecordsPage(RecordsPageDto dto) {
         .asMap()
         .entries
         .map((MapEntry<int, RecordDto> entry) =>
-            _mapRecord(entry.value, 'records[${entry.key}]'))
+            mapRecord(entry.value, 'records[${entry.key}]'))
         .toList(growable: false),
     limit: dto.limit,
     hasMore: dto.hasMore,
@@ -138,7 +138,9 @@ Wish _mapWish(WishDto dto, String path) {
   );
 }
 
-PointRecord _mapRecord(RecordDto dto, String path) {
+/// 单条线格式流水 → 本地模型。写端点返回的记录与 `GET /records` 同构，
+/// 因此复用同一函数（避免“读取一条口径、写入另一条口径”）。
+PointRecord mapRecord(RecordDto dto, [String path = 'record']) {
   final RecordCategory category = parseCategory(dto.category, '$path.category');
   final RecordSource source = parseSource(dto.source, '$path.source');
   final DateTime time = dto.createdAt.toLocal();

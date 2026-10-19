@@ -3,17 +3,20 @@ import 'package:flutter/material.dart';
 import 'data/app_scope.dart';
 import 'data/app_store.dart';
 import 'data/read_api.dart';
+import 'data/write_api.dart';
 import 'screens/home_shell.dart';
 import 'theme/app_theme.dart';
 
 void main() {
-  // W4-B：只有三项 `--dart-define` 都配齐才接后端；否则保持本地预览数据，
+  // W4-B / W4-E：只有三项 `--dart-define` 都配齐才接后端；否则保持本地预览数据，
   // 不会出现「发了请求 → 401 → 页面显示成网络错误」的假象。
   final ReadApiConfig config = ReadApiConfig.fromEnvironment();
+  final bool configured = config.isConfigured;
   runApp(
     PointsApp(
       store: AppStore(
-        readApi: config.isConfigured ? ReadApiClient(config: config) : null,
+        readApi: configured ? ReadApiClient(config: config) : null,
+        writeApi: configured ? WriteApiClient(config: config) : null,
       ),
     ),
   );

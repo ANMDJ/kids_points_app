@@ -80,13 +80,12 @@ class HomeScreen extends StatelessWidget {
               ...habits.map(
                 (HabitView habit) => HabitTile(
                   habit: habit,
-                  onTap: () {
-                    if (store.isReadOnly) {
-                      showReadOnlyHint();
-                      return;
-                    }
+                  onTap: () async {
+                    // live 模式走服务端写入口；预览模式由 store 回落到本地写。
                     // 视图是快照，取回习惯本身交给 store（Dart 没有 TS 的结构类型兼容）
-                    final String? message = store.checkIn(habit.habit);
+                    final String? message =
+                        await store.submitCheckIn(habit.habit);
+                    if (!messenger.mounted) return;
                     messenger.hideCurrentSnackBar();
                     messenger.showSnackBar(
                       SnackBar(
@@ -96,13 +95,11 @@ class HomeScreen extends StatelessWidget {
                       ),
                     );
                   },
-                  onLongPress: () {
-                    if (store.isReadOnly) {
-                      showReadOnlyHint();
-                      return;
-                    }
+                  onLongPress: () async {
                     // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
-                    final String? message = store.undoCheckIn(habit.habit);
+                    final String? message =
+                        await store.submitUndoCheckIn(habit.habit);
+                    if (!messenger.mounted) return;
                     messenger.hideCurrentSnackBar();
                     messenger.showSnackBar(
                       SnackBar(
