@@ -25,9 +25,18 @@ import {
 const VERDICTS: Verdict[] = ['ALLOW', 'REQUIRE_APPROVAL', 'DENY']
 const ROLES: Role[] = ['guardian', 'child']
 
-test('规模与唯一性：31 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
-  assert.equal(ALL_ACTIONS.length, 31)
-  assert.equal(new Set(ALL_ACTIONS).size, 31, '动作键有重复')
+test('规模与唯一性：32 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
+  assert.equal(ALL_ACTIONS.length, 32)
+  assert.equal(new Set(ALL_ACTIONS).size, 32, '动作键有重复')
+})
+
+test('W5-J 我的申请：两个角色都能看自己提的；viewer 仍 fail-closed', () => {
+  // 与 `review_approvals` 的方向**刻意不同**：那个是「待我批准」（child DENY），
+  // 这个是「我提过什么」（child ALLOW）。把两者合并 = 孩子获得批准视图。
+  assert.equal(resolveVerdict('view_own_approvals', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('view_own_approvals', 'child'), 'ALLOW')
+  assert.equal(resolveVerdict('view_own_approvals', 'viewer'), 'DENY')
+  assert.equal(resolveVerdict('review_approvals', 'child'), 'DENY')
 })
 
 test('W5-H 成员管理：看成员两侧都放行，改角色 / 移出只给家长（02 §2）', () => {

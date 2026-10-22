@@ -216,6 +216,20 @@ export interface WriteApi {
   ): Promise<ApprovalDto>
 
   /**
+   * 撤回自己提交的申请（`POST /approvals/:id/withdraw`，W5-J）。
+   *
+   * **没有请求体**：撤回只需要审批单 id（申请人由会话推出）。
+   * 只有申请人能撤回 —— 别人（包括家长）会拿到 403 `NOT_REQUESTER`；
+   * 已批 / 已拒 / 已过期是 409，页面据此刷新而不是让用户反复点。
+   *
+   * 回包 `status` 必须是 `withdrawn`：不一致说明契约漂移，调用方不能当成功。
+   */
+  withdrawApproval(
+    approvalId: string,
+    idempotencyKey?: string
+  ): Promise<ApprovalDto>
+
+  /**
    * 改孩子昵称（`PATCH /child`，`edit_child_profile`，W5-E）。
    *
    * 幂等：改成同一个名字时服务端**不写库也不写审计**，直接回 200，
@@ -616,6 +630,21 @@ export class WriteApiClient implements WriteApi {
       { decision: input.approve ? 'approved' : 'rejected' },
       (raw) => this.parseApproval(raw),
       input.idempotencyKey
+    )
+  }
+
+  async withdrawApproval(
+    approvalId: string,
+    idempotencyKey?: string
+  ): Promise<ApprovalDto> {
+    const id = this.requireId(approvalId, 'approvalId')
+    return this.send<ApprovalDto>(
+      'POST',
+      `/approvals/${encodeURIComponent(id)}/withdraw`,
+      // 撤回没有业务参数：申请人由设备会话决定，客户端说了不算。
+      null,
+      (raw) => this.parseApproval(raw),
+      idempotencyKey
     )
   }
 

@@ -74,6 +74,16 @@ export class ApprovalsController {
     res.status(code)
   }
 
+  /** 「我的申请」（W5-J）：孩子 / 家长都能查**自己**提的；别人提的永远看不到。 */
+  @Get('mine')
+  @RequireAction('view_own_approvals')
+  async listMine(
+    @Query() query: ListApprovalsQueryDto,
+    @Req() req: RequestWithActor
+  ): Promise<ApprovalInboxPageDto> {
+    return this.service.listMine(query, this.actorOf(req), this.childIdOf(req))
+  }
+
   /**
    * 家长收件箱（W5-D）：`GET /approvals?status=pending&limit=20&cursor=…`
    *

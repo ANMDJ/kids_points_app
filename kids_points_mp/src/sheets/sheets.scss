@@ -501,3 +501,155 @@
   line-height: 1.5;
   color: $text-secondary;
 }
+
+// ───────────────────────────────────────────── 我的申请（W5-J）
+// 只负责排版与状态胶囊配色；「能不能撤回」来自 `canWithdrawApproval`，
+// 组件不在这里做第二套判断（两端同一条规则）。
+.kp-myapp__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.kp-myapp__row {
+  margin-bottom: f2r(10);
+  padding: f2r(14) f2r(16);
+  border-radius: f2r(16);
+  background-color: $surface;
+}
+
+.kp-myapp__head {
+  display: flex;
+  align-items: center;
+}
+
+.kp-myapp__headline {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(14.5);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-myapp__pill {
+  flex-shrink: 0;
+  margin-left: f2r(8);
+  padding: f2r(3) f2r(10);
+  border-radius: f2r(999);
+  background-color: $primary-soft;
+}
+
+.kp-myapp__pill.is-filled {
+  background-color: $primary-deep;
+}
+
+.kp-myapp__pill.is-flat {
+  background-color: $primary-soft;
+}
+
+.kp-myapp__pill.is-expired {
+  background-color: #fdf1e9;
+}
+
+.kp-myapp__pill-text {
+  font-size: f2r(11.5);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-myapp__pill.is-filled .kp-myapp__pill-text {
+  color: $surface;
+}
+
+.kp-myapp__pill.is-expired .kp-myapp__pill-text {
+  color: $point-spend;
+}
+
+.kp-myapp__detail {
+  display: block;
+  margin-top: f2r(5);
+  font-size: f2r(12.5);
+  line-height: 1.45;
+  color: $text-secondary;
+}
+
+.kp-myapp__auto-reason {
+  display: block;
+  margin-top: f2r(4);
+  font-size: f2r(11.5);
+  color: $point-spend;
+}
+
+.kp-myapp__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: f2r(8);
+}
+
+.kp-myapp__time {
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-myapp__chip {
+  padding: f2r(7) f2r(14);
+  border-radius: f2r(999);
+  background-color: $primary-soft;
+}
+
+.kp-myapp__chip:active {
+  opacity: 0.8;
+}
+
+.kp-myapp__chip.is-disabled {
+  opacity: 0.5;
+}
+
+.kp-myapp__chip.is-disabled:active {
+  opacity: 0.5;
+}
+
+.kp-myapp__chip-text {
+  font-size: f2r(12.5);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-myapp__status-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-myapp__error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(12.5);
+  color: $point-spend;
+}
+
+.kp-myapp__status-row .kp-myapp__chip {
+  margin-left: f2r(8);
+  padding: f2r(6) f2r(12);
+}
+
+.kp-myapp__empty {
+  padding: f2r(24) 0;
+  text-align: center;
+}
+
+.kp-myapp__empty-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-myapp__more {
+  display: flex;
+  justify-content: center;
+  margin-top: f2r(4);
+  padding-bottom: f2r(4);
+}
+

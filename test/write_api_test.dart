@@ -435,8 +435,7 @@ void main() {
     });
 
     test('回包缺字段 ⇒ malformed，不把坏数据塞进 UI', () async {
-      final Map<String, Object?> broken = ruleJson()
-        ..remove('currentVersion');
+      final Map<String, Object?> broken = ruleJson()..remove('currentVersion');
       final _FakeWriteTransport transport = _FakeWriteTransport(
         (Uri uri, Map<String, String> headers, String body) async {
           return WriteHttpResponse(
@@ -617,8 +616,7 @@ void main() {
       );
     });
 
-    test('恢复 POST /trash/:kind/:id/restore：kind 拼进路径，回包必须指同一条',
-        () async {
+    test('恢复 POST /trash/:kind/:id/restore：kind 拼进路径，回包必须指同一条', () async {
       final _FakeWriteTransport transport = _FakeWriteTransport(
         (Uri uri, Map<String, String> headers, String body) async {
           return WriteHttpResponse(
@@ -686,8 +684,7 @@ void main() {
       expect(target.id, 'habit-1');
     });
 
-    test('未知 kind 在发请求之前就失败（不让服务端回一条可避免的 400）',
-        () async {
+    test('未知 kind 在发请求之前就失败（不让服务端回一条可避免的 400）', () async {
       final _FakeWriteTransport transport = _FakeWriteTransport(
         (Uri uri, Map<String, String> headers, String body) async {
           return WriteHttpResponse(statusCode: 200, body: '{}');
@@ -707,8 +704,6 @@ void main() {
       expect(transport.calls, isEmpty);
     });
   });
-
-
 
   group('兑换心愿（W5-C）：POST /approvals（action=redeem）', () {
     test('只发 action + targetId：不带 costSnapshot / autoApprove', () async {
@@ -791,6 +786,81 @@ void main() {
           WriteFailureKind.malformed,
         )),
       );
+    });
+  });
+
+  group('撤回申请（W5-J）：POST /approvals/:id/withdraw（无请求体）', () {
+    String withdrawnJson({String status = 'withdrawn'}) =>
+        jsonEncode(<String, Object?>{
+          'id': 'approval-1',
+          'action': 'redeem',
+          'status': status,
+          'executedRecordId': null,
+          'autoReason': null,
+        });
+
+    test('POST + id 去空白 + 空 body + 幂等键；绝不带 applicant 参数', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(statusCode: 200, body: withdrawnJson());
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final ApprovalDto dto = await client.withdrawApproval(
+        '  approval-1  ',
+        idempotencyKey: 'key-withdraw',
+      );
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'POST');
+      expect(call.uri.path, '/api/approvals/approval-1/withdraw');
+      expect(call.headers[kDeviceIdHeader], 'device-1');
+      expect(call.headers[kChildIdHeader], 'child-1');
+      expect(call.headers['idempotency-key'], 'key-withdraw');
+      expect(call.body.trim(), isEmpty,
+          reason: '申请人由会话决定；请求体里多一个 userId 就是越权入口');
+      expect(dto.status, 'withdrawn');
+      expect(dto.executedRecordId, isNull);
+    });
+
+    test('空 id 在本地就拒，一个请求都不发', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          fail('空 id 不得发请求');
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      await expectLater(
+        client.withdrawApproval('   '),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(transport.calls, isEmpty);
+    });
+
+    test('403 NOT_REQUESTER / 409 ALREADY_DECIDED 的原生文案', () {
+      final WriteApiException forbidden = WriteApiException.fromHttp(
+        statusCode: 403,
+        body: <String, Object?>{
+          'code': 'NOT_REQUESTER',
+          'message': 'not requester',
+        },
+      );
+      expect(forbidden.kind, WriteFailureKind.forbidden);
+      expect(forbidden.userMessage, contains('不是你提交的申请'));
+
+      final WriteApiException conflict = WriteApiException.fromHttp(
+        statusCode: 409,
+        body: <String, Object?>{
+          'code': 'ALREADY_DECIDED',
+          'message': 'already decided',
+        },
+      );
+      expect(conflict.kind, WriteFailureKind.conflict);
+      expect(conflict.userMessage, contains('已经被处理'));
     });
   });
 
@@ -1089,8 +1159,7 @@ void main() {
       expect(writeApi.lastPoints, -3);
       expect(writeApi.lastColor, '#7fbf55');
       expect(store.rules.single.id, 'rule-1');
-      expect(store.rules.single.points, -3,
-          reason: '服务端回包已带符号，客户端只能转换一次');
+      expect(store.rules.single.points, -3, reason: '服务端回包已带符号，客户端只能转换一次');
     });
 
     test('规则编辑：expectedVersion 取界面版本，成功后本地跟到新版本', () async {
@@ -1628,8 +1697,7 @@ void main() {
     expect(find.textContaining('太棒了'), findsOneWidget);
   });
 
-  testWidgets('live 心愿单：点兑换先弹确认，取消不发请求，确认才提交审批',
-      (WidgetTester tester) async {
+  testWidgets('live 心愿单：点兑换先弹确认，取消不发请求，确认才提交审批', (WidgetTester tester) async {
     // 心愿单是两列网格，默认 800×600 的测试视口下卡片会被裁掉，
     // 点不到「兑换」；这里放大到 400×800 逻辑像素（同 app_test 的 pumpApp）。
     tester.view.physicalSize = const Size(1200, 2400);
@@ -1901,8 +1969,7 @@ void main() {
       );
       final _FakeWriteApi writeApi = _FakeWriteApi()
         // 服务端规范化后的值才是库里真实的名字。
-        ..renameChildResult =
-            ChildProfileDto(childId: 'child-1', name: '小明明');
+        ..renameChildResult = ChildProfileDto(childId: 'child-1', name: '小明明');
       final AppStore store = AppStore(
         readApi: ReadApiClient(config: config, transport: readTransport),
         writeApi: writeApi,
@@ -1983,8 +2050,7 @@ void main() {
     });
   });
 
-  testWidgets('live 我的页：点头像改昵称真的 PATCH，不再弹只读提示',
-      (WidgetTester tester) async {
+  testWidgets('live 我的页：点头像改昵称真的 PATCH，不再弹只读提示', (WidgetTester tester) async {
     final _ScriptedReadTransport readTransport = _ScriptedReadTransport(
       homeJson: jsonEncode(<String, Object?>{
         'child': <String, Object?>{
@@ -2105,8 +2171,7 @@ void main() {
       return store;
     }
 
-    test('refreshTrash 失败不清空上一次的结果（空列表会被当成「已彻底删除」）',
-        () async {
+    test('refreshTrash 失败不清空上一次的结果（空列表会被当成「已彻底删除」）', () async {
       final AppStore store = buildStore();
       readTransport.trashJson = jsonEncode(<String, Object?>{
         'items': <Object?>[
@@ -2194,10 +2259,8 @@ void main() {
         WriteFailureKind.conflict,
         '这条心愿还有积分流水引用，不能彻底删除。',
       );
-      expect(await store.submitPurgeTrash(item),
-          '这条心愿还有积分流水引用，不能彻底删除。');
-      expect(store.trashItems().single.id, 'wish-1',
-          reason: '拒绝时不能把行从界面抹掉');
+      expect(await store.submitPurgeTrash(item), '这条心愿还有积分流水引用，不能彻底删除。');
+      expect(store.trashItems().single.id, 'wish-1', reason: '拒绝时不能把行从界面抹掉');
 
       writeApi.trashError = null;
       readTransport.trashJson =
@@ -2237,8 +2300,7 @@ void main() {
       expect(outcome.failed, 2);
       expect(outcome.hasFailure, isTrue);
       expect(outcome.error, '服务器开小差了，请稍后重试。');
-      expect(store.trashItems(now: now).length, 3,
-          reason: '一条都没删成时，列表不能凭空调走');
+      expect(store.trashItems(now: now).length, 3, reason: '一条都没删成时，列表不能凭空调走');
     });
 
     test('没有写客户端：删除 / 恢复都给只读文案，一条请求都不发', () async {
@@ -2330,8 +2392,7 @@ void main() {
       expect(find.text('已恢复“被删的 habit-1”'), findsOneWidget);
     });
 
-    testWidgets('live 回收站拉取失败：显示失败横幅且不清空已有列表',
-        (WidgetTester tester) async {
+    testWidgets('live 回收站拉取失败：显示失败横幅且不清空已有列表', (WidgetTester tester) async {
       final _TrashScriptedTransport transport = _TrashScriptedTransport(
         homeJson: homeJson(),
         pageJson: jsonEncode(<String, Object?>{
@@ -2364,8 +2425,7 @@ void main() {
 
       expect(find.textContaining('回收站加载失败'), findsOneWidget);
       expect(find.text('重试'), findsOneWidget);
-      expect(find.text('回收站是空的'), findsNothing,
-          reason: '403 不能画成「空回收站」');
+      expect(find.text('回收站是空的'), findsNothing, reason: '403 不能画成「空回收站」');
     });
   });
 
@@ -2585,8 +2645,7 @@ void main() {
       };
     }
 
-    test('POST /invites：role / maxUses / expiresInDays + 身份头，且不带幂等键',
-        () async {
+    test('POST /invites：role / maxUses / expiresInDays + 身份头，且不带幂等键', () async {
       final _FakeWriteTransport transport = _FakeWriteTransport(
         (Uri uri, Map<String, String> headers, String body) async {
           return WriteHttpResponse(
@@ -2624,8 +2683,7 @@ void main() {
       expect(dto.code, 'ABCD2345');
     });
 
-    test('viewer / 越界参数在本地就拒（与后端 @IsIn/@Max 同口径），一个请求都不发',
-        () async {
+    test('viewer / 越界参数在本地就拒（与后端 @IsIn/@Max 同口径），一个请求都不发', () async {
       final _FakeWriteTransport transport = _FakeWriteTransport(
         (Uri uri, Map<String, String> headers, String body) async {
           fail('非法参数不得发请求');
@@ -2718,8 +2776,7 @@ void main() {
       expect(dto.revoked, isTrue);
     });
 
-    test('revoke 回包 id 不一致 / revoked=false ⇒ malformed（不能拿别的行当成功）',
-        () async {
+    test('revoke 回包 id 不一致 / revoked=false ⇒ malformed（不能拿别的行当成功）', () async {
       Future<WriteApiException> failWith(Map<String, Object?> body) async {
         final _FakeWriteTransport transport = _FakeWriteTransport(
           (Uri uri, Map<String, String> headers, String payload) async {
@@ -2885,8 +2942,7 @@ void main() {
         revoked: false,
         createdAt: now,
       );
-      writeApi.revokeInviteResult =
-          InviteRevokeDto(id: 'inv-1', revoked: true);
+      writeApi.revokeInviteResult = InviteRevokeDto(id: 'inv-1', revoked: true);
     });
 
     AppStore buildStore({bool withWriteApi = true}) {
@@ -3019,7 +3075,8 @@ void main() {
         WriteFailureKind.notFound,
         '这个邀请码不存在或不属于当前孩子的档案，请刷新邀请码列表。',
       );
-      readTransport.invitesJson = jsonEncode(<String, Object?>{'items': <Object?>[]});
+      readTransport.invitesJson =
+          jsonEncode(<String, Object?>{'items': <Object?>[]});
 
       final String? message = await store.submitRevokeInvite(store.invites[0]);
 
@@ -3034,11 +3091,13 @@ void main() {
       await store.refreshMembers();
       await store.refreshInvites();
 
-      expect(await store.submitCreateInvite(
-        role: MemberRole.child,
-        maxUses: 1,
-        expiresInDays: 7,
-      ), store.inviteReadOnlyWriteMessage);
+      expect(
+          await store.submitCreateInvite(
+            role: MemberRole.child,
+            maxUses: 1,
+            expiresInDays: 7,
+          ),
+          store.inviteReadOnlyWriteMessage);
       expect(await store.submitRevokeInvite(store.invites[0]),
           store.inviteReadOnlyWriteMessage);
       expect(store.invites.length, 2);
@@ -3086,6 +3145,10 @@ class _FakeWriteApi implements WriteApi {
   int reverseCalls = 0;
   int adjustCalls = 0;
   int decideCalls = 0;
+  int withdrawCalls = 0;
+  ApprovalDto? withdrawResult;
+  Object? withdrawError;
+  String? lastWithdrawKey;
   int createRuleCalls = 0;
   int updateRuleCalls = 0;
   int deleteRuleCalls = 0;
@@ -3256,6 +3319,18 @@ class _FakeWriteApi implements WriteApi {
     if (decideGate != null) return decideGate!.future;
     if (decideError != null) throw decideError!;
     return decideResult!;
+  }
+
+  @override
+  Future<ApprovalDto> withdrawApproval(
+    String approvalId, {
+    String? idempotencyKey,
+  }) async {
+    withdrawCalls += 1;
+    lastApprovalId = approvalId;
+    lastWithdrawKey = idempotencyKey;
+    if (withdrawError != null) throw withdrawError!;
+    return withdrawResult!;
   }
 
   @override

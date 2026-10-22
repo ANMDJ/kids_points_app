@@ -196,6 +196,41 @@ class ReadApiClient {
     String status = 'pending',
     int limit = 20,
     String? cursor,
+  }) {
+    return _fetchApprovalPage(
+      '/approvals',
+      status: status,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  /// `GET /approvals/mine`：**我提交的**申请（W5-J）。
+  ///
+  /// 与 [fetchApprovals] 的差别只有路径与权限语义：
+  ///   · 收件箱 = 「待我批准」（`review_approvals`，孩子 403）；
+  ///   · 这里 = 「我提过什么」（`view_own_approvals`，两个角色都 ALLOW）。
+  /// 服务端按**会话身份**收口申请人，客户端没有任何参数可以指定「看谁的」。
+  ///
+  /// 筛选词 / 分页规则与收件箱完全相同（同一个后端 DTO 与游标解析器）。
+  Future<ApprovalsPageDto> fetchMyApprovals({
+    String status = 'all',
+    int limit = 20,
+    String? cursor,
+  }) {
+    return _fetchApprovalPage(
+      '/approvals/mine',
+      status: status,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  Future<ApprovalsPageDto> _fetchApprovalPage(
+    String path, {
+    required String status,
+    required int limit,
+    required String? cursor,
   }) async {
     const Set<String> allowed = <String>{
       'pending',
@@ -218,7 +253,7 @@ class ReadApiClient {
     };
     if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
 
-    return ApprovalsPageDto.fromJson(await _get('/approvals', query));
+    return ApprovalsPageDto.fromJson(await _get(path, query));
   }
 
   Future<Object?> _get(String path, [Map<String, String>? query]) async {

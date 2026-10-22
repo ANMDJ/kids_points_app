@@ -123,6 +123,37 @@ export function canRejectApproval(
   return isApprovalPending(item) && !isApprovalExpired(item, now)
 }
 
+/**
+ * 能不能撤回（W5-J）。
+ *
+ * 撤回是**申请人**的动作，不是判定：`pending` 且没过期即可，`summary === null`
+ * 也必须允许 —— 内容读不懂的那行只有申请人能撤回，否则它会永久卡在列表里
+ * （家长可以拒，但申请人看不到收件箱）。
+ *
+ * 服务端仍会独立判定（不是申请人 → 403 `NOT_REQUESTER`；已处理 / 已过期 →
+ * 409），这里只是**别让按钮点得动却注定失败**。
+ */
+export function canWithdrawApproval(
+  item: ApprovalInboxItem,
+  now: number
+): boolean {
+  return isApprovalPending(item) && !isApprovalExpired(item, now)
+}
+
+/** 撤回前的确认文案：必须说清「不会扣分 / 不会改心愿」，否则用户会以为撤回是撤销已发生的兑换。 */
+export function approvalWithdrawConfirmText(item: ApprovalInboxItem): string {
+  const summary = item.summary
+  const what =
+    summary === null
+      ? '这条申请'
+      : summary.kind === 'redeem'
+        ? `兑换「${summary.title}」的申请`
+        : summary.kind === 'bonus'
+          ? `加分申请（+${summary.amount} 分）`
+          : `新增心愿「${summary.title}」的申请`
+  return `撤回后${what}不会再被批准，积分与心愿都不会变化。`
+}
+
 /** 不能批的原因（可展示中文）；能批时为 null。 */
 export function approvalBlockedReason(
   item: ApprovalInboxItem,

@@ -153,9 +153,16 @@ class ApprovalInboxItem {
   /// 三条都满足才行：`pending`、没过期、看得懂 payload。
   /// **拒绝**不需要读 payload（家长可以不看内容就驳回），因此单独给
   /// [canRejectAt] —— 坏数据那一行仍然可以被拒，不会永久卡在列表里。
-  bool canApproveAt(DateTime now) => isPending && !isExpiredAt(now) && summary != null;
+  bool canApproveAt(DateTime now) =>
+      isPending && !isExpiredAt(now) && summary != null;
 
   bool canRejectAt(DateTime now) => isPending && !isExpiredAt(now);
+
+  /// 能不能撤回（W5-J）。
+  ///
+  /// 与「批准」不同，撤回**不需要**读懂 payload：申请人知道自己提了什么，
+  /// 坏数据那一行也必须允许撤回，否则它会一直占着「我的申请」列表。
+  bool canWithdrawAt(DateTime now) => isPending && !isExpiredAt(now);
 
   /// 不能批的原因（可展示中文）；能批时为 null。
   String? approveBlockedReasonAt(DateTime now) {
@@ -217,6 +224,26 @@ class ApprovalInboxItem {
   }
 }
 
+/// 撤回前的确认文案。
+///
+/// 与批准不同，撤回**不执行**任何业务：不扣分、不加分、不建心愿，
+/// 只是让这条申请失效。文案必须说清「需要时要重新提交」，
+/// 否则用户会以为撤回之后还能一键恢复。
+String approvalWithdrawConfirmText(ApprovalInboxItem item) {
+  final ApprovalSummary? summary = item.summary;
+  final String what;
+  if (summary is RedeemSummary) {
+    what = '兑换「${summary.title}」';
+  } else if (summary is BonusSummary) {
+    what = '加分 ${summary.amount} 分';
+  } else if (summary is AddWishSummary) {
+    what = '新增心愿「${summary.title}」';
+  } else {
+    what = '这条申请';
+  }
+  return '撤回后$what会立即失效，积分不会发生任何变化；需要时要重新提交。';
+}
+
 /// 一页收件箱 + 下一页游标。`nextCursor == null` ⇔ 没有更多。
 class ApprovalsPage {
   const ApprovalsPage({
@@ -252,4 +279,3 @@ String approvalConfirmText({
   // 只可能是 summary == null（调用方已拦），但兜底也必须说实话。
   return '这条申请的内容无法识别，不能批准。';
 }
-

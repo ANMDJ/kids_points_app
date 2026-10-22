@@ -34,7 +34,8 @@ import {
   type ApprovalRow,
   type ApprovalsPort,
   type CreateApprovalInput,
-  type ListApprovalsInput
+  type ListApprovalsInput,
+  type ListMyApprovalsInput
 } from '../src/approvals/approvals.repository'
 import { ApprovalsModule } from '../src/approvals/approvals.module'
 import { AUDIT_ACTION_SELF_APPROVED, SELF_APPROVAL_NOT_ALLOWED } from '../src/contracts/approval-policy'
@@ -248,6 +249,29 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
           return row.id < cursor.id
         })
         // 与真适配器同一排序：createdAt desc, id desc
+        .sort((a, b) => {
+          const diff = b.createdAt.getTime() - a.createdAt.getTime()
+          return diff !== 0 ? diff : b.id.localeCompare(a.id)
+        })
+      return filtered.slice(0, input.limit + 1)
+    },
+    async listForRequester(input: ListMyApprovalsInput) {
+      calls.push({ method: 'listForRequester', input })
+      const status = input.status ?? 'pending'
+      const filtered = [...rows.values()]
+        .map(asListRow)
+        .filter((row) => row.childId === input.childId)
+        // ★ 收口条件：申请人必须是会话里的 actor。漏掉这一行 = 端点变成「全家申请」。
+        .filter((row) => row.requesterUserId === input.requesterUserId)
+        .filter((row) => status === 'all' || row.status === status)
+        .filter((row) => {
+          if (input.cursor === undefined) return true
+          const cursor = input.cursor
+          if (row.createdAt.getTime() !== cursor.createdAt.getTime()) {
+            return row.createdAt.getTime() < cursor.createdAt.getTime()
+          }
+          return row.id < cursor.id
+        })
         .sort((a, b) => {
           const diff = b.createdAt.getTime() - a.createdAt.getTime()
           return diff !== 0 ? diff : b.id.localeCompare(a.id)
@@ -1330,5 +1354,152 @@ describe('组 E：收件箱列表（GET /approvals，W5-D）', () => {
     assert.equal(r.status, 200)
     assert.equal(itemsOf(r.body).length, 1)
     assert.equal(itemsOf(r.body)[0].summary, null)
+  })
+})
+
+// ── 组 F：我的申请（GET /approvals/mine，W5-J）─────────────────────────────────
+// 这一组补的是 W5-D 留下的另一半：孩子能**提交**申请，却没有任何读路径
+// （`GET /approvals` 对 child 是 403）。判据：
+//   · 收口 = `childId` ＋ 会话里的 `requesterUserId`，客户端不能指定申请人；
+//   · 两个角色都有 `view_own_approvals`，但只看得到自己提的；
+//   · 状态筛选 / 键集翻页 / 坏游标与收件箱同一套语义。
+describe('组 F：我的申请（GET /approvals/mine，W5-J）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+
+  const get = async (headers: Record<string, string>, query = ''): Promise<HttpResult> =>
+    send(url, `/approvals/mine${query}`, { method: 'GET', headers })
+
+  const create = async (
+    headers: Record<string, string>,
+    body: Record<string, unknown>
+  ): Promise<HttpResult> => send(url, '/approvals', { body, headers })
+
+  const itemsOf = (body: Record<string, unknown>): Array<Record<string, unknown>> =>
+    body.items as Array<Record<string, unknown>>
+
+  before(async () => {
+    port = makeFakePort()
+    ;({ app, url } = await startApp(port))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+  })
+
+  it('孩子能读到**自己**的申请，且看不到同家庭里家长提的那条', async () => {
+    const kidRedeem = await create(CHILD, { action: 'redeem', targetId: 'w-lego' })
+    const kidBonus = await create(CHILD, {
+      action: 'request_points_bonus',
+      amount: 5,
+      reason: '洗碗'
+    })
+    const dadRedeem = await create(GUARDIAN, { action: 'redeem', targetId: 'w-dad' })
+    assert.equal(kidRedeem.status, 202)
+    assert.equal(dadRedeem.status, 202)
+
+    const r = await get(CHILD, '?status=all')
+    assert.equal(r.status, 200)
+    assert.deepEqual(
+      itemsOf(r.body).map((item) => item.id),
+      [kidBonus.body.id, kidRedeem.body.id],
+      '必须只返回本人提交的申请，且新的在前'
+    )
+    for (const item of itemsOf(r.body)) {
+      assert.equal(item.requesterUserId, 'u-kid')
+    }
+
+    const call = port.calls.find((c) => c.method === 'listForRequester')
+    const input = call?.input as ListMyApprovalsInput
+    assert.equal(input.requesterUserId, 'u-kid', '申请人必须来自会话（u-kid），不是 query')
+    assert.equal(input.childId, CHILD_ID, 'childId 必须来自会话')
+  })
+
+  it('默认只看 pending；终止态用 status=rejected 取（与收件箱同一口径）', async () => {
+    const first = await create(CHILD, { action: 'redeem', targetId: 'w-1' })
+    const second = await create(CHILD, { action: 'redeem', targetId: 'w-2' })
+    const reject = await send(url, `/approvals/${String(first.body.id)}/decide`, {
+      body: { decision: 'rejected' },
+      headers: GUARDIAN
+    })
+    assert.equal(reject.status, 200)
+
+    const pending = await get(CHILD)
+    assert.deepEqual(itemsOf(pending.body).map((item) => item.id), [second.body.id])
+
+    const rejected = await get(CHILD, '?status=rejected')
+    assert.deepEqual(itemsOf(rejected.body).map((item) => item.id), [first.body.id])
+    assert.equal(itemsOf(rejected.body)[0].status, 'rejected')
+
+    const all = await get(CHILD, '?status=all')
+    assert.equal(itemsOf(all.body).length, 2)
+  })
+
+  it('键集翻页：limit=2 → 第二页不重复、不遗漏，末页 nextCursor=null', async () => {
+    const ids: unknown[] = []
+    for (const target of ['w-1', 'w-2', 'w-3']) {
+      const created = await create(CHILD, { action: 'redeem', targetId: target })
+      ids.push(created.body.id)
+    }
+
+    const first = await get(CHILD, '?status=all&limit=2')
+    assert.deepEqual(itemsOf(first.body).map((item) => item.id), [ids[2], ids[1]])
+    assert.equal(first.body.hasMore, true)
+    assert.equal(typeof first.body.nextCursor, 'string')
+
+    const second = await get(
+      CHILD,
+      `?status=all&limit=2&cursor=${encodeURIComponent(String(first.body.nextCursor))}`
+    )
+    assert.deepEqual(itemsOf(second.body).map((item) => item.id), [ids[0]])
+    assert.equal(second.body.hasMore, false)
+    assert.equal(second.body.nextCursor, null)
+  })
+
+  it('家长也能查自己提的申请（矩阵 view_own_approvals 两侧 ALLOW）', async () => {
+    const own = await create(GUARDIAN, { action: 'redeem', targetId: 'w-dad' })
+    const r = await get(GUARDIAN)
+    assert.equal(r.status, 200)
+    assert.deepEqual(itemsOf(r.body).map((item) => item.id), [own.body.id])
+  })
+
+  it('★ 跨孩子隔离：同一 requesterUserId、不同 childId 的行不会出现', async () => {
+    port.rows.set('ap-other', {
+      id: 'ap-other',
+      childId: 'child-2',
+      action: 'redeem',
+      requesterUserId: 'u-kid',
+      status: 'pending',
+      decidedByUserId: null,
+      executedRecordId: null
+    })
+    const r = await get(CHILD, '?status=all')
+    assert.equal(r.status, 200)
+    assert.deepEqual(itemsOf(r.body), [], 'childId 收口失效 —— 看到了别家的申请')
+  })
+
+  it('客户端不能指定申请人：未知 query 参数 ⇒ 400，且端口未被调用', async () => {
+    for (const query of ['?requesterUserId=u-dad', '?childId=child-2', '?status=duh']) {
+      const r = await get(CHILD, query)
+      assert.equal(r.status, 400, `${query} 应该被 400 拦下`)
+    }
+    assert.equal(port.calls.length, 0)
+  })
+
+  it('坏游标 ⇒ 400 INVALID_APPROVAL_CURSOR（与收件箱同一解析器）', async () => {
+    const r = await get(CHILD, '?cursor=not-a-cursor')
+    assert.equal(r.status, 400)
+    assert.equal(r.body.code, 'INVALID_APPROVAL_CURSOR')
+    assert.equal(port.calls.some((c) => c.method === 'listForRequester'), false)
+  })
+
+  it('viewer 没有矩阵列 ⇒ 403，端口一次都没被调用', async () => {
+    const r = await get(VIEWER)
+    assert.equal(r.status, 403)
+    assert.equal(port.calls.length, 0)
   })
 })

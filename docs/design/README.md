@@ -33,6 +33,7 @@
 | [`24-w5g-handoff.md`](./24-w5g-handoff.md) | **阶段 W5-G 交接单**（邀请码）：`/invites` 四条路由（`invite_member` guardian ALLOW / child DENY；`accept` **只有身份屏障** —— 被邀请人按定义还不是成员）、**原子占位 = 一条 `UPDATE … WHERE usedCount < maxUses AND expiresAt > now() AND revoked = false RETURNING`**（端口上**没有** `findByCode()`，TOCTOU 无处可写）、占位与成员位 / 会话 / 审计**同一事务**（失败回滚 ⇒ 名额不被烧）、真库并发 **10 个请求 vs `maxUses=3` ⇒ 恰好 3 成功 / 7×409**、四种不可用收敛成同一 409、形状错 400 `INVITE_CODE_MALFORMED`（不猜 `O→0`）、`ALREADY_MEMBER` 不烧名额不改角色、`removed` 成员用新码回来复用同一行、共享平板 ⇒ `DEVICE_SESSION_CONFLICT`、审计**不写码**、均不加 `Idempotency-Key`、会话 TTL **30 天**（偏离 `02 §7` 5 分钟，PIN 未落地）、`viewer` 不可邀请、**演示脚本 `npm run seed:demo`**（演示码 `MAMA2345`，用真实校验器断言） | ✅ W5-G 已收口（服务端；**双端 UI 未建**） |
 | [`25-w5h-handoff.md`](./25-w5h-handoff.md) | **阶段 W5-H 交接单**（成员管理）：`/members` 三条路由（`view_members` 孩子 **ALLOW** / `change_member_role` / `remove_member` 孩子 DENY）、**最后一位家长保护靠 `SELECT … ORDER BY id FOR UPDATE` 锁住该孩子全部成员位**（先查后写与单条条件 `UPDATE` 在 READ COMMITTED 下都能双双通过）、降级与**同事务收回 `DeviceSession.activeRole`** ＋ 读路径 `clampRoleToMembership()`（矩阵角色 = min(会话, 成员位)）、两条写路由**禁止作用于自己**（`CANNOT_MODIFY_SELF`）、`PATCH` 同角色 / `DELETE` 重复调用都是**构造幂等**（不写第二条审计、`removedAt` 不变）、移出**不删会话**（否则 `MEMBER_REMOVED` 退化成 401）、线格式只给 `role`/`status`/`isSelf` 不给权限结论、审计快照只含 `role`/`status`、`viewer` 不可作为目标角色、真库 **3 家长环形降级 ⇒ 恰好 2 成功 / 1×409**、**新增测试守卫 ④**（文件级 `✔` ⇒ 红，专治 `describe` 被关进 hook 的 D12 式假绿；已在 `test:canfail` C/C2 常设证伪） | ✅ W5-H 已收口（服务端；**双端 UI 未建**） |
 | [`26-w5i-handoff.md`](./26-w5i-handoff.md) | **阶段 W5-I 交接单**（双端邀请码界面）：**先拉成员再拉邀请码**（`invite_member` 仅 guardian ALLOW，用 403 探测角色会把权限画成故障）、状态**渲染时现算**且优先级 `revoked > exhausted > expired`（先答库里的既成事实，再答依赖时钟的判断）、生成表单是**封闭选项**（1/3/5 人 · 1/7/30 天；服务端 1..10 / 1..30）、`POST /invites` **不带**幂等键而吊销是构造幂等、回包 `role`/`maxUses`/`id` **回显校验**、复制**裸码**（展示才分组）、已吊销行不再画吊销按钮、空态**三分**（没拉到 / 加载中 / 真的没有）、预览模式**不编假码**、live 无写客户端**拒绝而不本地假写**、生成 409 与吊销 404 重拉而吊销成功只改本行、Flutter **+8** / 小程序 **19** 条用例、**`accept` 仍无客户端（等 L2 登录）** | ✅ W5-I 已收口（**双端 UI 已建**；`accept` 与成员管理 UI 未建） |
+| [`27-w5j-handoff.md`](./27-w5j-handoff.md) | **阶段 W5-J 交接单**（「我的申请」＋撤回）：申请人**没有读路径**才是真缺口（收件箱对孩子 403）、新端点 `GET /approvals/mine` ＋ 新动作 `view_own_approvals`（双 ALLOW，**不复用** `review_approvals`）、收口写死 `childId + requesterUserId = 会话 actor`（query 里没有这个字段）、`POST /:id/withdraw` **无请求体**、`summary === null` **也必须能撤回**（否则坏行永久卡住）、撤回**不刷首页**且收件箱**仅在已加载时**刷新（孩子请求 `/approvals` 必然 403）、回包 `status !== withdrawn` 算**契约漂移**、两端列表状态**不共用**（游标 / 错误互不污染）、空态区分「没拉到 / 还在加载 / 真的没有」、Flutter **127** / 小程序 **14** 条用例、真库本轮未复跑 | ✅ W5-J 已收口（**双端 UI 已建**；推送 / 详情页 / 成员管理 UI 未建） |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **29 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-21 矩阵同步至 29 动作） |
 
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
@@ -89,7 +90,14 @@
 > （可用 / 已用完 / 已过期 / 已吊销）**渲染时现算**、优先级 `revoked > exhausted > expired`；
 > 生成 409 与吊销 404 都会重拉列表，吊销成功只改本行。**`POST /invites/accept` 仍无客户端** ——
 > 全新设备的第一次加入要等 L2 登录链路（`05` §6），详见 [`26-w5i-handoff.md`](./26-w5i-handoff.md) §5。
-> 头像、恢复演示数据仍未建；审批**没有推送**、**没有撤回入口**。
+> **W5-J** 起**申请人有了读路径与撤回**：`GET /approvals/mine`（`view_own_approvals`，双角色 ALLOW）
+> 按 `requesterUserId = 会话 actor` 收口，只回**自己提的**申请；「我的 → 我的申请」底部弹窗
+> 列出全部状态并支持键集分页。**撤回是申请人动作，不是否决**：`POST /approvals/:id/withdraw`
+> 无请求体、只有本人能做（家长想反对请用「拒绝」），只把 `pending → withdrawn` ——
+> **不写流水、不动积分、不恢复心愿**，因此不刷新首页。`summary` 读不懂的待处理行
+> **仍然可以撤回**（否则只有申请人能救的坏行会永久卡住）。回包状态不是 `withdrawn` 时
+> 客户端按契约漂移处理，不会假报成功。详见 [`27-w5j-handoff.md`](./27-w5j-handoff.md)。
+> 头像、恢复演示数据仍未建；审批**没有推送**、**没有申请详情页**。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
@@ -1262,6 +1270,43 @@
     `viewer` 无法创建；PIN / 5 分钟会话刷新未落地（故「降级即收票」是唯一降权手段）；未做真机联调。
     交接单：[`25-w5h-handoff.md`](./25-w5h-handoff.md)。
 
+
+
+**W5-J（「我的申请」＋撤回，2026-10-23 已收口 · 双端）**
+
+    ① 两条路由：`GET /approvals/mine`（`view_own_approvals`，guardian / child 双 ALLOW）与
+    `POST /approvals/:id/withdraw`（`withdraw_request`，W3-B 已有）。前者**不是**收件箱的 query 变体：
+    收件箱按 `childId` 全量收口、孩子 403；我的申请按 `requesterUserId = 会话 actor` 收口，
+    query 里根本没有 `requesterUserId` 字段 —— 改参数看不到别人提了什么。
+    ② **`summary === null` 的待处理行必须能撤回**：家长侧坏 payload 只禁批准不禁拒绝，
+    申请人侧若再禁撤回，这条行就没人能收尾（孩子看不到收件箱）。`canWithdrawApproval()`
+    只判 `pending + 未过期`，**不读 payload**。
+    ③ **撤回不是否决**：只有申请人本人能做，家长撤别人的申请得 403 `NOT_REQUESTER`，
+    文案让他改用「拒绝」（那条会留下判定人与时间）。`POST` **无请求体**，申请人只来自会话。
+    ④ **不碰余额 / 流水 / 首页**：`pending` 尚未执行，撤回只改状态。收件箱**仅在已加载时**
+    刷新（`approvalReadStatus !== idle`），409 同理 —— 孩子的设备请求 `GET /approvals` 必然 403，
+    撤回成功后凭空多发一次只会把成功画成失败。
+    ⑤ **回包验明正身**：`status !== 'withdrawn'` 视为契约漂移，返回可展示警告而不假报成功
+    （与 `ruleId` / `executedRecordId` / `invite.id` 同一手法）。
+    ⑥ **两个列表不共用 store 切片**：`fetchMyApprovals()` 只返回页对象，不写 `approvals` /
+    `approvalError` / `approvalReadStatus`。共用会让两边的游标与错误互相污染，也会把
+    收件箱从 `idle` 推到 `ready` 而误触发 403。
+    ⑦ **空态五分**：错误行 + 重试 / 正在加载 / 从未成功加载 / 预览模式 / 真的没有。
+    把 403 或断网画成「还没有提交过申请」是反复记过的坑。
+    ⑧ **键集分页**沿用 W4 的 `limit + 1`；客户端额外按 id 去重（快速点两次「加载更多」）。
+    ⑨ **小坑**：幂等键头是 `idempotency-key`（小写；测试里写 `Idempotency-Key` 会拿到 `undefined`）；
+    `WriteApiException.fromHttp` 要**已解码的 Map**，传 JSON 字符串会丢 `code`，
+    403 会退化成通用文案；「收件箱已加载」只能看状态值，不能看 `approvals.length`（空列表也是已加载）。
+    ⑩ 真跑基线（2026-10-23）：`backend npm test` → **553/553**（W5-I 544，本阶段 +9）；
+    `typecheck` / `typecheck:tests` → 0；`flutter analyze` → 0；`flutter test` 两文件 → **127/127**；
+    小程序 `tsc --noEmit` / `build:weapp` / `build:h5` → 0；`node .tmp_test/run-w5j.mjs` → **14/14**；
+    **先 `npm run build` 再** `contracts:emit` → **32 个动作**（新增 `view_own_approvals`；
+    直接 emit 会读陈旧的 `dist/` 得 31 —— 脚本要的是编译产物）；**新增迁移 1 条**
+    （`20261023090000_own_approval_action`，只 `ALTER TYPE … ADD VALUE`）。
+    ⑪ 仍不粉饰：**没有推送 / 角标**（申请人要打开面板才知道状态变了）；**没有申请详情页**
+    （看不到判定人与时间）；我的申请**没有筛选 chip**（UI 固定拉全部）；**真库 `test:db` 本轮未复跑**；
+    无真机截图；Flutter 侧无 widget 测试。成员管理 UI（W5-H）与 `POST /invites/accept`（等 L2）仍未建。
+    交接单：[`27-w5j-handoff.md`](./27-w5j-handoff.md)。
 
 
 ### 文档缺陷修正记录

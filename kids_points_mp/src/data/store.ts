@@ -35,6 +35,7 @@ import {
   approvalBlockedReason,
   approvalFilterQuery,
   approvalFilters,
+  canWithdrawApproval,
   isApprovalExpired,
   isApprovalPending
 } from './approval'
@@ -565,6 +566,16 @@ export class AppStore {
   }
 
   /**
+   * live 且接上写端点才允许撤回（W5-J）。
+   *
+   * 与 [canDecideApprovals] 同一条件但语义不同：撤回是申请人动作，
+   * 孩子设备也可能有这个能力 —— 不能复用「家长可判定」那个开关。
+   */
+  get canWithdrawApprovals(): boolean {
+    return this.isLiveMode && this.writeApi !== null
+  }
+
+  /**
    * 只读模式下写操作统一文案（W5-B 起多个能力共用）。
    *
    * 走到这里有两个原因，文案同时覆盖：写客户端没能构造出来（配置缺失 / 构造失败），
@@ -994,6 +1005,75 @@ export class AppStore {
     } finally {
       this.decidingApprovalIdValue = null
       this.persist()
+    }
+  }
+
+  /**
+   * 我提交的申请（`GET /approvals/mine`，W5-J）。
+   *
+   * 刻意**不进全局状态**：收件箱（家长视角）与我的申请（申请人视角）各自
+   * 分页、各自错误 —— 共用一份 `approvalItems` 会让「我在我的申请里翻了 3 页」
+   * 把家长收件箱的游标顶掉，或者一次 403 同时弄脏两个页面。
+   *
+   * 预览模式返回空页（不编假申请），由面板显示「预览模式没有…」。
+   */
+  async fetchMyApprovals(
+    input: { limit?: number; cursor?: string | null } = {}
+  ): Promise<ApprovalsPage> {
+    const api = this.readApi
+    if (api === null) {
+      return { items: [], hasMore: false, nextCursor: null }
+    }
+    const dto = await api.fetchMyApprovals({
+      // 不过滤：已处理 / 已撤回的也要能看见（撤回按钮由行状态禁用）。
+      status: null,
+      limit: input.limit ?? AppStore.approvalsPageSize,
+      cursor: input.cursor ?? null
+    })
+    return mapApprovalsPage(dto)
+  }
+
+  /**
+   * 撤回自己提交的申请（W5-J）。成功返回 null，失败返回可展示文案。
+   *
+   * 与 [decideApproval] 的区别：
+   *   · 撤回**不需要**读 payload（坏数据也必须能撤回，否则永久卡住）；
+   *   · 撤回**不碰**余额 / 流水 ⇒ 不刷新首页；只在收件箱已加载时顺带刷新
+   *     （孩子的设备请求 `/approvals` 会 403，不能因为撤回而凭空多一次失败）。
+   */
+  async withdrawApproval(
+    item: ApprovalInboxItem,
+    now: number = Date.now()
+  ): Promise<string | null> {
+    if (!this.isLiveMode) return '预览模式没有可撤回的申请。'
+    const api = this.writeApi
+    if (api === null) return this.readOnlyWriteMessage
+    if (item.id.trim() === '') return '申请 id 不能为空'
+    if (!isApprovalPending(item)) return '这条申请已经处理过了，请刷新列表。'
+    if (!canWithdrawApproval(item, now)) {
+      return '这条申请已超过 72 小时有效期，不能再撤回。'
+    }
+
+    try {
+      const result = await api.withdrawApproval(
+        item.id,
+        this.newIdempotencyKey('approval-withdraw')
+      )
+      // 契约漂移不能当成功：用户以为撤回了，家长那边却还能批。
+      if (result.status !== 'withdrawn') {
+        return `服务端返回的状态是「${result.status}」，与这次撤回不一致，请刷新确认。`
+      }
+      if (this.approvalStatusValue !== 'idle') await this.refreshApprovals()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 409（已被批 / 已过期）：本地那条已经过时；收件箱若没加载就不去打扰。
+        if (error.kind === 'conflict' && this.approvalStatusValue !== 'idle') {
+          await this.refreshApprovals()
+        }
+        return error.userMessage
+      }
+      return '这次撤回结果无法确认，请刷新后查看，避免重复提交。'
     }
   }
 

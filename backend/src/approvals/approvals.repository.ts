@@ -158,6 +158,17 @@ export interface ListApprovalsInput {
   cursor?: { createdAt: Date; id: string }
 }
 
+/**
+ * 「我的申请」列表入参（W5-J）。
+ *
+ * ★ `requesterUserId` **只来自会话**（`actor.userId`），绝不是 query 参数：
+ *   允许客户端传一个 user id 就等于开放「看别人提了什么」的接口。
+ *   适配器把它和 `childId` **一起**放进 WHERE —— 两道收口缺一不可。
+ */
+export interface ListMyApprovalsInput extends ListApprovalsInput {
+  requesterUserId: string
+}
+
 export interface ApprovalsPort {
   /** 建一条 `pending`，**不执行**任何业务（等家庭里另一位 guardian 来批，或本人二次确认）。 */
   createPending(input: CreateApprovalInput): Promise<ApprovalRow>
@@ -182,6 +193,15 @@ export interface ApprovalsPort {
    * ★ `status` 省略 ⇒ `pending`；`all` ⇒ 不筛。
    */
   listForChild(input: ListApprovalsInput): Promise<ApprovalListRow[]>
+
+  /**
+   * 「我的申请」（W5-J）：同一个孩子内，进一步按**申请人**收口。
+   *
+   * ★ 为什么单独一个端口方法，而不是给 `listForChild` 加一个可选 userId：
+   *   可选参数意味着「忘了传」会静默退化成「全家的申请」—— 这正是最不该
+   *   靠自觉的边界。方法名把语义钉死，类型也要求 `requesterUserId` 必填。
+   */
+  listForRequester(input: ListMyApprovalsInput): Promise<ApprovalListRow[]>
 
   /**
    * 批准 / 拒绝，**乐观锁**：`UPDATE … WHERE id = ? AND childId = ? AND status = 'pending'`（§4.4）。
@@ -243,6 +263,11 @@ export class NotImplementedApprovalsRepository implements ApprovalsPort {
   listForChild(input: ListApprovalsInput): Promise<ApprovalListRow[]> {
     void input
     return Promise.resolve(this.fail('listForChild'))
+  }
+
+  listForRequester(input: ListMyApprovalsInput): Promise<ApprovalListRow[]> {
+    void input
+    return Promise.resolve(this.fail('listForRequester'))
   }
 
   decide(input: DecideApprovalInput): Promise<ApprovalRow> {

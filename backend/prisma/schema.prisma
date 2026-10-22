@@ -163,6 +163,7 @@ enum ActionType {
   request_approval
   review_approvals
   withdraw_request
+  view_own_approvals
   view_members
   change_member_role
   invite_member

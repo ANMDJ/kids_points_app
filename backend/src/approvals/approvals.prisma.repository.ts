@@ -43,6 +43,7 @@ import type {
   CreateApprovalInput,
   DecideApprovalInput,
   ListApprovalsInput,
+  ListMyApprovalsInput,
   WithdrawApprovalInput
 } from './approvals.repository'
 
@@ -243,10 +244,37 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
    *   对一个孩子来说审批会越攒越多，读全量再筛会把「收件箱」变成全表扫描。
    */
   async listForChild(input: ListApprovalsInput): Promise<ApprovalListRow[]> {
+    return this.listScoped({ childId: input.childId }, input)
+  }
+
+  /**
+   * 「我的申请」（W5-J）：`childId` 与 `requesterUserId` **同时**进 WHERE。
+   *
+   * ★ 两个条件都不能省：`childId` 挡住跨孩子，`requesterUserId` 挡住同一
+   *   家庭里的其他成员（家长也能查自己提过什么）。漏掉任何一个，这个端点
+   *   就会从「我的申请」变成「某家的申请」。
+   */
+  async listForRequester(input: ListMyApprovalsInput): Promise<ApprovalListRow[]> {
+    return this.listScoped(
+      { childId: input.childId, requesterUserId: input.requesterUserId },
+      input
+    )
+  }
+
+  /**
+   * 收件箱 / 我的申请共用的查询：状态条件 + 键集游标 + 排序只在这里写一次。
+   *
+   * `scope` 是**收口条件**（childId，或 childId + requesterUserId），
+   * 调用方只决定「看谁的行」，不决定「怎么翻页」。
+   */
+  private async listScoped(
+    scope: Prisma.ApprovalRequestWhereInput,
+    input: ListApprovalsInput
+  ): Promise<ApprovalListRow[]> {
     const status = input.status ?? 'pending'
     const rows = await this.prisma.approvalRequest.findMany({
       where: {
-        childId: input.childId,
+        ...scope,
         ...(status === 'all' ? {} : { status: status as ApprovalStatus }),
         ...(input.cursor === undefined
           ? {}

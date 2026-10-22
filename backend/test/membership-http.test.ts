@@ -233,6 +233,11 @@ function makeApprovalsFake(): ApprovalsFake {
       calls.push({ method: 'listForChild', input })
       // 本文件不覆盖收件箱语义；返回空页，只证明「请求走到了业务层」。
       return []
+    },
+    async listForRequester(input) {
+      calls.push({ method: 'listForRequester', input })
+      // 同上：「我的申请」语义由 approvals-http.test.ts 覆盖。
+      return []
     }
   }
 }

@@ -87,6 +87,8 @@ void main() {
       expect(item.canApproveAt(DateTime.utc(2026, 10, 21)), isFalse);
       expect(item.canRejectAt(DateTime.utc(2026, 10, 21)), isTrue,
           reason: '坏数据那一行也必须能被拒绝，否则永久卡在收件箱里');
+      expect(item.canWithdrawAt(DateTime.utc(2026, 10, 21)), isTrue,
+          reason: '申请人知道自己提了什么；坏 payload 不能把撤回也挡住');
       expect(item.approveBlockedReasonAt(DateTime.utc(2026, 10, 21)),
           contains('内容无法识别'));
     });
@@ -119,22 +121,24 @@ void main() {
     });
 
     test('三种 kind 都能映射成结构化摘要（金额 / 标题原样进模型）', () {
-      final ApprovalInboxItem redeem =
-          mapApprovalInboxItem(ApprovalInboxItemDto.fromJson(approvalJson(), r'$'));
+      final ApprovalInboxItem redeem = mapApprovalInboxItem(
+          ApprovalInboxItemDto.fromJson(approvalJson(), r'$'));
       expect(redeem.summary, isA<RedeemSummary>());
       expect((redeem.summary! as RedeemSummary).cost, 100);
       expect(redeem.summary!.detail, contains('乐高'));
 
       final ApprovalInboxItem bonus = mapApprovalInboxItem(
         ApprovalInboxItemDto.fromJson(
-          approvalJson(action: 'request_points_bonus', summary: <String, Object?>{
-            'kind': 'bonus',
-            'amount': 5,
-            'reason': '帮妈妈拎菜',
-            'ruleId': null,
-            'habitId': null,
-            'basisTitle': '做家务',
-          }),
+          approvalJson(
+              action: 'request_points_bonus',
+              summary: <String, Object?>{
+                'kind': 'bonus',
+                'amount': 5,
+                'reason': '帮妈妈拎菜',
+                'ruleId': null,
+                'habitId': null,
+                'basisTitle': '做家务',
+              }),
           r'$',
         ),
       );
@@ -182,7 +186,9 @@ void main() {
     test('第一页不带 cursor；第二页带服务端给的 cursor，并带两个身份头', () async {
       final _ApprovalsTransport transport = _ApprovalsTransport(
         approvals: <String, String>{
-          '': pageJson(items: <Object?>[approvalJson()], hasMore: true,
+          '': pageJson(
+              items: <Object?>[approvalJson()],
+              hasMore: true,
               nextCursor: 'CUR/1+2='),
           'CUR/1+2=': pageJson(items: <Object?>[approvalJson(id: 'ap-2')]),
         },
@@ -206,9 +212,228 @@ void main() {
         config: config,
         transport: _ApprovalsTransport(),
       );
-      expect(() => client.fetchApprovals(status: 'pinding'), throwsArgumentError);
+      expect(
+          () => client.fetchApprovals(status: 'pinding'), throwsArgumentError);
       expect(() => client.fetchApprovals(limit: 0), throwsArgumentError);
       expect(() => client.fetchApprovals(limit: 101), throwsArgumentError);
+    });
+  });
+
+  group('ReadApiClient.fetchMyApprovals（W5-J）：路径与收件箱分开', () {
+    test('默认 status=all，打到 /approvals/mine，身份头照旧', () async {
+      final _ApprovalsTransport transport = _ApprovalsTransport(
+        myApprovals: <String, String>{
+          '': pageJson(
+            items: <Object?>[approvalJson(status: 'pending')],
+            hasMore: true,
+            nextCursor: 'CUR/1+2=',
+          ),
+          'CUR/1+2=': pageJson(items: <Object?>[approvalJson(id: 'ap-2')]),
+        },
+      );
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      final ApprovalsPageDto first = await client.fetchMyApprovals();
+      await client.fetchMyApprovals(cursor: first.nextCursor);
+
+      expect(transport.paths, <String>['mine', 'mine']);
+      expect(transport.queries.first['status'], 'all',
+          reason: '「我的申请」默认看全部状态；只看待处理会把已通过的藏起来');
+      expect(transport.queries.first['limit'], '20');
+      expect(transport.queries[1]['cursor'], 'CUR/1+2=');
+      expect(transport.headers.first[kDeviceIdHeader], 'device-1');
+      expect(transport.headers.first[kChildIdHeader], 'child-1');
+      expect(first.hasMore, isTrue);
+    });
+
+    test('筛选词 / limit 用同一套自检，非法值一个请求都不发', () {
+      final _ApprovalsTransport transport = _ApprovalsTransport();
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      expect(
+        () => client.fetchMyApprovals(status: 'pinding'),
+        throwsArgumentError,
+      );
+      expect(() => client.fetchMyApprovals(limit: 0), throwsArgumentError);
+      expect(() => client.fetchMyApprovals(limit: 101), throwsArgumentError);
+      expect(transport.paths, isEmpty);
+    });
+  });
+
+  group('AppStore.fetchMyApprovals（W5-J）：面板自己持有列表', () {
+    test('不写全局收件箱状态，也不拉首页', () async {
+      final _ApprovalsTransport transport = _ApprovalsTransport(
+        myApprovals: <String, String>{
+          'all|': pageJson(
+            items: <Object?>[approvalJson(id: 'ap-mine', status: 'withdrawn')],
+          ),
+        },
+      );
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(config: config, transport: transport),
+      );
+      addTearDown(store.dispose);
+
+      final ApprovalsPage page = await store.fetchMyApprovals();
+
+      expect(page.items.single.id, 'ap-mine');
+      expect(page.items.single.status, 'withdrawn');
+      expect(store.approvals, isEmpty, reason: '收件箱与「我的申请」是两套数据，不能互相覆盖');
+      expect(store.approvalReadStatus, ReadStatus.idle);
+      expect(transport.homeCalls, 0);
+      expect(transport.paths, <String>['mine']);
+    });
+
+    test('预览模式不编数据：返回空页而不是抛错', () async {
+      final AppStore store = AppStore();
+      addTearDown(store.dispose);
+
+      final ApprovalsPage page = await store.fetchMyApprovals();
+
+      expect(page.items, isEmpty);
+      expect(page.hasMore, isFalse);
+      expect(page.nextCursor, isNull);
+    });
+  });
+
+  group('AppStore.withdrawApproval（W5-J）', () {
+    ApprovalDto withdrawnDto() => ApprovalDto(
+          id: 'ap-1',
+          action: 'redeem',
+          status: 'withdrawn',
+          executedRecordId: null,
+          autoReason: null,
+        );
+
+    test('只读 / 预览模式在本地拦下，不发请求', () async {
+      final _FakeWithdrawApi api = _FakeWithdrawApi(result: withdrawnDto());
+      final AppStore preview = AppStore(writeApi: api);
+      addTearDown(preview.dispose);
+
+      expect(await preview.withdrawApproval('ap-1'), contains('预览模式'));
+      expect(api.calls, 0);
+
+      final AppStore readOnly = AppStore(
+        readApi: ReadApiClient(
+          config: config,
+          transport: _ApprovalsTransport(),
+        ),
+        writeApi: null,
+      );
+      addTearDown(readOnly.dispose);
+      expect(await readOnly.withdrawApproval('ap-1'), contains('只读模式'));
+      expect(api.calls, 0);
+    });
+
+    test('成功：带幂等键、不拉首页；收件箱没打开过就不去碰它', () async {
+      final _ApprovalsTransport transport = _ApprovalsTransport();
+      final _FakeWithdrawApi api = _FakeWithdrawApi(result: withdrawnDto());
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(config: config, transport: transport),
+        writeApi: api,
+      );
+      addTearDown(store.dispose);
+
+      expect(await store.withdrawApproval('  ap-1  '), isNull);
+
+      expect(api.calls, 1);
+      expect(api.lastId, 'ap-1');
+      expect(api.lastIdempotencyKey, isNotNull);
+      expect(api.lastIdempotencyKey, isNotEmpty);
+      expect(transport.homeCalls, 0, reason: '撤回不动积分，不该重拉首页');
+      expect(transport.paths, isEmpty, reason: '孩子调收件箱必然 403；没打开过就不要为了同步去撞');
+    });
+
+    test('成功且收件箱已加载：顺手同步一次（家长撤回自己那条）', () async {
+      final _ApprovalsTransport transport = _ApprovalsTransport(
+        approvals: <String, String>{
+          'pending|': pageJson(items: <Object?>[approvalJson()]),
+          '': pageJson(items: <Object?>[]),
+        },
+      );
+      final _FakeWithdrawApi api = _FakeWithdrawApi(result: withdrawnDto());
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(config: config, transport: transport),
+        writeApi: api,
+      );
+      addTearDown(store.dispose);
+
+      await store.refreshApprovals();
+      final int before = transport.paths.length;
+      expect(await store.withdrawApproval('ap-1'), isNull);
+
+      expect(transport.paths.length, before + 1);
+      expect(transport.paths.last, 'inbox');
+    });
+
+    test('409 原样上报并重拉；403 NOT_REQUESTER 不重拉', () async {
+      final _ApprovalsTransport transport = _ApprovalsTransport(
+        approvals: <String, String>{
+          'pending|': pageJson(items: <Object?>[approvalJson()]),
+          '': pageJson(items: <Object?>[approvalJson(status: 'approved')]),
+        },
+      );
+      final _FakeWithdrawApi api = _FakeWithdrawApi(
+        error: WriteApiException.fromHttp(
+          statusCode: 409,
+          body: <String, Object?>{
+            'code': 'ALREADY_DECIDED',
+            'message': '已处理',
+          },
+        ),
+      );
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(config: config, transport: transport),
+        writeApi: api,
+      );
+      addTearDown(store.dispose);
+
+      await store.refreshApprovals();
+      final int before = transport.paths.length;
+      final String? message = await store.withdrawApproval('ap-1');
+
+      expect(message, contains('已经被处理'));
+      expect(transport.paths.length, before + 1);
+
+      api.error = WriteApiException.fromHttp(
+        statusCode: 403,
+        body: <String, Object?>{
+          'code': 'NOT_REQUESTER',
+          'message': '不是申请人',
+        },
+      );
+      final int afterConflict = transport.paths.length;
+      final String? forbidden = await store.withdrawApproval('ap-1');
+
+      expect(forbidden, contains('不是你提交的申请'));
+      expect(transport.paths.length, afterConflict,
+          reason: '403 不是「列表过时」，没有理由重拉');
+    });
+
+    test('回包状态不是 withdrawn ⇒ 当失败上报（契约漂移不许静默成功）', () async {
+      final _FakeWithdrawApi api = _FakeWithdrawApi(
+        result: ApprovalDto(
+          id: 'ap-1',
+          action: 'redeem',
+          status: 'pending',
+          executedRecordId: null,
+          autoReason: null,
+        ),
+      );
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(
+          config: config,
+          transport: _ApprovalsTransport(),
+        ),
+        writeApi: api,
+      );
+      addTearDown(store.dispose);
+
+      final String? message = await store.withdrawApproval('ap-1');
+
+      expect(message, contains('与这次撤回不一致'));
     });
   });
 
@@ -255,7 +480,8 @@ void main() {
       final _ApprovalsTransport transport = _ApprovalsTransport(
         approvals: <String, String>{},
         approvalsStatus: 403,
-        approvalsBody: '{"code":"FORBIDDEN","message":"缺少动作权限 review_approvals"}',
+        approvalsBody:
+            '{"code":"FORBIDDEN","message":"缺少动作权限 review_approvals"}',
       );
       final AppStore store = AppStore(
         readApi: ReadApiClient(config: config, transport: transport),
@@ -270,8 +496,7 @@ void main() {
       expect(store.approvalReadStatus, ReadStatus.error);
       expect(store.approvalError?.kind, ReadFailureKind.forbidden);
       expect(store.approvals, isEmpty);
-      expect(store.readStatus, ReadStatus.ready,
-          reason: '收件箱 403 不许把首页变成错误态');
+      expect(store.readStatus, ReadStatus.ready, reason: '收件箱 403 不许把首页变成错误态');
     });
 
     test('切过滤：重新要第一页（带 status），不复用旧游标', () async {
@@ -316,7 +541,6 @@ void main() {
       expect(store.canDecideApprovals, isFalse);
     });
   });
-
 
   group('AppStore.decideApproval：能判死的先拒，冲突后重拉', () {
     ApprovalInboxItem pendingItem({
@@ -375,8 +599,7 @@ void main() {
       expect(api.calls, 1);
       expect(api.lastApprove, isFalse);
       expect(api.lastId, 'ap-1');
-      expect(api.lastIdempotencyKey, isNotNull,
-          reason: '重试同一操作不该变成第二次判定');
+      expect(api.lastIdempotencyKey, isNotNull, reason: '重试同一操作不该变成第二次判定');
       expect(transport.cursors.length, before + 1,
           reason: '判定成功后必须重拉，否则列表还显示「待处理」');
     });
@@ -479,10 +702,8 @@ void main() {
     });
   });
 
-
   group('ApprovalsScreen：界面冒烟', () {
-    testWidgets('切到审批 tab 才拉第一页；批准先弹确认，取消不发请求',
-        (WidgetTester tester) async {
+    testWidgets('切到审批 tab 才拉第一页；批准先弹确认，取消不发请求', (WidgetTester tester) async {
       tester.view.physicalSize = const Size(1200, 2400);
       tester.view.devicePixelRatio = 3.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -563,11 +784,14 @@ void main() {
 class _ApprovalsTransport implements ReadTransport {
   _ApprovalsTransport({
     Map<String, String>? approvals,
+    Map<String, String>? myApprovals,
     this.approvalsStatus = 200,
     this.approvalsBody = '{"items":[],"hasMore":false,"nextCursor":null}',
-  }) : approvals = approvals ?? <String, String>{};
+  })  : approvals = approvals ?? <String, String>{},
+        myApprovals = myApprovals ?? <String, String>{};
 
   final Map<String, String> approvals;
+  final Map<String, String> myApprovals;
   final int approvalsStatus;
   final String approvalsBody;
 
@@ -575,6 +799,9 @@ class _ApprovalsTransport implements ReadTransport {
   final List<String?> cursors = <String?>[];
   final List<String> statuses = <String>[];
   final List<Map<String, String>> headers = <Map<String, String>>[];
+
+  /// 审批读请求打到了哪个端点（`inbox` = `/approvals`，`mine` = `/approvals/mine`）。
+  final List<String> paths = <String>[];
   int homeCalls = 0;
 
   @override
@@ -589,11 +816,12 @@ class _ApprovalsTransport implements ReadTransport {
     if (uri.path.endsWith('/records')) {
       return ReadHttpResponse(statusCode: 200, body: _emptyRecordsJson);
     }
-    if (!uri.path.endsWith('/approvals')) {
-      return ReadHttpResponse(
-          statusCode: 404, body: '{"code":"NOT_FOUND"}');
+    final bool isMine = uri.path.endsWith('/approvals/mine');
+    if (!isMine && !uri.path.endsWith('/approvals')) {
+      return ReadHttpResponse(statusCode: 404, body: '{"code":"NOT_FOUND"}');
     }
 
+    paths.add(isMine ? 'mine' : 'inbox');
     headers.add(requestHeaders);
     queries.add(uri.queryParameters);
     final String status = uri.queryParameters['status'] ?? 'pending';
@@ -604,7 +832,8 @@ class _ApprovalsTransport implements ReadTransport {
     if (approvalsStatus != 200) {
       return ReadHttpResponse(statusCode: approvalsStatus, body: approvalsBody);
     }
-    final String? body = approvals['$status|${cursor ?? ''}'] ?? approvals[''];
+    final Map<String, String> pages = isMine ? myApprovals : approvals;
+    final String? body = pages['$status|${cursor ?? ''}'] ?? pages[''];
     if (body == null) {
       return ReadHttpResponse(statusCode: 200, body: approvalsBody);
     }
@@ -613,6 +842,36 @@ class _ApprovalsTransport implements ReadTransport {
 
   @override
   void close() {}
+}
+
+/// 只实现 [WriteApi.withdrawApproval]，其余方法调用即失败（W5-J）。
+class _FakeWithdrawApi implements WriteApi {
+  _FakeWithdrawApi({this.result, this.error});
+
+  ApprovalDto? result;
+  Object? error;
+  int calls = 0;
+  String? lastId;
+  String? lastIdempotencyKey;
+
+  @override
+  Future<ApprovalDto> withdrawApproval(
+    String approvalId, {
+    String? idempotencyKey,
+  }) async {
+    calls += 1;
+    lastId = approvalId;
+    lastIdempotencyKey = idempotencyKey;
+    if (error != null) throw error!;
+    return result!;
+  }
+
+  @override
+  void close() {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('撤回测试不该调用 ${invocation.memberName}');
 }
 
 /// 只实现 [WriteApi.decideApproval]，其余方法调用即失败

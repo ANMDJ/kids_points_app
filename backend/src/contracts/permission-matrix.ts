@@ -74,6 +74,11 @@ export const PERMISSION_MATRIX = {
   request_approval: { guardian: 'ALLOW', child: 'ALLOW' },
   review_approvals: { guardian: 'ALLOW', child: 'DENY' },
   withdraw_request: { guardian: 'ALLOW', child: 'ALLOW' },
+  // 看「**我提交的**申请」（W5-J）：两个角色都能看，因为每个人本来就该知道
+  // 自己提过什么、哪条还能撤回。★ 它不是 `review_approvals` —— 后者是
+  // 「待我批准」的家长视图（child DENY）。两个视图的收口条件完全不同：
+  // 这个按 `requesterUserId = 本人`，那个按 `childId` 全量。
+  view_own_approvals: { guardian: 'ALLOW', child: 'ALLOW' },
 
   /* ── 成员与设置 ───────────────────────────────────────── */
   // 成员管理（W5-H）：**看得到成员**对孩子开放（"家里有谁"不是敏感数据，

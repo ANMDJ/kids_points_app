@@ -85,7 +85,8 @@ export class ApprovalsService {
    * ── 为什么「孩子能不能看自己的申请」不在这个端点 ────────────────────────────
    *   本端点回答「**待我批准**的申请」，这是家长视图；孩子查自己的申请是另一个
    *   语义（且需要 `requesterUserId = 本人` 的收口）。混在一起会让「孩子看到全家的
-   *   审批」成为一次参数失误。孩子端目前只看提交申请的返回体（`submitRedeemWish`）。
+   *   审批」成为一次参数失误。孩子的视图是 `GET /approvals/mine`（W5-J），
+   *   见 [listMine]。
    *
    * ★ 游标解析放在 service（而不是 DTO）：DTO 只管形状，语义错误要能带
    *   `INVALID_APPROVAL_CURSOR` 这个**可分辨**的 code。
@@ -95,6 +96,40 @@ export class ApprovalsService {
     const cursor = query.cursor === undefined ? undefined : decodeApprovalCursor(query.cursor)
     const rows = await this.port.listForChild({
       childId,
+      status: query.status,
+      limit,
+      cursor
+    })
+    return toInboxPage(rows, limit)
+  }
+
+  /**
+   * `GET /approvals/mine` —— **我提交的**申请（W5-J）。
+   *
+   * ── 为什么需要它 ────────────────────────────────────────────────────────────
+   *   孩子提交「兑换 / 加分 / 新增心愿」后，之前只能看到那一次 POST 的返回体；
+   *   一旦离开页面（或重启小程序），就再也找不到自己提过什么，更没法撤回。
+   *   家长收件箱 (`GET /approvals`) 对孩子是 403（`review_approvals` = DENY），
+   *   所以这不是「少一个按钮」，而是**没有读路径**。
+   *
+   * ── 收口条件 ────────────────────────────────────────────────────────────────
+   *   `childId`（屏障一）＋ `requesterUserId`（**会话里的 actor**，不是 query）。
+   *   两个条件同时进 WHERE；任何人都不可能通过改参数看到别人提了什么。
+   *
+   * ── 为什么权限不复用 `review_approvals` ──────────────────────────────────────
+   *   那个动作的 child 是 DENY，而且语义是「批准」。本端点用
+   *   `view_own_approvals`（两个角色 ALLOW），判定仍只来自矩阵。
+   */
+  async listMine(
+    query: ListApprovalsQueryDto,
+    actor: Actor,
+    childId: string
+  ): Promise<ApprovalInboxPageDto> {
+    const limit = query.limit ?? DEFAULT_PAGE_SIZE
+    const cursor = query.cursor === undefined ? undefined : decodeApprovalCursor(query.cursor)
+    const rows = await this.port.listForRequester({
+      childId,
+      requesterUserId: actor.userId,
       status: query.status,
       limit,
       cursor

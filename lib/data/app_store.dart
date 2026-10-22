@@ -206,8 +206,7 @@ class AppStore extends ChangeNotifier {
   bool get isRuleWriteReadOnly => isLiveMode && _writeApi == null;
 
   /// 只读模式下规则写操作的文案 —— 页面直接展示，不另编理由。
-  String get ruleReadOnlyWriteMessage =>
-      '只读模式：规则写入还没有接上后端，这次操作没有保存到服务器。';
+  String get ruleReadOnlyWriteMessage => '只读模式：规则写入还没有接上后端，这次操作没有保存到服务器。';
 
   /// 心愿写入口是否被只读拦截（W5-C：新增 / 删除）。
   ///
@@ -216,8 +215,7 @@ class AppStore extends ChangeNotifier {
   bool get isWishWriteReadOnly => isLiveMode && _writeApi == null;
 
   /// 只读模式下心愿写操作的文案 —— 页面直接展示，不另编理由。
-  String get wishReadOnlyWriteMessage =>
-      '只读模式：心愿写入还没有接上后端，这次操作没有保存到服务器。';
+  String get wishReadOnlyWriteMessage => '只读模式：心愿写入还没有接上后端，这次操作没有保存到服务器。';
 
   /// 档案写入口（昵称）是否被只读拦截（W5-E）。
   ///
@@ -262,8 +260,7 @@ class AppStore extends ChangeNotifier {
   bool get isHabitWriteReadOnly => isLiveMode && _writeApi == null;
 
   /// 只读模式下习惯写操作的文案 —— 页面直接展示，不另编理由。
-  String get habitReadOnlyWriteMessage =>
-      '只读模式：习惯删除还没有接上后端，这次操作没有保存到服务器。';
+  String get habitReadOnlyWriteMessage => '只读模式：习惯删除还没有接上后端，这次操作没有保存到服务器。';
 
   // ─────────────────────── 家庭成员（W5-H，服务端） ───────────────────────
 
@@ -377,13 +374,15 @@ class AppStore extends ChangeNotifier {
   /// 收件箱的写入是否可用：live 且注入了写客户端。
   bool get canDecideApprovals => isLiveMode && _writeApi != null;
 
+  /// 「我的申请」的撤回是否可用（W5-J）：与判定同一判据。
+  bool get canWithdrawApprovals => isLiveMode && _writeApi != null;
+
   /// 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。
   ///
   /// 走到这里有两个原因，文案同时覆盖：写客户端没能构造出来（配置缺失 / 构造失败），
   /// 或这个能力压根还没有端点（回收站恢复、恢复演示数据）。不再点名具体功能 ——
   /// W5-B 之后「兑换 / 记一笔 / 档案」都已经能真写，旧文案会变成假话。
-  String get readOnlyWriteMessage =>
-      '只读模式：这个操作暂时写不进去（写客户端未就绪或尚未接后端），没有保存。';
+  String get readOnlyWriteMessage => '只读模式：这个操作暂时写不进去（写客户端未就绪或尚未接后端），没有保存。';
 
   /// 记录页要展示的流水：
   ///   · 预览模式：对本地流水按分类过滤（原逻辑）；
@@ -650,6 +649,33 @@ class AppStore extends ChangeNotifier {
   ///   · 收件箱只在家长打开时才有用，没必要每次首页刷新都付一次请求。
   Future<void> refreshApprovals() => _loadApprovals(append: false);
 
+  /// 拉取「我的申请」的一页（W5-J）。
+  ///
+  /// ★ 为什么不像收件箱那样把结果存进 store：
+  ///   这个列表只在「我的申请」面板打开时有用，且**两个角色**都会看；
+  ///   把它塞进全局状态会让「家长收件箱」与「我的申请」两套游标 / 错误
+  ///   互相污染。面板自己持有生命周期，store 只负责「怎么问服务端」。
+  ///
+  /// 预览模式返回空页（没有后端可问）—— 页面据此说「预览模式没有申请」，
+  /// 而不是编一条假数据。
+  Future<ApprovalsPage> fetchMyApprovals({
+    String status = 'all',
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final ReadApiClient? api = _readApi;
+    if (api == null) {
+      return const ApprovalsPage(
+          items: <ApprovalInboxItem>[], hasMore: false, nextCursor: null);
+    }
+    final ApprovalsPageDto dto = await api.fetchMyApprovals(
+      status: status,
+      limit: limit,
+      cursor: cursor,
+    );
+    return mapApprovalsPage(dto);
+  }
+
   /// 追加下一页；没有更多 / 正在加载时直接返回。
   Future<void> loadMoreApprovals() async {
     if (!_hasMoreApprovals || _nextApprovalCursor == null) return;
@@ -798,6 +824,47 @@ class AppStore extends ChangeNotifier {
     } finally {
       _decidingApprovalId = null;
       _notify();
+    }
+  }
+
+  /// 撤回自己提交的申请（W5-J）。成功返回 null，失败返回可展示文案。
+  ///
+  /// 与 [decideApproval] 的差别：
+  ///   · 撤回**不需要** payload / 余额重算 —— 服务端只把 `pending → withdrawn`，
+  ///     不写流水、不动积分，因此成功后**不必**重拉首页快照；
+  ///   · 收件箱只在「家长已经打开过」时才刷新：孩子调用收件箱端点必然 403，
+  ///     为了同步一个孩子看不到的列表而制造一次 403，会把界面画成故障。
+  Future<String?> withdrawApproval(String approvalId) async {
+    if (!isLiveMode) return '预览模式没有可撤回的申请。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return readOnlyWriteMessage;
+    final String id = approvalId.trim();
+    if (id.isEmpty) return '申请 id 不能为空';
+
+    try {
+      final ApprovalDto result = await api.withdrawApproval(
+        id,
+        idempotencyKey: _newIdempotencyKey('approval-withdraw'),
+      );
+      if (_disposed) return null;
+
+      // 服务端回包必须是 `withdrawn`；否则说明契约漂移，不能当成功。
+      if (result.status != 'withdrawn') {
+        return '服务端返回的状态是「${result.status}」，'
+            '与这次撤回不一致，请刷新确认。';
+      }
+      if (_approvalReadStatus != ReadStatus.idle) {
+        await refreshApprovals();
+      }
+      return null;
+    } on WriteApiException catch (error) {
+      // 409（已被批 / 已过期）：本地那条已经过时，收件箱若已加载就同步一次。
+      if (!_disposed && error.kind == WriteFailureKind.conflict) {
+        if (_approvalReadStatus != ReadStatus.idle) await refreshApprovals();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '这次撤回结果无法确认，请刷新后查看，避免重复提交。';
     }
   }
 
@@ -1505,7 +1572,8 @@ class AppStore extends ChangeNotifier {
       return '调整金额不能为 0';
     }
     if (!isLiveMode) {
-      return addQuickNote(delta: delta, reason: reason, note: note, actor: actor);
+      return addQuickNote(
+          delta: delta, reason: reason, note: note, actor: actor);
     }
     final WriteApi? api = _writeApi;
     if (api == null) {
@@ -2161,8 +2229,8 @@ class AppStore extends ChangeNotifier {
             ),
           )
           .toList(growable: false)
-        ..sort((TrashItem a, TrashItem b) =>
-            b.deletedAt.compareTo(a.deletedAt));
+        ..sort(
+            (TrashItem a, TrashItem b) => b.deletedAt.compareTo(a.deletedAt));
     }
     final List<TrashItem> rows = <TrashItem>[];
     void collect(TrashKind kind) {
@@ -2768,8 +2836,6 @@ class AppStore extends ChangeNotifier {
       _notify();
     }
   }
-
-
 
   // =================================================== 规则编辑（修 C10）
 

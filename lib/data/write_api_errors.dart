@@ -116,6 +116,14 @@ class WriteApiException implements Exception {
           '这个操作需要家长确认，这次没有保存。请让家长直接操作（或由家长在「审批」里处理后再试）。',
         );
       }
+      if (code == 'NOT_REQUESTER') {
+        // W5-J：只有申请人本人能撤回。同一家庭里的另一位家长也不行 ——
+        // 这是「谁的决定可以撤销」的问题，不是权限高低。
+        return fail(
+          WriteFailureKind.forbidden,
+          '这不是你提交的申请，不能撤回（只有申请人本人可以）。',
+        );
+      }
       if (code == 'CANNOT_MODIFY_SELF') {
         // W5-H：成员写入口**都不能**作用于自己。降级自己会把自己锁在门外
         // （没有家长能再改回来）；移出自己则等于「退出家庭」——
@@ -260,7 +268,7 @@ class WriteApiException implements Exception {
         case 'APPROVAL_EXPIRED':
           return fail(
             WriteFailureKind.conflict,
-            '这条申请已超过 72 小时有效期，现在不能再批 / 拒，请让孩子重新提交。',
+            '这条申请已超过 72 小时有效期，现在不能再批 / 拒 / 撤回，请让孩子重新提交。',
           );
         case 'APPROVAL_INVALIDATED':
           return fail(

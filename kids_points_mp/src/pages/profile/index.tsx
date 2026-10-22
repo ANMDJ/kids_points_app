@@ -9,6 +9,7 @@ import type { IconName } from '../../components/Icon/icons'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
 import InviteSheet from '../../sheets/InviteSheet'
 import MemberSheet from '../../sheets/MemberSheet'
+import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
 import TrashSheet from '../../sheets/TrashSheet'
 import { ALLOW_DEMO_RESET, useStore } from '../../data/store'
 import { withAlpha } from '../../utils/color'
@@ -63,6 +64,8 @@ export default function Profile() {
   // W5-I：邀请码面板自己先确认角色（`invite_member` 仅家长 ALLOW），
   // 所以入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const inviteSheet = useSheet()
+  // W5-J：我的申请。与家长收件箱分开 —— 这里只看「我提交的」，动作是撤回。
+  const myApplicationsSheet = useSheet()
 
   const handleRename = async () => {
     // 只读拦截交给 store（`submitRenameChild` 三种世界各自给结论），
@@ -163,6 +166,20 @@ export default function Profile() {
             <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
+              onClick={() => myApplicationsSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#7f9bd8', 34 / 255) }}
+              >
+                <Icon name='clipboard' size={19} color='#7f9bd8' />
+              </View>
+              <Text className='kp-profile__menu-label'>我的申请</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
+            <View
+              className='kp-profile__menu'
               onClick={() => memberSheet.show()}
             >
               <View
@@ -226,6 +243,13 @@ export default function Profile() {
         {/* 修 C9：回收站弹窗（SheetFrame 本身就是覆盖层，挂在页面根节点内即可） */}
         {trashSheet.open ? (
           <TrashSheet visible={trashSheet.visible} onClose={trashSheet.hide} />
+        ) : null}
+        {/* W5-J：我的申请弹窗（打开时才拉 `GET /approvals/mine`） */}
+        {myApplicationsSheet.open ? (
+          <MyApplicationsSheet
+            visible={myApplicationsSheet.visible}
+            onClose={myApplicationsSheet.hide}
+          />
         ) : null}
         {/* W5-H：成员弹窗（打开时才拉 `GET /members`） */}
         {memberSheet.open ? (

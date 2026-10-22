@@ -21,6 +21,38 @@ import {
 export const kDeviceIdHeader = 'x-kp-device-id'
 export const kChildIdHeader = 'x-kp-child-id'
 
+/**
+ * 收件箱 / 我的申请共用的查询串：两个端点同一条线格式，参数规则也只该有一份。
+ *
+ * `limit` 在**发请求之前**按后端 DTO 判掉（1–100）：越界一定 400，白跑一趟。
+ * `status` 为 null / undefined 时不带 —— 「全部」不是某个枚举值。
+ */
+function approvalPageQuery(input: {
+  status?: string | null
+  limit?: number
+  cursor?: string | null
+}): Record<string, string> {
+  const limit = input.limit ?? 20
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw ReadApiException.malformed(
+      'limit',
+      '必须在 1–100 之间（后端 DTO 同口径）'
+    )
+  }
+  const query: Record<string, string> = { limit: String(limit) }
+  if (input.status !== undefined && input.status !== null) {
+    query.status = input.status
+  }
+  if (
+    input.cursor !== undefined &&
+    input.cursor !== null &&
+    input.cursor !== ''
+  ) {
+    query.cursor = input.cursor
+  }
+  return query
+}
+
 export interface ReadEnvironment {
   [key: string]: string | undefined
 }
@@ -202,25 +234,31 @@ export class ReadApiClient {
       cursor?: string | null
     } = {}
   ): Promise<ApprovalsPageDto> {
-    const limit = input.limit ?? 20
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-      throw ReadApiException.malformed(
-        'limit',
-        '必须在 1–100 之间（后端 DTO 同口径）'
-      )
-    }
-    const query: Record<string, string> = { limit: String(limit) }
-    if (input.status !== undefined && input.status !== null) {
-      query.status = input.status
-    }
-    if (
-      input.cursor !== undefined &&
-      input.cursor !== null &&
-      input.cursor !== ''
-    ) {
-      query.cursor = input.cursor
-    }
-    return ApprovalsPageDto.fromJson(await this.get('/approvals', query))
+    return ApprovalsPageDto.fromJson(
+      await this.get('/approvals', approvalPageQuery(input))
+    )
+  }
+
+  /**
+   * 我提交的申请（`GET /approvals/mine`，W5-J）。
+   *
+   * 与收件箱**同一条线格式**（同一个 `ApprovalsPageDto`），但语义不同：
+   *   · 收件箱 = 需要我处理的（家长视角，child 会 403）；
+   *   · 我的申请 = 我提交的（任何角色都能看自己那几条）。
+   * 因此两个列表**各自分页、各自缓存**：把 mine 写进收件箱会互相污染游标。
+   *
+   * `status` 不传 = 全部（默认展示全部，撤回按钮按行禁用）。
+   */
+  async fetchMyApprovals(
+    input: {
+      status?: string | null
+      limit?: number
+      cursor?: string | null
+    } = {}
+  ): Promise<ApprovalsPageDto> {
+    return ApprovalsPageDto.fromJson(
+      await this.get('/approvals/mine', approvalPageQuery(input))
+    )
   }
 
   /**

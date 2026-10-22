@@ -202,6 +202,22 @@ abstract class WriteApi {
     String? idempotencyKey,
   });
 
+  /// 撤回**自己**提的申请（`POST /approvals/:id/withdraw`，W5-J）。
+  ///
+  /// 撤回是申请人的动作，不是「批准」的一种：服务端不会写流水、不动余额，
+  /// 只把 `pending → withdrawn`。
+  ///
+  /// 常见业务拒绝（都必须原样展示）：
+  ///   · 403 `NOT_REQUESTER` —— 这条不是你提的（同一家庭里的其他成员也不行）
+  ///   · 409 `ALREADY_DECIDED` —— 已被家长批 / 拒，或已经撤回过了
+  ///   · 409 `APPROVAL_EXPIRED` —— 超过 72h，服务端先惰性置 `expired`
+  ///
+  /// 需要幂等键：双击「撤回」不该变成两次请求（第二次会拿到 409）。
+  Future<ApprovalDto> withdrawApproval(
+    String approvalId, {
+    String? idempotencyKey,
+  });
+
   /// 改孩子昵称（`PATCH /child`，W5-E）。
   ///
   /// [name] 原样提交即可 —— trim 与「≤16 个字符」由**服务端**判定，客户端只做
@@ -624,6 +640,22 @@ class WriteApiClient implements WriteApi {
       'POST',
       '/approvals/$id/decide',
       <String, Object?>{'decision': approve ? 'approved' : 'rejected'},
+      idempotencyKey: idempotencyKey,
+    );
+    return _parse(decoded, ApprovalDto.fromJson);
+  }
+
+  @override
+  Future<ApprovalDto> withdrawApproval(
+    String approvalId, {
+    String? idempotencyKey,
+  }) async {
+    final String id = _requireId(approvalId, 'approvalId');
+    // 没有请求体：操作对象已经在路径里，申请人由服务端会话决定。
+    final Object? decoded = await _send(
+      'POST',
+      '/approvals/$id/withdraw',
+      null,
       idempotencyKey: idempotencyKey,
     );
     return _parse(decoded, ApprovalDto.fromJson);

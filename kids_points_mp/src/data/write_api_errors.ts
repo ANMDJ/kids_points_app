@@ -117,6 +117,15 @@ export class WriteApiException extends Error {
           base
         )
       }
+      if (code === 'NOT_REQUESTER') {
+        // W5-J：撤回只有申请人能做。家长也不行 —— 家长该用「拒绝」，
+        // 那条会留下判定人与时间，「撤回」在语义上是申请人收回自己的请求。
+        return new WriteApiException(
+          'forbidden',
+          '只有提交这条申请的人才能撤回；家长请用「拒绝」来处理。',
+          base
+        )
+      }
       if (code === 'CANNOT_MODIFY_SELF') {
         // W5-H：成员写入口**都不能**作用于自己。降级自己会把自己锁在门外
         // （没有家长能再改回来）；移出自己则等于「退出家庭」——

@@ -10,6 +10,7 @@ import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
 import 'sheets/invite_sheet.dart';
 import 'sheets/member_sheet.dart';
+import 'sheets/my_applications_sheet.dart';
 import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
@@ -147,6 +148,20 @@ class ProfileScreen extends StatelessWidget {
                         builder: (_) => const PointsRuleScreen(),
                       ),
                     ),
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.assignment_outlined,
+                    // W5-J：我提交过的申请 + 撤回。与家长收件箱是**两个**
+                    // 入口：这里孩子也有，且动作是撤回而不是批 / 拒。
+                    color: AppColors.primaryDeep,
+                    label: '我的申请',
+                    onTap: () => showMyApplicationsSheet(context),
                   ),
                   const Divider(
                     height: 1,
