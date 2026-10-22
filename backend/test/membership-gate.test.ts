@@ -18,6 +18,7 @@ import { describe, it } from 'node:test'
 
 import {
   MemberRowShapeError,
+  clampRoleToMembership,
   resolveMembership,
   toMembership,
   type MembershipLookupRow
@@ -110,5 +111,31 @@ describe('组 B：形状把关（toMembership —— 裸 Json 的守卫）', () 
     assert.deepEqual(member.restrictions, restrictions)
     assert.equal(member.role, 'guardian')
     assert.deepEqual(toMembership(row({ restrictions: {} })).restrictions, {})
+  })
+})
+
+
+// ── 组 C：角色收口（W5-H）────────────────────────────────────────────────────
+describe('组 C：会话角色按成员位收口（clampRoleToMembership）', () => {
+  it('★ 成员位已降成 child、会话仍是 guardian ⇒ 只给 child（降级立即生效）', () => {
+    // 这条是"降级"的第二道保险：写路径会收回会话，但读路径不能依赖写路径记得。
+    assert.equal(clampRoleToMembership('guardian', 'child'), 'child')
+  })
+
+  it('成员位仍是 guardian、会话是 child ⇒ child（模式没切换就不该有家长权限）', () => {
+    assert.equal(clampRoleToMembership('child', 'guardian'), 'child')
+  })
+
+  it('对照：两侧都是 guardian ⇒ guardian（收口不是无脑降权）', () => {
+    assert.equal(clampRoleToMembership('guardian', 'guardian'), 'guardian')
+  })
+
+  it('两侧都是 child ⇒ child', () => {
+    assert.equal(clampRoleToMembership('child', 'child'), 'child')
+  })
+
+  it('会话是 viewer ⇒ viewer（矩阵一律 DENY，与 resolveVerdict 的 fail-closed 一致）', () => {
+    assert.equal(clampRoleToMembership('viewer', 'guardian'), 'viewer')
+    assert.equal(clampRoleToMembership('viewer', 'child'), 'viewer')
   })
 })

@@ -155,24 +155,36 @@ class _WishlistScreenState extends State<WishlistScreen> {
                               return WishCard(
                                 wish: wish,
                                 points: store.points,
-                                onRedeem: () {
-                                  if (store.isReadOnly) {
+                                onRedeem: () async {
+                                  // 修：这里原本判的是 `store.isReadOnly`
+                                  // （＝ live 即真，那是"其余写入口仍只读"的旧口径），
+                                  // 于是 live 模式下点兑换只会弹"只读模式"，永远发不出
+                                  // 审批请求。与新增 / 删除统一改成 `isWishWriteReadOnly`。
+                                  if (store.isWishWriteReadOnly) {
                                     messenger.hideCurrentSnackBar();
                                     messenger.showSnackBar(
                                       SnackBar(
-                                          content:
-                                              Text(store.readOnlyWriteMessage)),
+                                          content: Text(
+                                              store.wishReadOnlyWriteMessage)),
                                     );
                                     return;
                                   }
-                                  final bool ok = store.redeem(wish);
+                                  // 兑换要扣分 / 要打扰家长，先弹确认：
+                                  // 文案由 store 给（live 是"提交申请、批准后才扣"，
+                                  // 预览是"立即扣除"），取消就什么都不做。
+                                  final bool confirmed = await _confirmRedeem(
+                                      context, store, wish);
+                                  if (!confirmed) return;
+                                  // live 模式走 `POST /approvals`（兑换在矩阵里是
+                                  // REQUIRE_APPROVAL）：回包 pending 时**还没有扣分**，
+                                  // 所以文案必须由 store 给，不能在这里写「兑换成功」。
+                                  final String? message =
+                                      await store.submitRedeemWish(wish);
                                   messenger.hideCurrentSnackBar();
                                   messenger.showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        ok
-                                            ? '兑换成功：${wish.title}'
-                                            : '积分还不够，继续加油打卡吧！',
+                                        message ?? '兑换成功：${wish.title}',
                                       ),
                                     ),
                                   );
@@ -197,10 +209,11 @@ class _WishlistScreenState extends State<WishlistScreen> {
                     expanded: _expanded,
                     expandedWidth: expandedWidth,
                     onTap: () {
-                      if (store.isReadOnly) {
+                      if (store.isWishWriteReadOnly) {
                         messenger.hideCurrentSnackBar();
                         messenger.showSnackBar(
-                          SnackBar(content: Text(store.readOnlyWriteMessage)),
+                          SnackBar(
+                              content: Text(store.wishReadOnlyWriteMessage)),
                         );
                         return;
                       }
@@ -216,16 +229,48 @@ class _WishlistScreenState extends State<WishlistScreen> {
     );
   }
 
+  /// 兑换前的确认弹层 —— 取消返回 false，一次请求都不发。
+  ///
+  /// 文案来自 `AppStore.redeemConfirmText()`：live 说「提交给家长确认，批准后才扣」，
+  /// 预览说「立即扣除」。页面不自己拼句子，否则两种模式迟早说错一种。
+  Future<bool> _confirmRedeem(
+    BuildContext context,
+    AppStore store,
+    Wish wish,
+  ) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('兑换心愿'),
+          content: Text(store.redeemConfirmText(wish)),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              // live 只是建审批（家长批准前不扣分），按钮就别写"兑换成功"的语气
+              child: Text(store.isLiveMode ? '提交申请' : '确认兑换'),
+            ),
+          ],
+        );
+      },
+    );
+    return confirmed ?? false;
+  }
+
   Future<void> _confirmRemove(
     BuildContext context,
     AppStore store,
     ScaffoldMessengerState messenger,
     Wish wish,
   ) async {
-    if (store.isReadOnly) {
+    if (store.isWishWriteReadOnly) {
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
-        SnackBar(content: Text(store.readOnlyWriteMessage)),
+        SnackBar(content: Text(store.wishReadOnlyWriteMessage)),
       );
       return;
     }
@@ -251,9 +296,16 @@ class _WishlistScreenState extends State<WishlistScreen> {
     if (confirmed == true) {
       // 修 C9：删除是**软删**（移到回收站，90 天内可恢复），不是物理删除 ——
       // 历史流水的回指（wishId）因此不会指向空。
-      store.removeWish(wish);
+      // W5-C：live 模式走 DELETE /wishes/:id；失败时**不假装删掉了**，
+      // 直接把服务端给的可读原因显示出来（例如已被别的设备删掉）。
+      final String? message = await store.submitRemoveWish(wish);
+      messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
-        const SnackBar(content: Text('已移到回收站，90 天内可在「我的 · 回收站」恢复')),
+        SnackBar(
+          content: Text(
+            message ?? '已移到回收站，90 天内可在「我的 · 回收站」恢复',
+          ),
+        ),
       );
     }
   }

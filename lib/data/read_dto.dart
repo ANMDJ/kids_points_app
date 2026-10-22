@@ -278,6 +278,196 @@ class RecordsPageDto {
   /// 下一页游标；`hasMore == false` 时为 null。**必须原样回传**给服务端。
   final String? nextCursor;
 }
+// ─────────────────────── 家长审批收件箱（W5-D） ───────────────────────
+
+/// `GET /approvals` 的一行。
+///
+/// ★ 与 `ApprovalDto`（写回包）**不合并**：写回包只带判定结果，列表行带
+///   `summary` / `createdAt` / `expiresAt`。合并会让写路径被迫读一堆用不上的字段，
+///   也会让「列表多读一个字段」变成对写端点的契约要求。
+class ApprovalInboxItemDto {
+  ApprovalInboxItemDto({
+    required this.id,
+    required this.action,
+    required this.status,
+    required this.requesterUserId,
+    required this.decidedByUserId,
+    required this.executedRecordId,
+    required this.autoReason,
+    required this.createdAt,
+    required this.decidedAt,
+    required this.expiresAt,
+    required this.summary,
+  });
+
+  factory ApprovalInboxItemDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    return ApprovalInboxItemDto(
+      id: readString(json, 'id', '$path.id'),
+      action: readString(json, 'action', '$path.action'),
+      status: readString(json, 'status', '$path.status'),
+      requesterUserId: readString(json, 'requesterUserId', '$path.requesterUserId'),
+      decidedByUserId:
+          readOptionalString(json, 'decidedByUserId', '$path.decidedByUserId'),
+      executedRecordId:
+          readOptionalString(json, 'executedRecordId', '$path.executedRecordId'),
+      autoReason: readOptionalString(json, 'autoReason', '$path.autoReason'),
+      createdAt: readDate(json, 'createdAt', '$path.createdAt'),
+      decidedAt: readOptionalDate(json, 'decidedAt', '$path.decidedAt'),
+      expiresAt: readDate(json, 'expiresAt', '$path.expiresAt'),
+      summary: ApprovalSummaryDto.tryParse(json['summary'], '$path.summary'),
+    );
+  }
+
+  final String id;
+  final String action;
+  final String status;
+  final String requesterUserId;
+  final String? decidedByUserId;
+  final String? executedRecordId;
+  final String? autoReason;
+  final DateTime createdAt;
+  final DateTime? decidedAt;
+  final DateTime expiresAt;
+
+  /// `null` 有两种来源：服务端明确给了 `summary: null`（payload 读不懂），
+  /// 或 `kind` 是本客户端还不认识的**新**摘要。两种情况都必须显示成
+  /// 「内容无法识别」并禁用批准 —— 看不到内容就不该点批。
+  final ApprovalSummaryDto? summary;
+}
+
+/// 摘要的线格式联合：按 `kind` 分派，字段逐个严格校验。
+///
+/// ★ `tryParse` 为什么对 `null` / 未知 `kind` 返回 null，而不是抛 malformed：
+///   服务端把「payload 读不懂」定义成 `summary: null`（见
+///   `approval-inbox.mapper.ts`），那是一个**合法**响应；而未知 `kind` 是
+///   服务端比客户端新的正常情况。这两种都不该让整页 500 —— 客户端仍然
+///   能列出来、能拒绝，只是不能批。
+///   已知 `kind` 的字段缺失 / 类型不对**仍然**抛 malformed（契约漂移必须响）。
+sealed class ApprovalSummaryDto {
+  const ApprovalSummaryDto();
+
+  static ApprovalSummaryDto? tryParse(Object? raw, String path) {
+    if (raw == null) return null;
+    final Map<String, Object?> json = readObject(raw, path);
+    final String kind = readString(json, 'kind', '$path.kind');
+    switch (kind) {
+      case 'redeem':
+        return RedeemSummaryDto(
+          wishId: readString(json, 'wishId', '$path.wishId'),
+          title: readString(json, 'title', '$path.title'),
+          cost: readInt(json, 'cost', '$path.cost'),
+        );
+      case 'bonus':
+        return BonusSummaryDto(
+          amount: readInt(json, 'amount', '$path.amount'),
+          reason: readString(json, 'reason', '$path.reason'),
+          ruleId: readOptionalString(json, 'ruleId', '$path.ruleId'),
+          habitId: readOptionalString(json, 'habitId', '$path.habitId'),
+          basisTitle: readOptionalString(json, 'basisTitle', '$path.basisTitle'),
+        );
+      case 'add_wish':
+        return AddWishSummaryDto(
+          title: readString(json, 'title', '$path.title'),
+          cost: readInt(json, 'cost', '$path.cost'),
+          emoji: readString(json, 'emoji', '$path.emoji'),
+        );
+      default:
+        return null;
+    }
+  }
+}
+
+class RedeemSummaryDto extends ApprovalSummaryDto {
+  RedeemSummaryDto({
+    required this.wishId,
+    required this.title,
+    required this.cost,
+  });
+
+  final String wishId;
+  final String title;
+  final int cost;
+}
+
+class BonusSummaryDto extends ApprovalSummaryDto {
+  BonusSummaryDto({
+    required this.amount,
+    required this.reason,
+    required this.ruleId,
+    required this.habitId,
+    required this.basisTitle,
+  });
+
+  final int amount;
+  final String reason;
+  final String? ruleId;
+  final String? habitId;
+  final String? basisTitle;
+}
+
+class AddWishSummaryDto extends ApprovalSummaryDto {
+  AddWishSummaryDto({
+    required this.title,
+    required this.cost,
+    required this.emoji,
+  });
+
+  final String title;
+  final int cost;
+  final String emoji;
+}
+
+/// `GET /approvals` 的一页。
+///
+/// 与 [RecordsPageDto] 同一纪律：`hasMore` 与 `nextCursor` 必须自洽，
+/// 否则客户端要么提前停、要么对着 null 死循环。
+class ApprovalsPageDto {
+  ApprovalsPageDto({
+    required this.items,
+    required this.hasMore,
+    required this.nextCursor,
+  });
+
+  factory ApprovalsPageDto.fromJson(Object? raw) {
+    final Map<String, Object?> json = readObject(raw, r'$');
+    final List<ApprovalInboxItemDto> items =
+        readList(json, 'items', 'items').asMap().entries.map(
+              (MapEntry<int, Object?> entry) => ApprovalInboxItemDto.fromJson(
+                entry.value,
+                'items[${entry.key}]',
+              ),
+            ).toList(growable: false);
+    final bool hasMore = readBool(json, 'hasMore', 'hasMore');
+    final String? nextCursor =
+        readOptionalString(json, 'nextCursor', 'nextCursor');
+
+    if (hasMore && (nextCursor == null || nextCursor.isEmpty)) {
+      throw ReadApiException.malformed(
+        'nextCursor',
+        detail: 'hasMore=true 但没有游标，客户端无法取下一页',
+      );
+    }
+    if (!hasMore && nextCursor != null) {
+      throw ReadApiException.malformed(
+        'nextCursor',
+        detail: 'hasMore=false 却给了游标',
+      );
+    }
+
+    return ApprovalsPageDto(
+      items: items,
+      hasMore: hasMore,
+      nextCursor: nextCursor,
+    );
+  }
+
+  final List<ApprovalInboxItemDto> items;
+  final bool hasMore;
+  final String? nextCursor;
+}
+
+
 
 // ───────────────────────────── 严格读取助手 ─────────────────────────────
 
@@ -350,3 +540,199 @@ DateTime? readOptionalDate(Map<String, Object?> json, String key, String path) {
   if (json[key] == null) return null;
   return readDate(json, key, path);
 }
+// ───────────────────────────── 回收站（W5-F） ─────────────────────────────
+
+/// `GET /trash` 的一行。
+///
+/// 服务端只下发**事实**（`deletedAt`）；`expired` / 「还能恢复几天」由
+/// [isTrashExpired] / [trashRetentionText] 现算。线格式里再塞一个 `expiresAt`
+/// 就等于多一份 90 天常量 —— 界面与接口迟早给出两个互相矛盾的答案。
+class TrashItemDto {
+  TrashItemDto({
+    required this.kind,
+    required this.id,
+    required this.title,
+    required this.deletedAt,
+  });
+
+  factory TrashItemDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    return TrashItemDto(
+      kind: readString(json, 'kind', '$path.kind'),
+      id: readString(json, 'id', '$path.id'),
+      title: readString(json, 'title', '$path.title'),
+      // 后端下发 ISO-8601 串；`readDate` 严格解析（不是「猜 now」）。
+      deletedAt: readDate(json, 'deletedAt', '$path.deletedAt'),
+    );
+  }
+
+  /// 线值：`point_rule` / `wish` / `habit`（由 `mapTrash` 严格转成 `TrashKind`）
+  final String kind;
+  final String id;
+  final String title;
+  final DateTime deletedAt;
+}
+
+/// `GET /trash` 的响应体。
+///
+/// 不分页：回收站是低频、小集合（用户主动删的东西不会多到需要游标）。
+class TrashListDto {
+  TrashListDto({required this.items});
+
+  factory TrashListDto.fromJson(Object? raw) {
+    final Map<String, Object?> json = readObject(raw, r'$');
+    return TrashListDto(
+      items: readList(json, 'items', 'items')
+          .asMap()
+          .entries
+          .map((MapEntry<int, Object?> entry) =>
+              TrashItemDto.fromJson(entry.value, 'items[${entry.key}]'))
+          .toList(growable: false),
+    );
+  }
+
+  final List<TrashItemDto> items;
+}
+
+// ───────────────────────────── 家庭成员（W5-H） ─────────────────────────────
+
+/// `GET /members` 的一行。
+///
+/// 线格式**只下发事实**：`role` / `status` / `isSelf`，没有
+/// `canChangeRole` / `canRemove` 之类的结论 —— 谁能对谁做什么由服务端屏障二
+/// 判定；客户端按「我是家长 ⇒ 显示入口」渲染，被拒绝时再按 403 的 `code`
+/// 解释原因（`25-w5h-handoff.md` §2.6）。
+///
+/// `role` / `status` 故意保留**线值字符串**：枚举校验集中在
+/// [mapMember]（不认识的值显式抛错），DTO 层不替界面猜。
+class MemberDto {
+  MemberDto({
+    required this.memberId,
+    required this.userId,
+    required this.displayName,
+    required this.role,
+    required this.status,
+    required this.joinedAt,
+    required this.removedAt,
+    required this.isSelf,
+  });
+
+  factory MemberDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    return MemberDto(
+      memberId: readString(json, 'memberId', '$path.memberId'),
+      userId: readString(json, 'userId', '$path.userId'),
+      displayName: readOptionalString(json, 'displayName', '$path.displayName'),
+      // 线值：`guardian` / `child` / `viewer`（由 `mapMember` 严格转换）
+      role: readString(json, 'role', '$path.role'),
+      // 线值：`active` / `removed`
+      status: readString(json, 'status', '$path.status'),
+      joinedAt: readDate(json, 'joinedAt', '$path.joinedAt'),
+      removedAt: readOptionalDate(json, 'removedAt', '$path.removedAt'),
+      // 唯一一个「服务端算、客户端不该算」的字段：客户端不知道自己的 userId
+      // （身份在服务端会话里），只能由服务端回答「这一行是不是我」。
+      isSelf: readBool(json, 'isSelf', '$path.isSelf'),
+    );
+  }
+
+  final String memberId;
+  final String userId;
+  final String? displayName;
+  final String role;
+  final String status;
+  final DateTime joinedAt;
+  final DateTime? removedAt;
+  final bool isSelf;
+}
+
+/// `GET /members` 的响应体。
+///
+/// 不分页、也不含 `removed`：单孩子量小，被移出的人只能在审计里看到
+/// （`25-w5h-handoff.md` §5）。
+class MemberListDto {
+  MemberListDto({required this.items});
+
+  factory MemberListDto.fromJson(Object? raw) {
+    final Map<String, Object?> json = readObject(raw, r'$');
+    return MemberListDto(
+      items: readList(json, 'items', 'items')
+          .asMap()
+          .entries
+          .map((MapEntry<int, Object?> entry) =>
+              MemberDto.fromJson(entry.value, 'items[${entry.key}]'))
+          .toList(growable: false),
+    );
+  }
+
+  final List<MemberDto> items;
+}
+
+// ───────────────────────────── 邀请码（W5-I） ─────────────────────────────
+
+/// `GET /invites` 的一行 / `POST /invites` 的回包。
+///
+/// 线格式**只下发事实**：`usedCount` / `maxUses` / `expiresAt` / `revoked`，
+/// 没有 `expired` 或 `status: 'usable'` —— 「还能不能用」由界面现算
+/// （[InviteCode.statusAt]），服务端再算一遍就等于两份判据。
+///
+/// `role` 故意保留**线值字符串**：枚举校验集中在 [mapInvite]（`viewer`
+/// 不是可邀请的角色），DTO 层不替界面猜。
+class InviteDto {
+  InviteDto({
+    required this.id,
+    required this.code,
+    required this.role,
+    required this.maxUses,
+    required this.usedCount,
+    required this.expiresAt,
+    required this.revoked,
+    required this.createdAt,
+  });
+
+  factory InviteDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    return InviteDto(
+      id: readString(json, 'id', '$path.id'),
+      code: readString(json, 'code', '$path.code'),
+      // 线值：`child` / `guardian`（由 `mapInvite` 严格转换）
+      role: readString(json, 'role', '$path.role'),
+      maxUses: readInt(json, 'maxUses', '$path.maxUses'),
+      usedCount: readInt(json, 'usedCount', '$path.usedCount'),
+      expiresAt: readDate(json, 'expiresAt', '$path.expiresAt'),
+      revoked: readBool(json, 'revoked', '$path.revoked'),
+      createdAt: readDate(json, 'createdAt', '$path.createdAt'),
+    );
+  }
+
+  final String id;
+  final String code;
+  final String role;
+  final int maxUses;
+  final int usedCount;
+  final DateTime expiresAt;
+  final bool revoked;
+  final DateTime createdAt;
+}
+
+/// `GET /invites` 的响应体（`{ items: [...] }`）。
+///
+/// 不分页：一个孩子的邀请码是小集合，且列表里给的是**凭据**本身，
+/// 翻页只会让「我刚才那个码在哪」更难找。
+class InviteListDto {
+  InviteListDto({required this.items});
+
+  factory InviteListDto.fromJson(Object? raw) {
+    final Map<String, Object?> json = readObject(raw, r'$');
+    return InviteListDto(
+      items: readList(json, 'items', 'items')
+          .asMap()
+          .entries
+          .map((MapEntry<int, Object?> entry) =>
+              InviteDto.fromJson(entry.value, 'items[${entry.key}]'))
+          .toList(growable: false),
+    );
+  }
+
+  final List<InviteDto> items;
+}
+

@@ -116,6 +116,48 @@ export interface WithdrawApprovalInput {
   requesterRole: Role | 'viewer'
 }
 
+/**
+ * 收件箱列表里的**一行**（W5-D）。
+ *
+ * ★ 为什么单独一个类型、而不是给 `ApprovalRow` 加四个必填字段：
+ *   `ApprovalRow` 是 create / decide / withdraw 共用的**判定输入**，那些路径
+ *   不需要 `payload` / 时间戳。把它们塞进去会让 `approvals-http.test.ts` 的
+ *   内存替身凭空多出四个字段（它们与判定无关），用例就被迫维护无关噪音。
+ *   列表是**读视图**，它需要多几列 —— 用子类型显式说出「多在哪」。
+ */
+export interface ApprovalListRow extends ApprovalRow {
+  /** 动作参数的**快照**（形状由动作决定，见 `approval-payload.ts`）。 */
+  payload: unknown
+  createdAt: Date
+  /** 未决 / 系统终态（`expired`）时为 `null`。 */
+  decidedAt: Date | null
+  expiresAt: Date
+}
+
+/** `GET /approvals` 的状态筛选值（`all` = 不筛）。 */
+export const APPROVAL_STATUS_FILTERS = [
+  'pending',
+  'approved',
+  'rejected',
+  'withdrawn',
+  'invalidated',
+  'expired',
+  'all'
+] as const
+
+export type ApprovalStatusFilter = (typeof APPROVAL_STATUS_FILTERS)[number]
+
+/** 列表入参。`childId` 仍来自**会话**（屏障一的结论），不是 query。 */
+export interface ListApprovalsInput {
+  childId: string
+  /** 省略 = `pending`（收件箱的默认视图就是「待我处理」）。 */
+  status?: ApprovalStatusFilter
+  /** 1..200；适配器返回**至多 `limit + 1`** 行，多出的那行只用于判断 `hasMore`。 */
+  limit: number
+  /** 上一页最后一行的位置（`nextCursor` 解码后）。 */
+  cursor?: { createdAt: Date; id: string }
+}
+
 export interface ApprovalsPort {
   /** 建一条 `pending`，**不执行**任何业务（等家庭里另一位 guardian 来批，或本人二次确认）。 */
   createPending(input: CreateApprovalInput): Promise<ApprovalRow>
@@ -131,6 +173,15 @@ export interface ApprovalsPort {
    * ★ `childId` 是**查询条件**（W3-B）：另一家的审批与「不存在」必须长得一模一样。
    */
   findById(id: string, childId: string): Promise<ApprovalRow | null>
+
+  /**
+   * 收件箱列表（W5-D）：按 `(createdAt desc, id desc)` 键集翻页。
+   *
+   * ★ 为什么 `childId` 是**查询条件**而不是事后过滤：与 `findById` 同一条理由
+   *   （W3-B）—— 列表是最容易「顺手把别家数据带出来」的地方。
+   * ★ `status` 省略 ⇒ `pending`；`all` ⇒ 不筛。
+   */
+  listForChild(input: ListApprovalsInput): Promise<ApprovalListRow[]>
 
   /**
    * 批准 / 拒绝，**乐观锁**：`UPDATE … WHERE id = ? AND childId = ? AND status = 'pending'`（§4.4）。
@@ -187,6 +238,11 @@ export class NotImplementedApprovalsRepository implements ApprovalsPort {
     void id
     void childId
     return Promise.resolve(this.fail('findById'))
+  }
+
+  listForChild(input: ListApprovalsInput): Promise<ApprovalListRow[]> {
+    void input
+    return Promise.resolve(this.fail('listForChild'))
   }
 
   decide(input: DecideApprovalInput): Promise<ApprovalRow> {

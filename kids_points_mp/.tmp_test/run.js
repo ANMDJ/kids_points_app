@@ -959,6 +959,24 @@ if (w5a.error || w5a.status !== 0) {
   console.log('FAIL  W5-A 规则写端点用例（run-w5a.mjs） -> 子进程未通过')
 }
 
+// ── W5-B 异步写入口用例（记一笔 POST /records/adjust）：同样交给 ESM 子进程 ──
+const w5b = spawnSync(process.execPath, [join(__dirname, 'run-w5b.mjs')], {
+  stdio: 'inherit'
+})
+if (w5b.error || w5b.status !== 0) {
+  failed += 1
+  console.log('FAIL  W5-B 记一笔用例（run-w5b.mjs） -> 子进程未通过')
+}
+
+// ── W5-C 异步写入口用例（心愿 POST /wishes、DELETE /wishes/:id）：同上 ──
+const w5c = spawnSync(process.execPath, [join(__dirname, 'run-w5c.mjs')], {
+  stdio: 'inherit'
+})
+if (w5c.error || w5c.status !== 0) {
+  failed += 1
+  console.log('FAIL  W5-C 心愿用例（run-w5c.mjs） -> 子进程未通过')
+}
+
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exitCode = failed === 0 ? 0 : 1
 

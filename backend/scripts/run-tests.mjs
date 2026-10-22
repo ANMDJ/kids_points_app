@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run-tests.mjs —— 后端测试入口（**真编译** + Node 内置 runner + 三处 fail-closed 守卫）
+ * run-tests.mjs —— 后端测试入口（**真编译** + Node 内置 runner + 四处 fail-closed 守卫）
  *
  * ── 为什么必须「先编译再跑」（2026-10-14 阶段 B4 实测，Node v26.10.0）───────────────
  *   起因：给审批 HTTP 路径写用例时，用原先的 `node --import tsx --test` 跑带**装饰器**的
@@ -22,6 +22,11 @@
  *   ② 数用例：`tests ≥ 1`，且 `tests ≥ 文件数`（有文件一个用例都没贡献 ⇒ 红）。
  *   ③ 新增：**源码测试文件数 == 编译产物测试文件数**（少一个 ⇒ 红，并点名差在哪）。
  *      防的是「某个文件没被编译出来，于是它静默地没跑」—— 与 D12（测试器假绿）同类。
+ *   ④ 新增（W5-H 踩到后补）：**不许有「整个文件被当成一条用例」**。
+ *      形态：`describe` / `it` 被少写一个 `})` 关进了 `after()` / `before()` 回调里 ——
+ *      Node 一条子用例都不注册，却把**文件本身**记成 `✔`，`tests N` 里那个文件的贡献变成 1，
+ *      于是守卫 ② 的 `tests ≥ 文件数` 照样满足：**整套用例一条都没跑，却是绿的**。
+ *      判据：报告里出现**顶格**的 `✔ <…>.test.js (12ms)` 行 ⇒ 那个文件没有子用例。
  *   历史背景（这些行为仍在拦）：目录里只放 `*.spec.ts` → `tests 0` **退出码 0**；
  *   空目录 → `tests 0` **退出码 0**。即「一个用例都没跑」看起来是绿的。
  *
@@ -161,6 +166,43 @@ if (total < 1) {
 if (total < compiled.length) {
   console.error(
     `\nFAIL  发现 ${compiled.length} 个用例文件，却只跑了 ${total} 个用例 —— 有文件一个用例都没贡献`
+  )
+  process.exit(1)
+}
+
+/**
+ * ── 守卫 ④：不许有「整个文件被当成一条用例」─────────────────────────────────
+ * Node 的内置报告器会把**根本没有子用例**的测试文件本身记成一条 `✔ <path> (12ms)`
+ * （顶格、带耗时）。这在 `describe` 被少一个 `})` 关进 `after()` 回调时发生 ——
+ * 用例写在那儿、语法也合法、`tsc` 也不报错，但**一条都不会注册**。
+ * 守卫 ② 的 `tests ≥ 文件数` 拦不住它：那个文件贡献的 `1` 正好凑够数。
+ * 所以这里直接看报告：出现顶格的 `<被测文件>.js (…ms)` 行 ⇒ 红。
+ * 判据取自实测（2026-10-22，W5-H）：健康的 30 文件 / 544 用例输出里**一行都没有**。
+ */
+function findFilesWithoutTests(report) {
+  const escaped = COMPILED_SUFFIX.replace(/\./g, '\\.')
+  const pattern = new RegExp(`^[✔✖]\\s+(.+${escaped})\\s+\\(`, 'u')
+  const found = []
+  for (const line of stripAnsi(report).split('\n')) {
+    if (/^\s/.test(line)) continue // 缩进行是 describe / it 的子节点，不是文件节点
+    const match = line.match(pattern)
+    if (match !== null) found.push(match[1])
+  }
+  return found
+}
+
+// ── 守卫 ④：不许有「整个文件被当成一条用例」（见上方函数注释）───────────────
+const emptyFiles = findFilesWithoutTests(output)
+if (emptyFiles.length > 0) {
+  console.error(
+    `\nFAIL  ${emptyFiles.length} 个用例文件**一条子用例都没注册**，却被记成通过：`
+  )
+  for (const file of emptyFiles) console.error(`      · ${relative(HERE, file)}`)
+  console.error(
+    '      多半是`describe` / `it` 被少写一个 `})` 关进了 `before()` / `after()` 回调里：'
+  )
+  console.error(
+    '      语法合法、tsc 不报错、报告里还显示 ✔ —— 但那批用例**一次都没跑**（D12 同款假绿）。'
   )
   process.exit(1)
 }

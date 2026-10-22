@@ -30,9 +30,11 @@ import { Test } from '@nestjs/testing'
 import { applyGlobalPipes } from '../src/app.setup'
 import {
   APPROVALS_REPOSITORY,
+  type ApprovalListRow,
   type ApprovalRow,
   type ApprovalsPort,
-  type CreateApprovalInput
+  type CreateApprovalInput,
+  type ListApprovalsInput
 } from '../src/approvals/approvals.repository'
 import { ApprovalsModule } from '../src/approvals/approvals.module'
 import { AUDIT_ACTION_SELF_APPROVED, SELF_APPROVAL_NOT_ALLOWED } from '../src/contracts/approval-policy'
@@ -120,25 +122,60 @@ interface PortCall {
  * 内存替身：**只**实现端口承诺的语义（`createSelfApproved` = 落库即已决且批准人=申请人；
  * `decide` 带乐观锁）。它不写账本 —— 那正是「未落地」的部分，所以这里不许假装。
  */
-function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, ApprovalRow> } {
+function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, SeedRow> } {
   const calls: PortCall[] = []
-  const rows = new Map<string, ApprovalRow>()
+  const rows = new Map<string, SeedRow>()
   let seq = 0
+
+  /**
+   * payload 快照的替身：形状按动作给出（列表用例要读到 `summary`）。
+   * ★ 真适配器会查心愿/规则并把标题快照进来；这里只保证**形状合法**，
+   *   列表语义（排序 / 过滤 / 游标）才是本文件要验的东西。
+   */
+  const payloadOf = (input: CreateApprovalInput): Record<string, unknown> => {
+    switch (input.action) {
+      case 'redeem':
+      case 'request_redeem':
+        return {
+          wishId: input.targetId ?? 'wish-1',
+          titleSnapshot: '乐高',
+          costSnapshot: 100
+        }
+      case 'request_points_bonus':
+        return {
+          amount: input.amount ?? 5,
+          reason: input.reason ?? '帮忙洗碗',
+          ruleId: null,
+          ruleTitleSnapshot: null,
+          habitId: null,
+          habitTitleSnapshot: null
+        }
+      case 'add_wish':
+        return { title: input.title ?? '新心愿', cost: input.cost ?? 40, emoji: input.emoji ?? '🎁' }
+      default:
+        return {}
+    }
+  }
 
   const build = (
     input: CreateApprovalInput,
     status: string,
     decidedByUserId: string | null
-  ): ApprovalRow => {
+  ): ApprovalListRow => {
     seq += 1
-    const created: ApprovalRow = {
+    const createdAt = new Date(Date.UTC(2026, 9, 20, 0, 0, seq))
+    const created: ApprovalListRow = {
       id: `ap-${seq}`,
       childId: input.childId,
       action: input.action,
       requesterUserId: input.requesterUserId,
       status,
       decidedByUserId,
-      executedRecordId: status === 'approved' ? `rec-${seq}` : null
+      executedRecordId: status === 'approved' ? `rec-${seq}` : null,
+      payload: payloadOf(input),
+      createdAt,
+      decidedAt: status === 'pending' ? null : createdAt,
+      expiresAt: new Date(createdAt.getTime() + 72 * 60 * 60 * 1000)
     }
     rows.set(created.id, created)
     return created
@@ -195,6 +232,28 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
       rows.set(updated.id, updated)
       return updated
     },
+    async listForChild(input: ListApprovalsInput) {
+      calls.push({ method: 'listForChild', input })
+      const status = input.status ?? 'pending'
+      const filtered = [...rows.values()]
+        .map(asListRow)
+        .filter((row) => row.childId === input.childId)
+        .filter((row) => status === 'all' || row.status === status)
+        .filter((row) => {
+          if (input.cursor === undefined) return true
+          const cursor = input.cursor
+          if (row.createdAt.getTime() !== cursor.createdAt.getTime()) {
+            return row.createdAt.getTime() < cursor.createdAt.getTime()
+          }
+          return row.id < cursor.id
+        })
+        // 与真适配器同一排序：createdAt desc, id desc
+        .sort((a, b) => {
+          const diff = b.createdAt.getTime() - a.createdAt.getTime()
+          return diff !== 0 ? diff : b.id.localeCompare(a.id)
+        })
+      return filtered.slice(0, input.limit + 1)
+    },
     async expireDue(now, limit) {
       calls.push({ method: 'expireDue', input: { now, limit } })
       let expired = 0
@@ -206,6 +265,30 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
       }
       return expired
     }
+  }
+}
+
+/**
+ * 直接 `port.rows.set(...)` 塞进来的行只有判定字段（用例只关心状态 / 归属）；
+ * 走端口建出来的行则自带 payload 与时间戳。`SeedRow` 让两种都能存进同一张表，
+ * `asListRow` 只补**缺的**列 —— 已经给了的必须原样保留（否则列表用例读到的是默认值）。
+ */
+type SeedRow = ApprovalRow &
+  Partial<Pick<ApprovalListRow, 'payload' | 'createdAt' | 'decidedAt' | 'expiresAt'>>
+
+/** 手工造行的时间基线：写死不取 `now`，游标断言才可复现。 */
+const SEED_CREATED_AT = new Date('2026-10-19T00:00:00.000Z')
+/** 手工造行的默认快照（形状合法的 redeem），列表语义与它无关。 */
+const SEED_PAYLOAD = { wishId: 'wish-1', titleSnapshot: '乐高', costSnapshot: 100 }
+
+function asListRow(row: SeedRow): ApprovalListRow {
+  const createdAt = row.createdAt ?? SEED_CREATED_AT
+  return {
+    ...row,
+    payload: row.payload ?? SEED_PAYLOAD,
+    createdAt,
+    decidedAt: row.decidedAt !== undefined ? row.decidedAt : row.status === 'pending' ? null : createdAt,
+    expiresAt: row.expiresAt ?? new Date(createdAt.getTime() + 72 * 60 * 60 * 1000)
   }
 }
 
@@ -1055,3 +1138,197 @@ describe('组 H：Idempotency-Key 的 HTTP 重放保护（W3-C）', () => {
   })
 })
 
+// ── 组 E：家长收件箱（W5-D）────────────────────────────────────────────────────
+// 这一组回答的是一个**产品层**的空洞：审批写入从 W3-A 起就是真的，但**没人看得到**
+// 待批的申请 —— 家长端没有列表端点，孩子提交后只能靠「通知」（不存在）知道。
+// 判据：`02` §4.1 / §4.3（TTL）/ §4.2（`autoReason` 与 rejected 分开）。
+describe('组 E：收件箱列表（GET /approvals，W5-D）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+
+  const get = async (query = ''): Promise<HttpResult> =>
+    send(url, `/approvals${query}`, { method: 'GET', headers: GUARDIAN })
+
+  const itemsOf = (body: Record<string, unknown>): Array<Record<string, unknown>> =>
+    body.items as Array<Record<string, unknown>>
+
+  before(async () => {
+    port = makeFakePort()
+    ;({ app, url } = await startApp(port))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+  })
+
+  it('空收件箱 ⇒ 200 空页（不是 404/500 —— 「没有待批」是正常状态）', async () => {
+    const r = await get()
+    assert.equal(r.status, 200)
+    assert.deepEqual(itemsOf(r.body), [])
+    assert.equal(r.body.hasMore, false)
+    assert.equal(r.body.nextCursor, null)
+    const call = port.calls.find((c) => c.method === 'listForChild')
+    assert.deepEqual(
+      (call?.input as { childId: string }).childId,
+      CHILD_ID,
+      'childId 必须来自会话，而不是 query'
+    )
+    assert.equal((call?.input as { limit: number }).limit, 20, '默认每页 20')
+  })
+
+
+  it('默认只返回 `pending`，并按「新的在前」排序；摘要按动作给出结构化字段', async () => {
+    const first = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-leg' },
+      headers: GUARDIAN
+    })
+    const second = await send(url, '/approvals', {
+      body: { action: 'request_points_bonus', amount: 6, reason: '洗碗' },
+      headers: GUARDIAN
+    })
+    // 一条已拒绝的：默认视图**不该**出现
+    const rejected = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-old' },
+      headers: GUARDIAN
+    })
+    await send(url, `/approvals/${String(rejected.body.id)}/decide`, {
+      body: { decision: 'rejected' },
+      headers: GUARDIAN
+    })
+
+    const r = await get()
+    assert.equal(r.status, 200)
+    const items = itemsOf(r.body)
+    assert.deepEqual(
+      items.map((item) => item.id),
+      [second.body.id, first.body.id],
+      '顺序必须是最新在前；已拒绝的不该出现在 pending 视图'
+    )
+
+    const redeem = items[1].summary as Record<string, unknown>
+    assert.equal(redeem.kind, 'redeem')
+    assert.equal(redeem.title, '乐高')
+    assert.equal(redeem.cost, 100)
+    // ★ 服务端**不**下发「兑换乐高需要 100 分」这种展示串：文案由客户端派生
+    assert.equal(typeof redeem.text, 'undefined')
+
+    const bonus = items[0].summary as Record<string, unknown>
+    assert.equal(bonus.kind, 'bonus')
+    assert.equal(bonus.amount, 6)
+    assert.equal(bonus.reason, '洗碗')
+
+    // 时间戳是 ISO 字符串，且 pending 的 decidedAt 必须是 null
+    assert.equal(typeof items[0].createdAt, 'string')
+    assert.equal(items[0].decidedAt, null)
+    assert.equal(typeof items[0].expiresAt, 'string')
+    assert.equal(r.body.hasMore, false)
+  })
+
+  it('`status=rejected` / `status=all` 能取到终态（收件箱不只「待批」）', async () => {
+    const created = await send(url, '/approvals', {
+      body: { action: 'redeem', targetId: 'w-1' },
+      headers: GUARDIAN
+    })
+    const id = String(created.body.id)
+    await send(url, `/approvals/${id}/decide`, {
+      body: { decision: 'rejected' },
+      headers: GUARDIAN
+    })
+
+    const rejected = await get('?status=rejected')
+    assert.equal(rejected.status, 200)
+    assert.deepEqual(itemsOf(rejected.body).map((item) => item.id), [id])
+    assert.equal(itemsOf(rejected.body)[0].status, 'rejected')
+
+    const pending = await get('?status=pending')
+    assert.deepEqual(itemsOf(pending.body), [])
+
+    const all = await get('?status=all')
+    assert.equal(itemsOf(all.body).length, 1)
+  })
+
+
+
+
+  it('键集翻页：limit=2 → 第二页不重复、不遗漏，最后一页 nextCursor 必须为 null', async () => {
+    const ids: unknown[] = []
+    for (const target of ['w-1', 'w-2', 'w-3']) {
+      const created = await send(url, '/approvals', {
+        body: { action: 'redeem', targetId: target },
+        headers: GUARDIAN
+      })
+      ids.push(created.body.id)
+    }
+
+    const first = await get('?limit=2')
+    assert.equal(first.status, 200)
+    assert.deepEqual(itemsOf(first.body).map((item) => item.id), [ids[2], ids[1]])
+    assert.equal(first.body.hasMore, true)
+    const cursor = first.body.nextCursor
+    assert.equal(typeof cursor, 'string', '有下一页却没给 nextCursor —— 客户端取不回第二页')
+
+    const second = await get(`?limit=2&cursor=${encodeURIComponent(String(cursor))}`)
+    assert.equal(second.status, 200)
+    assert.deepEqual(itemsOf(second.body).map((item) => item.id), [ids[0]])
+    assert.equal(second.body.hasMore, false)
+    assert.equal(second.body.nextCursor, null)
+  })
+
+  it('坏游标 ⇒ 400 INVALID_APPROVAL_CURSOR（绝不静默退回第一页）', async () => {
+    const r = await get('?cursor=not-a-cursor')
+    assert.equal(r.status, 400)
+    assert.equal(r.body.code, 'INVALID_APPROVAL_CURSOR')
+    assert.equal(port.calls.some((c) => c.method === 'listForChild'), false, '坏游标不该查库')
+  })
+
+  it('未知 status / limit 越界 / 未知参数 ⇒ 400（形状 = 集合封闭）', async () => {
+    for (const query of ['?status=duh', '?limit=0', '?limit=101', '?limit=1.5', '?childId=child-2']) {
+      const r = await get(query)
+      assert.equal(r.status, 400, `${query} 应该被 400 拦下`)
+    }
+  })
+
+  it('孩子没有 `review_approvals` ⇒ 403，且端口一次都没被调用（矩阵照旧是唯一判据）', async () => {
+    const r = await send(url, '/approvals', { method: 'GET', headers: CHILD })
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'FORBIDDEN')
+    assert.equal(port.calls.length, 0)
+  })
+
+  it('★ 跨孩子隔离：另一家的 pending 不会出现在这个孩子的收件箱里', async () => {
+    port.rows.set('ap-other', {
+      id: 'ap-other',
+      childId: 'child-2',
+      action: 'redeem',
+      requesterUserId: 'u-other',
+      status: 'pending',
+      decidedByUserId: null,
+      executedRecordId: null
+    })
+    const r = await get('?status=all')
+    assert.equal(r.status, 200)
+    assert.deepEqual(itemsOf(r.body), [], '列表把别家的审批带出来了 —— 这是最严重的一类越权')
+  })
+
+  it('payload 坏掉的一行仍然出现在列表里，但 summary=null（不把整页打成 500）', async () => {
+    port.rows.set('ap-broken', {
+      id: 'ap-broken',
+      childId: CHILD_ID,
+      action: 'redeem',
+      requesterUserId: 'u-kid',
+      status: 'pending',
+      decidedByUserId: null,
+      executedRecordId: null,
+      // 历史行 / 迁移半途的行可能就是这个样子：列表不能因此整页 500
+      payload: { oops: true }
+    })
+    const r = await get()
+    assert.equal(r.status, 200)
+    assert.equal(itemsOf(r.body).length, 1)
+    assert.equal(itemsOf(r.body)[0].summary, null)
+  })
+})

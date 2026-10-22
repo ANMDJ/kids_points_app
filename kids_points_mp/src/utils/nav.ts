@@ -1,9 +1,10 @@
 import Taro from '@tarojs/taro'
 
-/** 三个 tab 页的路径，顺序和 AppBottomNav 一致。 */
+/** 四个 tab 页的路径，顺序和 AppBottomNav 一致。 */
 export const TAB_PAGES = [
   '/pages/home/index',
   '/pages/wishlist/index',
+  '/pages/approvals/index',
   '/pages/profile/index'
 ]
 

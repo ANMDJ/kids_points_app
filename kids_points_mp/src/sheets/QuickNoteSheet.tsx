@@ -36,10 +36,13 @@ export default function QuickNoteSheet({
   const [amount, setAmount] = useState(1)
   const [selectedReason, setSelectedReason] = useState('')
   const [typed, setTyped] = useState('')
+  /** 提交中：主按钮在这段时间里不再接受第二次点击。 */
+  const [saving, setSaving] = useState(false)
 
   const delta = isGain ? amount : -amount
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (saving) return
     const trimmed = typed.trim()
     // 选中标签优先，手写内容作为补充；两者都空时用默认文案
     const reason =
@@ -51,9 +54,13 @@ export default function QuickNoteSheet({
           ? '额外调整'
           : trimmed
 
-    const message = store.addQuickNote(delta, reason)
+    setSaving(true)
+    // live 模式走 POST /records/adjust（余额与流水以服务端为准）；
+    // 预览模式仍是本地写入 —— 两种模式的返回值语义一致。
+    const message = await store.submitQuickNote(delta, reason, trimmed)
+    setSaving(false)
     if (message) {
-      // 修 B6：超额扣分会被拒绝，必须把原因告诉家长（禁止静默失败）
+      // 修 B6：超额扣分会被服务端拒绝，必须把原因告诉家长（禁止静默失败）
       toast(message)
       return
     }
@@ -70,7 +77,9 @@ export default function QuickNoteSheet({
       visible={visible}
       title='记一笔'
       subtitle='家长手动加分或扣分，孩子立刻能看到'
-      actionLabel={`保存（${delta > 0 ? '+' : ''}${delta} 积分）`}
+      actionLabel={
+        saving ? '保存中…' : `保存（${delta > 0 ? '+' : ''}${delta} 积分）`
+      }
       actionIcon='check'
       onAction={handleSubmit}
       onClose={onClose}

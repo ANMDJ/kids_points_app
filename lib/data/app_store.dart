@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../models/approval.dart';
 import '../models/audit.dart';
 import '../models/child_profile.dart';
 import '../models/habit.dart';
+import '../models/invite.dart';
+import '../models/member.dart';
 import '../models/point_record.dart';
 import '../models/point_rule.dart';
 import '../models/rule_version.dart';
@@ -84,8 +87,95 @@ class AppStore extends ChangeNotifier {
   int _readEpoch = 0;
   bool _disposed = false;
 
+  // ─────────────────────── 家长审批收件箱（W5-D） ───────────────────────
+  //
+  // 与首页 / 流水**分开加载**：收件箱只有家长会打开，塞进 `refreshFromServer`
+  // 会让每个孩子的首页都多付一次请求（还有 403 的风险 —— 孩子角色本来就没
+  // 批准资格）。生命周期因此独立：进页面才拉，离开不清。
+
+  /// 一页收件箱条数：比流水页小，因为每行要解析 payload 生成摘要。
+  static const int _approvalsPageSize = 20;
+
+  /// 后端允许的状态过滤词（`APPROVAL_STATUS_FILTERS` 同口径）。
+  static const Set<String> approvalStatusFilters = <String>{
+    'pending',
+    'approved',
+    'rejected',
+    'withdrawn',
+    'invalidated',
+    'expired',
+    'all',
+  };
+
+  final List<ApprovalInboxItem> _approvalItems = <ApprovalInboxItem>[];
+  String _approvalFilter = 'pending';
+  ReadStatus _approvalReadStatus = ReadStatus.idle;
+  ReadApiException? _approvalError;
+  bool _hasMoreApprovals = false;
+  String? _nextApprovalCursor;
+
+  /// 收件箱自己的 epoch：切状态 / 重新拉取时作废在途响应（与 [_readEpoch] 同理）。
+  int _approvalEpoch = 0;
+
+  /// 正在提交判定的那条 id；非 null 时界面禁用所有按钮（防双击 / 防串批）。
+  String? _decidingApprovalId;
+
   /// 写请求串行化：防止双击把同一动作提交两次，也防止“撤销”与“打卡”交叉。
   bool _writeInFlight = false;
+
+  // ─────────────────────── 回收站（W5-F） ───────────────────────
+  //
+  // 只存**事实**：服务端下发的 `deletedAt`。`expired` 每次读时用
+  // `isTrashExpired` 现算 —— 缓存一个"是否过期"的布尔值，页面开着
+  // 跨过第 90 天就会说谎。
+
+  final List<TrashItem> _trashItems = <TrashItem>[];
+  ReadStatus _trashReadStatus = ReadStatus.idle;
+  ReadApiException? _trashError;
+
+  /// 回收站自己的 epoch：重复进入 / 手动刷新时作废在途响应（与 [_readEpoch] 同理）。
+  int _trashReadEpoch = 0;
+
+  // ─────────────────────── 家庭成员（W5-H） ───────────────────────
+  //
+  // 与回收站同策略：**进「成员」面板才拉**（`refreshMembers`），首页刷新不带
+  // 这次请求 —— 成员列表是低频数据，不该让每个孩子每次刷新都多付一次往返。
+  //
+  // 只存服务端下发的**事实**（角色 / 状态 / `isSelf`）；「我能不能改」由
+  // [canManageMembers] 从 `isSelf` 那一行现算，缓存成布尔值会在角色变化后说谎。
+
+  final List<FamilyMember> _members = <FamilyMember>[];
+  ReadStatus _membersReadStatus = ReadStatus.idle;
+  ReadApiException? _membersError;
+
+  /// 成员列表自己的 epoch：重复打开面板 / 手动刷新时作废在途响应。
+  int _membersReadEpoch = 0;
+
+  /// 正在提交改角色 / 移出的成员 id；非 null 时面板禁用该行按钮（防双击）。
+  String? _busyMemberId;
+
+  // ─────────────────────── 邀请码（W5-I） ───────────────────────
+  //
+  // 与成员列表同策略：**打开邀请码面板时才拉**（`refreshInvites`）。
+  // 邀请码是低频、且**只有家长能看**（`invite_member` guardian ALLOW）——
+  // 首页刷新带上它，孩子每次刷新都要吃一个 403。
+  //
+  // 列表里存的只是服务端事实（次数 / 有效期 / `revoked`），「还能不能用」
+  // 由 `InviteCode.statusAt(now)` 现算：把 `expired` 缓存成字段，面板开着
+  // 跨过有效期就会说谎。
+
+  final List<InviteCode> _invites = <InviteCode>[];
+  ReadStatus _invitesReadStatus = ReadStatus.idle;
+  ReadApiException? _invitesError;
+
+  /// 邀请码列表自己的 epoch：重复打开面板 / 手动刷新时作废在途响应。
+  int _invitesReadEpoch = 0;
+
+  /// 正在吊销的邀请码 id；非 null 时该行按钮禁用（防双击）。
+  String? _busyInviteId;
+
+  /// 是否正在生成邀请码（提交期间禁用「生成」按钮，避免连点产生一屏废码）。
+  bool _creatingInvite = false;
 
   /// 是否接入了后端（与「当前是否已加载成功」是两件事）。
   bool get isLiveMode => _readApi != null;
@@ -102,8 +192,11 @@ class AppStore extends ChangeNotifier {
   /// 首页打卡 / 长按撤销是否可用。
   bool get canWriteCheckIns => !isCheckInReadOnly;
 
-  /// 其它写入口（记一笔 / 心愿 / 档案）仍只读 —— W4-E 只接了两条打卡端点。
+  /// 仍未接后端的本地写入口（回收站 / 恢复演示数据）是否被只读拦截。
   /// 本地预览数据不受影响，可以随便点 —— 那本来就是演示。
+  ///
+  /// 具体写入口不要再用它判断，各自有专属的 `is*ReadOnly`
+  /// （打卡 / 规则 / 心愿 / 档案在 live 模式下都已接后端）。
   bool get isReadOnly => isLiveMode;
 
   /// 规则写入口是否被只读拦截（W5-A：新建 / 编辑 / 删除 / 加入习惯）。
@@ -115,6 +208,133 @@ class AppStore extends ChangeNotifier {
   /// 只读模式下规则写操作的文案 —— 页面直接展示，不另编理由。
   String get ruleReadOnlyWriteMessage =>
       '只读模式：规则写入还没有接上后端，这次操作没有保存到服务器。';
+
+  /// 心愿写入口是否被只读拦截（W5-C：新增 / 删除）。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下这两条已经接了后端，不该再被全局
+  /// 「写入口未接」拦掉；只有**没注入写客户端**时才拦。
+  bool get isWishWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下心愿写操作的文案 —— 页面直接展示，不另编理由。
+  String get wishReadOnlyWriteMessage =>
+      '只读模式：心愿写入还没有接上后端，这次操作没有保存到服务器。';
+
+  /// 档案写入口（昵称）是否被只读拦截（W5-E）。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下昵称已经接了后端（`PATCH /child`），
+  /// 不该再被全局「写入口未接」拦掉；只有**没注入写客户端**时才拦。
+  bool get isProfileWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下档案写操作的文案 —— 页面直接展示，不另编理由。
+  String get profileReadOnlyWriteMessage =>
+      '只读模式：昵称修改暂时写不进去（写客户端未就绪），这次没有保存到服务器。';
+
+  // ─────────────────────── 回收站（W5-F，服务端） ───────────────────────
+  //
+  // 与审批收件箱同策略：**进回收站页才拉**（`refreshTrash`）。首页 / 流水
+  // 刷新不额外带这次请求 —— 回收站是低频页面，不该让每个孩子每次刷新
+  // 都多付一次往返。代价是 profile 上的条数在打开回收站之前是 0（不显示），
+  // 这比"猜一个数"诚实。
+
+  /// 回收站加载状态（与首页 [readStatus] 分开：回收站失败不该把首页画成错误页）。
+  ReadStatus get trashReadStatus => _trashReadStatus;
+
+  /// 回收站的加载错误（403 = 没有查看资格；**不能**显示成"回收站是空的"）。
+  ReadApiException? get trashError => _trashError;
+
+  /// 回收站读到的条目（live）。预览模式恒为空 —— 预览的回收站来自本地列表。
+  List<TrashItem> get _liveTrashRows => _trashItems;
+
+  /// 回收站写入口（恢复 / 彻底删除）是否被只读拦截。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下这两条已经接了后端，只有**没注入
+  /// 写客户端**时才拦；预览模式反而可以随便点（那是演示数据）。
+  bool get isTrashWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下回收站写操作的文案 —— 页面直接展示，不另编理由。
+  String get trashReadOnlyWriteMessage =>
+      '只读模式：回收站操作暂时写不进去（写客户端未就绪），这次没有保存到服务器。';
+
+  /// 习惯写入口（删除首页习惯）是否被只读拦截（W5-F）。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下 `DELETE /habits/:id` 已经接了后端，
+  /// 只有**没注入写客户端**时才拦。
+  bool get isHabitWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下习惯写操作的文案 —— 页面直接展示，不另编理由。
+  String get habitReadOnlyWriteMessage =>
+      '只读模式：习惯删除还没有接上后端，这次操作没有保存到服务器。';
+
+  // ─────────────────────── 家庭成员（W5-H，服务端） ───────────────────────
+
+  /// 成员列的**只读快照**（服务端顺序：家长在前、按加入时间）。
+  List<FamilyMember> get members => List<FamilyMember>.unmodifiable(_members);
+
+  /// 成员列表加载状态（与首页 [readStatus] 分开：403 不该把首页画成错误页）。
+  ReadStatus get membersReadStatus => _membersReadStatus;
+
+  /// 成员列表的加载错误（403 = 没有查看资格，**不能**显示成「没有成员」）。
+  ReadApiException? get membersError => _membersError;
+
+  /// 正在提交改角色 / 移出的成员 id；非 null 时该行按钮应禁用。
+  String? get busyMemberId => _busyMemberId;
+
+  /// 成员写入口（改角色 / 移出）是否被只读拦截。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下这两条已经接了后端，只有**没注入
+  /// 写客户端**时才拦；预览模式没有真实成员，面板另有空态文案。
+  bool get isMemberWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下成员写操作的文案 —— 页面直接展示，不另编理由。
+  String get memberReadOnlyWriteMessage =>
+      '只读模式：成员管理暂时写不进去（写客户端未就绪），这次没有保存到服务器。';
+
+  /// 「我」那一行；服务端没下发（或列表还没拉到）时为 null。
+  FamilyMember? get selfMember {
+    for (final FamilyMember member in _members) {
+      if (member.isSelf) return member;
+    }
+    return null;
+  }
+
+  /// 当前用户能否管理成员 —— **只看自己那一行的角色**。
+  ///
+  /// 服务端仍然是最终裁决者：这里为 true 只表示「界面可以给出按钮」，
+  /// 真正的拒绝（403 `FORBIDDEN` / `CANNOT_MODIFY_SELF`）照样原样上报。
+  bool get canManageMembers => selfMember?.role == MemberRole.guardian;
+
+  // ─────────────────────── 邀请码（W5-I，服务端） ───────────────────────
+
+  /// 邀请码列的**只读快照**（服务端顺序：新码在前）。
+  List<InviteCode> get invites => List<InviteCode>.unmodifiable(_invites);
+
+  /// 邀请码列表加载状态（与首页 / 成员状态分开）。
+  ReadStatus get invitesReadStatus => _invitesReadStatus;
+
+  /// 邀请码列表的加载错误（403 = 当前身份没有 `invite_member`，
+  /// **不能**画成「还没有邀请码」）。
+  ReadApiException? get invitesError => _invitesError;
+
+  /// 正在吊销的邀请码 id；非 null 时该行按钮应禁用。
+  String? get busyInviteId => _busyInviteId;
+
+  /// 是否正在生成 / 吊销邀请码 —— 面板据此禁用所有写按钮（防双击造出一屏废码）。
+  bool get isInviteWriteBusy => _creatingInvite || _busyInviteId != null;
+
+  /// 邀请码写入口（生成 / 吊销）是否被只读拦截。
+  bool get isInviteWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下邀请码写操作的文案 —— 页面直接展示，不另编理由。
+  String get inviteReadOnlyWriteMessage =>
+      '只读模式：邀请码暂时写不进去（写客户端未就绪），这次没有保存到服务器。';
+
+  /// 能否管理邀请码 —— 与 [canManageMembers] 同一条判据（`invite_member`
+  /// 在矩阵里只有 guardian ALLOW）。服务端仍是最终裁决者：
+  /// 这里为 true 只表示「界面可以给出按钮」，403 照样原样上报。
+  ///
+  /// 注意：它依赖**成员列表已拉到**（`selfMember`），所以邀请码面板打开时
+  /// 要先 `refreshMembers()` —— 否则家长会看到一个空面板。
+  bool get canManageInvites => canManageMembers;
 
   ReadStatus get readStatus => _readStatus;
 
@@ -129,8 +349,41 @@ class AppStore extends ChangeNotifier {
   /// 当前记录页的服务端筛选（null = 全部）。
   RecordCategory? get recordFilter => _recordFilter;
 
+  // ------------------------------------------------ 审批收件箱的只读视图
+
+  /// 收件箱当前的 `status` 过滤词（默认 `pending`）。
+  String get approvalStatusFilter => _approvalFilter;
+
+  /// 收件箱加载状态。与首页的 [readStatus] **分开**：收件箱失败不该把
+  /// 首页也画成错误页，反之亦然。
+  ReadStatus get approvalReadStatus => _approvalReadStatus;
+
+  /// 收件箱的加载错误（403 = 没有批准资格，页面要如实说，而不是「暂无」）。
+  ReadApiException? get approvalError => _approvalError;
+
+  bool get hasMoreApprovals => _hasMoreApprovals;
+
+  /// 已加载的收件箱行（新 → 旧，服务端顺序原样保留）。
+  List<ApprovalInboxItem> get approvals =>
+      List<ApprovalInboxItem>.unmodifiable(_approvalItems);
+
+  /// 当前已加载里还「待处理」的条数（底部导航红点用；不是服务端总数）。
+  int get pendingApprovalCount =>
+      _approvalItems.where((ApprovalInboxItem item) => item.isPending).length;
+
+  /// 正在提交判定的那条申请 id；非 null 时按钮全部禁用。
+  String? get decidingApprovalId => _decidingApprovalId;
+
+  /// 收件箱的写入是否可用：live 且注入了写客户端。
+  bool get canDecideApprovals => isLiveMode && _writeApi != null;
+
   /// 只读模式下写操作统一文案 —— 页面直接展示，不另编理由。
-  String get readOnlyWriteMessage => '只读模式：记一笔 / 心愿等写入还没接后端，这次操作没有保存到服务器。';
+  ///
+  /// 走到这里有两个原因，文案同时覆盖：写客户端没能构造出来（配置缺失 / 构造失败），
+  /// 或这个能力压根还没有端点（回收站恢复、恢复演示数据）。不再点名具体功能 ——
+  /// W5-B 之后「兑换 / 记一笔 / 档案」都已经能真写，旧文案会变成假话。
+  String get readOnlyWriteMessage =>
+      '只读模式：这个操作暂时写不进去（写客户端未就绪或尚未接后端），没有保存。';
 
   /// 记录页要展示的流水：
   ///   · 预览模式：对本地流水按分类过滤（原逻辑）；
@@ -188,6 +441,25 @@ class AppStore extends ChangeNotifier {
     records.clear();
     ruleVersions.clear();
     auditLog.clear();
+    _approvalItems.clear();
+    _approvalFilter = 'pending';
+    _approvalReadStatus = ReadStatus.idle;
+    _approvalError = null;
+    _hasMoreApprovals = false;
+    _nextApprovalCursor = null;
+    _decidingApprovalId = null;
+    _trashItems.clear();
+    _trashReadStatus = ReadStatus.idle;
+    _trashError = null;
+    _members.clear();
+    _membersReadStatus = ReadStatus.idle;
+    _membersError = null;
+    _busyMemberId = null;
+    _invites.clear();
+    _invitesReadStatus = ReadStatus.idle;
+    _invitesError = null;
+    _busyInviteId = null;
+    _creatingInvite = false;
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -366,6 +638,167 @@ class AppStore extends ChangeNotifier {
       _readStatus = ReadStatus.error;
     }
     _notify();
+  }
+
+  // ------------------------------------------------- 审批收件箱（W5-D）
+
+  /// 拉取收件箱第一页（live）。预览模式没有审批数据 —— 直接进入
+  /// `ready` 空态，页面据此显示「预览模式没有待审批的申请」，而不是报错。
+  ///
+  /// ★ 为什么不像 `/home` 那样在 [refreshFromServer] 里一起拉：
+  ///   · 孩子角色调用这个端点必然 403，把 403 塞进首页刷新会污染首页错误；
+  ///   · 收件箱只在家长打开时才有用，没必要每次首页刷新都付一次请求。
+  Future<void> refreshApprovals() => _loadApprovals(append: false);
+
+  /// 追加下一页；没有更多 / 正在加载时直接返回。
+  Future<void> loadMoreApprovals() async {
+    if (!_hasMoreApprovals || _nextApprovalCursor == null) return;
+    if (_approvalReadStatus == ReadStatus.loading ||
+        _approvalReadStatus == ReadStatus.loadingMore) {
+      return;
+    }
+    await _loadApprovals(append: true);
+  }
+
+  /// 切换收件箱状态过滤（`pending` / `approved` / `rejected` / …）。
+  ///
+  /// 与流水分类同一纪律：live 模式**重新向服务端要第一页**（带 `status`），
+  /// 因为本地只过滤已加载的 20 条会漏掉后面的同类申请。未知过滤词直接忽略。
+  Future<void> setApprovalStatusFilter(String status) async {
+    if (status == _approvalFilter) return;
+    if (!approvalStatusFilters.contains(status)) return;
+    _approvalFilter = status;
+    _approvalItems.clear();
+    _hasMoreApprovals = false;
+    _nextApprovalCursor = null;
+    _approvalError = null;
+    await _loadApprovals(append: false);
+  }
+
+  Future<void> _loadApprovals({required bool append}) async {
+    final ReadApiClient? api = _readApi;
+
+    if (api == null) {
+      // 预览：没有后端可问。明确置空 + ready，让页面说「预览模式没有」，
+      // 而不是停在 loading 转圈或显示一个编出来的假申请。
+      _approvalEpoch++;
+      _approvalItems.clear();
+      _hasMoreApprovals = false;
+      _nextApprovalCursor = null;
+      _approvalError = null;
+      _approvalReadStatus = ReadStatus.ready;
+      _notify();
+      return;
+    }
+
+    final int epoch = ++_approvalEpoch;
+    _approvalReadStatus = append ? ReadStatus.loadingMore : ReadStatus.loading;
+    _approvalError = null;
+    if (!append) {
+      _approvalItems.clear();
+      _hasMoreApprovals = false;
+      _nextApprovalCursor = null;
+    }
+    _notify();
+
+    try {
+      final ApprovalsPageDto dto = await api.fetchApprovals(
+        status: _approvalFilter,
+        limit: _approvalsPageSize,
+        cursor: append ? _nextApprovalCursor : null,
+      );
+      if (epoch != _approvalEpoch || _disposed) return;
+
+      final ApprovalsPage page = mapApprovalsPage(dto);
+      // 按 id 去重：键集翻页本不该重叠，但客户端多一道保险。
+      final Set<String> known =
+          _approvalItems.map((ApprovalInboxItem item) => item.id).toSet();
+      _approvalItems.addAll(
+        page.items.where((ApprovalInboxItem item) => known.add(item.id)),
+      );
+      _nextApprovalCursor = page.nextCursor;
+      _hasMoreApprovals = page.hasMore;
+      _approvalReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (epoch != _approvalEpoch || _disposed) return;
+      _approvalError = error;
+      _approvalReadStatus = ReadStatus.error;
+      // 失败时保留已加载的行（与流水一致）：网络抖一下不该让家长丢掉列表，
+      // 页面会在顶部显示错误横幅 + 重试入口。
+    } catch (error) {
+      if (epoch != _approvalEpoch || _disposed) return;
+      _approvalError = _unexpectedReadError(error);
+      _approvalReadStatus = ReadStatus.error;
+    }
+    _notify();
+  }
+
+  /// 批准 / 拒绝一条申请。成功返回 null（界面自己提示），失败返回可展示文案。
+  ///
+  /// 三层校验，缺一层都会让界面说谎：
+  ///   ① **本地能判死的先拒**：已终态 / 已过期 / 内容读不懂 —— 这类请求发出去
+  ///      只会换来 409，而且白白让列表里的状态晚一拍才更新；
+  ///   ② 发送前设 [_decidingApprovalId]，双击不会变成两次判定（幂等键只是第二道）；
+  ///   ③ 409 一律**重新拉列表**：服务端说「已经处理过」时，本地那条早已过期，
+  ///      不刷新就会一直显示着一条点不动的申请。
+  Future<String?> decideApproval(
+    ApprovalInboxItem item, {
+    required bool approve,
+    DateTime? now,
+  }) async {
+    final DateTime moment = now ?? DateTime.now();
+
+    if (!isLiveMode) return '预览模式没有需要处理的申请。';
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return '只读模式：审批写入还没有接上后端，这次操作没有保存到服务器。';
+    }
+    if (item.id.trim().isEmpty) return '申请 id 不能为空';
+    if (!item.isPending) return '这条申请已经处理过了，请刷新列表。';
+    if (item.isExpiredAt(moment)) {
+      return '这条申请已超过 72 小时有效期，不能再批 / 拒，请让孩子重新提交。';
+    }
+    if (approve && item.summary == null) {
+      return item.approveBlockedReasonAt(moment) ?? '内容无法识别，不能批准。';
+    }
+    if (_decidingApprovalId != null) return '上一条申请正在处理中，请稍候…';
+
+    _decidingApprovalId = item.id;
+    _notify();
+    try {
+      final ApprovalDto result = await api.decideApproval(
+        item.id,
+        approve: approve,
+        idempotencyKey: _newIdempotencyKey('approval-decide'),
+      );
+      if (_disposed) return null;
+
+      // 服务端回包的状态必须与这次点击一致；不一致说明契约漂移，不能当成功。
+      final String expected = approve ? 'approved' : 'rejected';
+      if (result.status != expected) {
+        await refreshApprovals();
+        return '服务端返回的状态是「${result.status}」，'
+            '与这次操作不一致，请刷新确认。';
+      }
+
+      // 批准会写账本 / 改余额 / 可能新建心愿 ⇒ 首页数据必须重拉，
+      // 否则家长回到首页看到的还是旧积分。
+      if (approve) await refreshFromServer();
+      await refreshApprovals();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.conflict) {
+        // 409：本地看到的那条已经过时了。刷新后界面才与服务端一致。
+        await refreshApprovals();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '这次审批结果无法确认，请刷新后查看，避免重复提交。';
+    } finally {
+      _decidingApprovalId = null;
+      _notify();
+    }
   }
 
   void _applyHomeSnapshot(HomeSnapshot home) {
@@ -883,6 +1316,23 @@ class AppStore extends ChangeNotifier {
     _persist();
   }
 
+  /// 写回包 → UI 心愿模型（与服务端快照同一套映射）。
+  void _applyWishDto(WishDto dto) {
+    final Wish wish;
+    try {
+      wish = mapWish(dto, 'wish');
+    } on ReadApiException catch (error) {
+      throw WriteApiException.malformed(
+        'wish',
+        detail: error.detail ?? error.userMessage,
+      );
+    }
+    _wishList
+      ..removeWhere((Wish item) => item.id == wish.id)
+      ..insert(0, wish);
+    _persist();
+  }
+
   /// 写回包 → UI 习惯模型。
   void _applyHabitDto(HabitDto dto) {
     final Habit habit;
@@ -1029,6 +1479,65 @@ class AppStore extends ChangeNotifier {
     return null;
   }
 
+  // ------------------------------------------------- 服务端写入口（W5-B：记一笔）
+
+  /// 「记一笔」的服务端写入口。
+  ///
+  /// · 预览模式：走本地 [addQuickNote]，返回值语义完全不变；
+  /// · live 模式：POST `/records/adjust` —— 服务端在**一个事务**里锁余额、
+  ///   写流水、写审计；成功后先把回包落到本地，再用服务端快照校正。
+  ///
+  /// 与 [addQuickNote] 的两点差别，都是「服务端说了算」的直接后果：
+  ///   1. **余额够不够扣由服务端在锁内判定**（409 `INSUFFICIENT_POINTS`）；
+  ///      本地 `_points` 可能已被别的设备改过，不能拿它当裁决依据 ——
+  ///      拿旧余额拒绝一次合法扣分，和静默截断余额（B6）一样糟；
+  ///   2. 流水 id / `balanceAfter` 全部来自回包，本地不先造一条 ——
+  ///      否则刷新后会出现「本地一条 + 服务端一条」两笔。
+  ///
+  /// 写请求全程串行：第二次点击在第一次结束前到达时直接返回提示。
+  Future<String?> submitQuickNote({
+    required int delta,
+    required String reason,
+    String note = '',
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (delta == 0) {
+      return '调整金额不能为 0';
+    }
+    if (!isLiveMode) {
+      return addQuickNote(delta: delta, reason: reason, note: note, actor: actor);
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return '只读模式：记一笔还没有接上后端，这次操作没有保存到服务器。';
+    }
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    // 空事由用默认文案 —— 与 [addQuickNote] 同一口径，标题必须解释这一笔。
+    final String title =
+        reason.trim().isEmpty ? (delta > 0 ? '额外奖励' : '扣除积分') : reason.trim();
+
+    _writeInFlight = true;
+    try {
+      final WrittenRecordDto result = await api.adjust(
+        title: title,
+        points: delta,
+        note: note,
+        idempotencyKey: _newIdempotencyKey('adjust'),
+      );
+      if (_disposed) return null;
+      _applyWrittenRecord(result.record);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '记一笔的请求已发出，但结果无法确认。请刷新后查看，避免重复操作。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
   // ------------------------------------------------------------ 心愿单
 
   /// 兑换心愿。成功返回 true，积分不足或已兑换返回 false。
@@ -1120,6 +1629,188 @@ class AppStore extends ChangeNotifier {
     final Wish? live = _findById(_wishList, wish.id);
     if (live == null) return;
     if (_softDelete(live, TrashKind.wish, actor)) _persist();
+  }
+
+  // ------------------------------------------- 服务端写入口（W5-C：心愿）
+
+  /// 新增心愿（服务端写入口）。
+  ///
+  /// · 预览模式：走本地 [addWish]，返回值语义不变（null = 成功）；
+  /// · live 模式：POST `/wishes`。服务端在同一事务里写心愿 + 审计日志，
+  ///   配色由服务端按「空档优先，否则 id 哈希」决定（不传 coverStyle）。
+  ///
+  /// 家长 ⇒ 直接生效；孩子的权限矩阵若是 `REQUIRE_APPROVAL`，服务端回
+  /// 403 `APPROVAL_REQUIRED` —— 这里**不吞**它，原样把可读文案交回界面，
+  /// 让家长知道「没保存」而不是以为已经加上了。
+  Future<String?> submitAddWish({
+    required String title,
+    required int cost,
+    required String emoji,
+    ActorContext actor = const ActorContext(),
+  }) async {
+    final String trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) return '先给心愿起个名字吧～';
+    if (cost < 1) return '心愿需要的积分至少是 1 分';
+    if (!isLiveMode) {
+      addWish(
+        title: trimmedTitle,
+        cost: cost,
+        emoji: emoji,
+        actor: actor,
+      );
+      return null;
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return wishReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final WishDto dto = await api.createWish(
+        title: trimmedTitle,
+        cost: cost,
+        emoji: emoji,
+        idempotencyKey: _newIdempotencyKey('wish-create'),
+      );
+      if (_disposed) return null;
+      _applyWishDto(dto);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '心愿请求已发出，但结果无法确认。请刷新后查看，避免重复提交。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 删除心愿（服务端写入口 `delete_wish`）—— **软删**，与 [removeWish] 同语义。
+  ///
+  /// 不碰任何流水：已发生的兑换记录继续带 `wishId` 回指（修 C9），
+  /// 所以「那 40 分换的是什么」永远答得出。真正删不掉的只是列表上的一项。
+  Future<String?> submitRemoveWish(
+    Wish wish, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) {
+      removeWish(wish, actor: actor);
+      return null;
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return wishReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      // 客户端会校验回包 `wishId` 与请求一致（不一致 ⇒ malformed），
+      // 因此这里拿到的一定是「刚删的那条」。
+      await api.deleteWish(
+        wish.id,
+        idempotencyKey: _newIdempotencyKey('wish-delete'),
+      );
+      if (_disposed) return null;
+      removeWish(wish, actor: actor);
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '删除请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  // ------------------------------------------------------------ 积分规则
+
+  /// 兑换心愿（服务端写入口）。
+  ///
+  /// 后端**没有**「直接兑换」的接口：`redeem` 在权限矩阵里对两个角色都是
+  /// `REQUIRE_APPROVAL`，唯一正确路径是 `POST /approvals` 建一条申请。
+  /// 因此这里的返回值语义与其它写入口不同 —— **null 只代表「已生效」**，
+  /// 而 `pending` 是一个**要展示给用户的正常结果**（文案里明说「等家长确认、
+  /// 还没扣分」），不能当成功静默掉。
+  ///
+  /// 兑换前的**确认文案** —— 只用于弹窗，不参与任何写请求。
+  ///
+  /// 两种模式必须说两种话，否则弹窗自己就在骗人：
+  ///   · live：`redeem` 在矩阵里是 `REQUIRE_APPROVAL` ⇒ 点「提交申请」只是**建一条审批**，
+  ///     此刻一分不扣（`pending` 不是成功），所以不能写「立即扣除」；
+  ///   · 预览：没有服务端可申请，确认就直接本地扣分 —— 这时写「等家长确认」
+  ///     等于演一场永远不会有人批的戏。
+  String redeemConfirmText(Wish wish) {
+    if (!isLiveMode) {
+      return '要花 ${wish.cost} 分兑换“${wish.title}”吗？'
+          '确认后积分会立即扣除，心愿会标记为已兑换。';
+    }
+    return '要把“${wish.title}”提交给家长确认吗？'
+        '家长批准后才会扣 ${wish.cost} 分，现在还没有扣。';
+  }
+
+  /// 预览模式仍走本地 [redeem]（没有后端可申请，演示需要能看见扣分）。
+  Future<String?> submitRedeemWish(
+    Wish wish, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    // 本地就能判死的先拒：空 id 进到 `requestRedeem` 会抛 `ArgumentError`，被下面的
+    // 兜底 catch 翻成「兑换申请已发出」—— 一个字节都没发出去，不能这么说。
+    if (wish.id.trim().isEmpty) return '心愿 id 不能为空';
+    if (!isLiveMode) {
+      return redeem(wish, actor: actor) ? null : '积分还不够，继续加油打卡吧！';
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return readOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      final ApprovalDto approval = await api.requestRedeem(
+        wish.id,
+        idempotencyKey: _newIdempotencyKey('wish-redeem'),
+      );
+      if (_disposed) return null;
+      switch (approval.status) {
+        case 'approved':
+          // 家长自批（或服务端瞬时批准）：以服务端快照为准，不手写扣分。
+          await refreshFromServer();
+          return null;
+        case 'pending':
+          return '已提交给家长确认：批准后才会扣 ${wish.cost} 分，'
+              '心愿也会标记为已兑换。';
+        case 'rejected':
+          return '家长拒绝了这次兑换，积分没有变动。';
+        case 'withdrawn':
+          return '这次兑换申请已被撤回，积分没有变动。';
+        case 'invalidated':
+          return '这次兑换无法生效（${_autoReasonText(approval.autoReason)}），'
+              '积分没有变动。';
+        default:
+          // 未知状态不猜：宁可让用户刷新确认，也不能把「不清楚」说成「成功」。
+          return '服务端返回了未知的审批状态「${approval.status}」，'
+              '请刷新后查看兑换结果。';
+      }
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '兑换申请已发出，但结果无法确认。请刷新后查看，避免重复提交。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 审批被自动判无效的原因 → 家长看得懂的一句话（`02` §4.2）。
+  String _autoReasonText(String? reason) {
+    switch (reason) {
+      case 'WISH_DELETED':
+        return '心愿已经被删除了';
+      case 'INSUFFICIENT_POINTS':
+        return '积分不够了';
+      case 'MEMBER_REMOVED':
+        return '成员已经被移出家庭';
+      default:
+        return '已有前提发生变化';
+    }
   }
 
   // ------------------------------------------------------------ 积分规则
@@ -1258,6 +1949,57 @@ class AppStore extends ChangeNotifier {
       actor,
     );
     _persist();
+  }
+
+  /// 改孩子昵称（服务端写入口 `edit_child_profile`，W5-E，2026-10-21）。
+  ///
+  /// 三种世界三种结局，语义与其它 `submit*` 一致：
+  ///   · 预览（无后端）：走本地 [renameChild]，返回 null —— 演示数据本来就该生效；
+  ///   · live 但没注入写客户端：返回只读文案，**不改内存**（否则刷新就打回原形）；
+  ///   · live 且有写客户端：PATCH 成功后用**服务端返回的 name** 覆盖本地档案，
+  ///     失败返回可展示文案，本地档案保持原样。
+  ///
+  /// 为什么要以服务端返回值为准：服务端会 trim、未来还可能做敏感词替换。
+  /// 本地照抄输入就会显示一个库里并不存在的昵称 —— 那正是「看着成功」的假象。
+  Future<String?> submitRenameChild(
+    String name, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    final String trimmed = name.trim();
+    if (trimmed.isEmpty) return '昵称不能为空，这次没有保存。';
+
+    if (!isLiveMode) {
+      renameChild(trimmed, actor: actor);
+      return null;
+    }
+
+    final WriteApi? api = _writeApi;
+    if (api == null) return profileReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    // 没有变化就不发请求：PATCH 虽然幂等，但白跑一次往返换不回任何信息，
+    // 还要在审计上多写一条「无变化」的判断路径（服务端也要锁一次行）。
+    if (profile.name == trimmed) return '昵称没有变化，这次没有提交。';
+
+    _writeInFlight = true;
+    try {
+      final ChildProfileDto written = await api.renameChild(trimmed);
+      if (_disposed) return null;
+      profile.name = written.name;
+      _persist();
+      // 刻意**不**顺手 `refreshFromServer()`：改名只动 `/home` 里的 `child.name`
+      // 这一个字段，而它的权威值已经在 PATCH 回包里了。再拉一次只多一次往返，
+      // 还可能被一个滞后（读副本 / 缓存）的快照把刚改好的名字盖回去。
+      return null;
+    } on ArgumentError {
+      return '昵称不能为空，这次没有保存。';
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '改名请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
   }
 
   // ============================================ 回收站（修 C9）＋ 审计（修 C11）
@@ -1401,6 +2143,27 @@ class AppStore extends ChangeNotifier {
   /// **不做任何自动清理**（过期不等于必须删，产品决定）。
   List<TrashItem> trashItems({DateTime? now}) {
     final DateTime time = now ?? DateTime.now();
+    // 分支看 `_readApi`（= 接了服务端的 live 客户端）而不是 `_usingPreview`：
+    // `_usingPreview` 只表示「首页还没成功拉过一次」，那时把预览用的演示条目
+    // 混进回收站，会让家长看到一堆自己从没删过的东西。live 下就是空列表 +
+    // 加载状态（`trashReadStatus`），由页面照实显示。
+    if (_readApi != null) {
+      // live：条目来自 `GET /trash`（服务端只说"哪条被删了、什么时候删的"），
+      // 过期与否在这里用**同一份** 90 天常量现算。
+      return _liveTrashRows
+          .map(
+            (TrashItem item) => TrashItem(
+              kind: item.kind,
+              id: item.id,
+              title: item.title,
+              deletedAt: item.deletedAt,
+              expired: isTrashExpired(item.deletedAt, now: time),
+            ),
+          )
+          .toList(growable: false)
+        ..sort((TrashItem a, TrashItem b) =>
+            b.deletedAt.compareTo(a.deletedAt));
+    }
     final List<TrashItem> rows = <TrashItem>[];
     void collect(TrashKind kind) {
       for (final SoftDeletable item in trashOnly(_listOf(kind))) {
@@ -1522,6 +2285,491 @@ class AppStore extends ChangeNotifier {
   /// 从回收站恢复某个习惯 —— 修 C9。
   bool restoreHabit(Habit habit, {ActorContext actor = const ActorContext()}) =>
       restoreTrash(TrashKind.habit, habit.id, actor: actor);
+
+  // ============================================ 回收站：服务端读写（W5-F）
+
+  /// 拉取回收站（`GET /trash`）—— **进回收站页时**调用，不进首页刷新。
+  ///
+  /// 失败**不清空**上一次成功的结果：把列表清成「回收站是空的」会让用户
+  /// 以为东西已经被彻底删了，那是最坏的一种谎言。错误经 [trashError] 上报，
+  /// 页面照实显示（403 = 没有查看资格）。
+  Future<void> refreshTrash() async {
+    final ReadApiClient? api = _readApi;
+    // 纯本地预览（`readApi == null`）：回收站来自本地列表，没有可拉的东西。
+    //
+    // 这里**刻意不看** `_usingPreview`：那个标志的含义是「首页还没成功拉过一次」，
+    // 首页拉失败 / 还没拉完时回收站照样可以独立请求 —— 否则回收站页会停在
+    // 「加载中」或直接空白，把一次首页故障放大成两页不可用。
+    if (api == null || _disposed) return;
+    final int epoch = ++_trashReadEpoch;
+    _trashReadStatus = ReadStatus.loading;
+    _trashError = null;
+    _notify();
+    try {
+      final TrashListDto dto = await api.fetchTrash();
+      if (_disposed || api != _readApi || epoch != _trashReadEpoch) return;
+      _trashItems
+        ..clear()
+        ..addAll(mapTrash(dto));
+      _trashReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _trashReadEpoch) return;
+      _trashError = error;
+      _trashReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _trashReadEpoch) return;
+      _trashError = ReadApiException.network(error);
+      _trashReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _trashReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 删除首页习惯（服务端写入口，`DELETE /habits/:id`）—— 修 C9 / W5-F。
+  ///
+  /// 软删：服务端只改 `status='deleted'` + `deletedAt`，**不碰流水**，
+  /// 因此卡片上的历史打卡仍能回指这条习惯。本地镜像立刻跟上，随后刷新。
+  Future<String?> submitRemoveHabit(
+    Habit habit, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) {
+      removeHabit(habit, actor: actor);
+      return null;
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return habitReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      await api.deleteHabit(
+        habit.id,
+        idempotencyKey: _newIdempotencyKey('habit-delete'),
+      );
+      if (_disposed) return null;
+      // 先让本地镜像跟上：即使随后的刷新失败，也不会留一条「已删却还在首页」
+      // 的习惯（`deletedAt` 用本地时间，刷新成功后以服务端为准）。
+      final Habit? local = _findById(_habitList, habit.id);
+      if (local != null && local.status != RecordStatus.deleted) {
+        local.status = RecordStatus.deleted;
+        local.deletedAt = DateTime.now();
+        _persist();
+      }
+      await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '删除请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 从回收站恢复一条（`POST /trash/:kind/:id/restore`）—— W5-F。
+  ///
+  /// 返回 null 才是成功；字符串是**要展示给用户的失败原因**（409
+  /// `TRASH_PARENT_RULE_DELETED` 之类的服务端判定，客户端不自己编）。
+  Future<String?> submitRestoreTrash(
+    TrashItem item, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) {
+      return restoreTrash(item.kind, item.id, actor: actor)
+          ? null
+          : '这条内容已经不在了，请刷新回收站。';
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return trashReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      await api.restoreTrashItem(item.kind.wireName, item.id);
+      if (_disposed) return null;
+      // 恢复会改变首页 / 规则页 / 心愿页的可见集合 ⇒ 读状态与回收站都要刷新。
+      await Future.wait(<Future<void>>[refreshFromServer(), refreshTrash()]);
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '恢复请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 彻底删除一条（`DELETE /trash/:kind/:id`）—— **不可逆**，W5-F。
+  ///
+  /// 服务端拒绝时（还有流水引用 / 根本没软删）原样返回原因 ——
+  /// 这两种「拒绝」都是正确行为，不能当成功。
+  Future<String?> submitPurgeTrash(
+    TrashItem item, {
+    ActorContext actor = const ActorContext(),
+  }) async {
+    if (!isLiveMode) {
+      return purgeTrash(item.kind, item.id, actor: actor)
+          ? null
+          : '这条内容已经不在回收站里了，请刷新后重试。';
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) return trashReadOnlyWriteMessage;
+    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+
+    _writeInFlight = true;
+    try {
+      await api.purgeTrashItem(item.kind.wireName, item.id);
+      if (_disposed) return null;
+      _trashItems.removeWhere(
+        (TrashItem row) => row.kind == item.kind && row.id == item.id,
+      );
+      _notify();
+      await refreshTrash();
+      return null;
+    } on WriteApiException catch (error) {
+      return error.userMessage;
+    } catch (error) {
+      return '彻底删除请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _writeInFlight = false;
+    }
+  }
+
+  /// 清理**已过期**（满 90 天）的回收站条目 —— W5-F。
+  ///
+  /// 批量是**逐条**调的，所以如实把「清掉几条 / 几条没清掉」报回去
+  /// （[TrashPurgeOutcome]）：第 3 条失败时前 2 条真的已经删了，
+  /// 只说成功或只说失败都是在骗人。
+  Future<TrashPurgeOutcome> submitPurgeExpiredTrash({
+    DateTime? now,
+    ActorContext actor = const ActorContext(),
+  }) async {
+    final DateTime time = now ?? DateTime.now();
+    final List<TrashItem> expired = trashItems(now: time)
+        .where((TrashItem item) => item.expired)
+        .toList(growable: false);
+    if (expired.isEmpty) return const TrashPurgeOutcome(purged: 0);
+    if (!isLiveMode) {
+      return TrashPurgeOutcome(
+        purged: purgeExpiredTrash(now: time, actor: actor),
+      );
+    }
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return TrashPurgeOutcome(purged: 0, error: trashReadOnlyWriteMessage);
+    }
+
+    int purged = 0;
+    int failed = 0;
+    String? firstError;
+    for (final TrashItem item in expired) {
+      try {
+        await api.purgeTrashItem(item.kind.wireName, item.id);
+        purged += 1;
+        _trashItems.removeWhere(
+          (TrashItem row) => row.kind == item.kind && row.id == item.id,
+        );
+      } on WriteApiException catch (error) {
+        failed += 1;
+        firstError ??= error.userMessage;
+      } catch (error) {
+        failed += 1;
+        firstError ??= '请求已发出，但结果无法确认。请刷新后查看。';
+      }
+      if (_disposed) break;
+    }
+    if (!_disposed && purged > 0) {
+      _notify();
+      await refreshTrash();
+    }
+    return TrashPurgeOutcome(
+      purged: purged,
+      failed: failed,
+      error: firstError,
+    );
+  }
+
+  // ========================================== 家庭成员：服务端读写（W5-H）
+
+  /// 拉取成员列表（`GET /members`）—— **打开成员面板时**调用。
+  ///
+  /// 失败**不清空**上一次成功的结果：把列表清成「没有成员」会让家长以为
+  /// 家人都被移出了；错误经 [membersError] 上报，页面照实显示。
+  Future<void> refreshMembers() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) return;
+    final int epoch = ++_membersReadEpoch;
+    _membersReadStatus = ReadStatus.loading;
+    _membersError = null;
+    _notify();
+    try {
+      final MemberListDto dto = await api.fetchMembers();
+      if (_disposed || api != _readApi || epoch != _membersReadEpoch) return;
+      _members
+        ..clear()
+        ..addAll(mapMembers(dto));
+      _membersReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _membersReadEpoch) return;
+      _membersError = error;
+      _membersReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _membersReadEpoch) return;
+      _membersError = ReadApiException.network(error);
+      _membersReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _membersReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 改成员角色（`PATCH /members/:id`，W5-H）。成功返回 null。
+  ///
+  /// 目标角色只从**这一行**推出来（家长 ⇄ 孩子）；`viewer` 没有可切目标 ——
+  /// 后端也只接受 `guardian` / `child`。
+  ///
+  /// 不预先校验「我是不是家长」：那条判断来自可能已经过时的列表，
+  /// 服务端 403 才是权威 —— 但它会给出一句可执行的中文原因，原样展示。
+  Future<String?> submitChangeMemberRole(FamilyMember member) async {
+    if (!isLiveMode) return '预览模式没有真实的家庭成员，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return memberReadOnlyWriteMessage;
+    if (_busyMemberId != null) return '上一次成员操作正在保存中，请稍候…';
+
+    if (member.isSelf) {
+      return '不能修改自己的家庭成员身份，这次操作没有保存。请让另一位家长来处理。';
+    }
+    if (!member.isActive) {
+      return '这个成员已经被移出家庭了，请刷新成员列表。';
+    }
+    final MemberRole? target = member.switchableRole;
+    if (target == null) {
+      return '访客不能改成家长或孩子，这次操作没有保存。';
+    }
+
+    _busyMemberId = member.memberId;
+    _notify();
+    try {
+      final MemberDto written = await api.changeMemberRole(
+        member.memberId,
+        target,
+      );
+      if (_disposed) return null;
+      _replaceMember(written);
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 409 / 404：本地这一行已经过时了（别人先改过 / 已被移出）。
+      // 刷新后界面才与服务端一致，否则家长会对着一条点不动的行反复点。
+      if (error.kind == WriteFailureKind.conflict ||
+          error.kind == WriteFailureKind.notFound) {
+        await refreshMembers();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '改角色请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _busyMemberId = null;
+      _notify();
+    }
+  }
+
+  /// 移出成员（`DELETE /members/:id`，W5-H）。成功返回 null。
+  ///
+  /// 服务端只做软删并保留会话，因此这里成功后直接把该行从列表里去掉，
+  /// 不需要额外重拉 —— DELETE 回包已经确认了「哪一行、什么时候被移出」。
+  Future<String?> submitRemoveMember(FamilyMember member) async {
+    if (!isLiveMode) return '预览模式没有真实的家庭成员，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return memberReadOnlyWriteMessage;
+    if (_busyMemberId != null) return '上一次成员操作正在保存中，请稍候…';
+
+    if (member.isSelf) {
+      return '不能移出自己，这次操作没有保存。请让另一位家长来处理。';
+    }
+    if (!member.isActive) {
+      return '这个成员已经被移出家庭了，请刷新成员列表。';
+    }
+
+    _busyMemberId = member.memberId;
+    _notify();
+    try {
+      final MemberRemoveDto written = await api.removeMember(member.memberId);
+      if (_disposed) return null;
+      if (written.memberId != member.memberId) {
+        // 客户端已经在 API 层校验过；这里再守一次，避免「删了别人」被当成功。
+        await refreshMembers();
+        return '服务端返回的成员与这次操作不一致，请刷新成员列表确认。';
+      }
+      _members.removeWhere(
+        (FamilyMember row) => row.memberId == member.memberId,
+      );
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.conflict ||
+          error.kind == WriteFailureKind.notFound) {
+        await refreshMembers();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '移出请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _busyMemberId = null;
+      _notify();
+    }
+  }
+
+  /// 用写接口回包刷新本地那一行（服务端是权威值：角色 / 昵称 / 时间）。
+  void _replaceMember(MemberDto dto) {
+    for (int index = 0; index < _members.length; index++) {
+      if (_members[index].memberId == dto.memberId) {
+        _members[index] = mapMember(dto);
+        return;
+      }
+    }
+    // 本行还不在列表里（例如面板没拉过）—— 不凭空造行，交给下一次刷新。
+  }
+
+  // ========================================== 邀请码：服务端读写（W5-I）
+
+  /// 拉取邀请码列表（`GET /invites`）—— **打开邀请码面板时**调用。
+  ///
+  /// 只有家长能看（`invite_member` guardian ALLOW）；调用方先用
+  /// [canManageInvites] 判断，孩子视角不要发这个请求。
+  ///
+  /// 失败**不清空**上一次成功的结果：把列表清空会变成「邀请码都没了」，
+  /// 而实际可能只是断网；错误经 [invitesError] 上报。
+  Future<void> refreshInvites() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) return;
+    final int epoch = ++_invitesReadEpoch;
+    _invitesReadStatus = ReadStatus.loading;
+    _invitesError = null;
+    _notify();
+    try {
+      final InviteListDto dto = await api.fetchInvites();
+      if (_disposed || api != _readApi || epoch != _invitesReadEpoch) return;
+      _invites
+        ..clear()
+        ..addAll(mapInvites(dto));
+      _invitesReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _invitesReadEpoch) return;
+      _invitesError = error;
+      _invitesReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _invitesReadEpoch) return;
+      _invitesError = ReadApiException.network(error);
+      _invitesReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _invitesReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 生成邀请码（`POST /invites`，W5-I）。成功返回 null。
+  ///
+  /// 回包是**新码全量行**，直接插到列表头 —— 不重拉整页：重拉会让「刚生成
+  /// 的那个码」排到服务端顺序里的某个位置，用户复制错了就是别人的码。
+  ///
+  /// 参数范围在 `WriteApiClient.createInvite` 里先拦一次（与后端 DTO 同口径），
+  /// 这里只做「现在能不能写」的判断。
+  Future<String?> submitCreateInvite({
+    required MemberRole role,
+    required int maxUses,
+    required int expiresInDays,
+  }) async {
+    if (!isLiveMode) return '预览模式没有真实的邀请码，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return inviteReadOnlyWriteMessage;
+    if (isInviteWriteBusy) return '上一次邀请码操作正在保存中，请稍候…';
+    if (role != MemberRole.guardian && role != MemberRole.child) {
+      return '邀请码只能邀请「孩子」或「家长」，这次没有提交。';
+    }
+
+    _creatingInvite = true;
+    _notify();
+    try {
+      final InviteDto written = await api.createInvite(
+        role: role,
+        maxUses: maxUses,
+        expiresInDays: expiresInDays,
+      );
+      if (_disposed) return null;
+      _invites.insert(0, mapInvite(written));
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 403（不是家长）/ 409（撞码）：列表的「当前身份」或内容可能需要重看，
+      // 刷新一次比让家长对着旧状态再点一次更省事。
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshInvites();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '生成邀请码的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _creatingInvite = false;
+      _notify();
+    }
+  }
+
+  /// 吊销邀请码（`POST /invites/:id/revoke`，W5-I）。成功返回 null。
+  ///
+  /// 服务端构造幂等（已吊销再吊销仍是 200、不写第二条审计），所以这里
+  /// 成功后只把这一行标成吊销 —— 不重拉、也不提示「已吊销过一次」。
+  Future<String?> submitRevokeInvite(InviteCode invite) async {
+    if (!isLiveMode) return '预览模式没有真实的邀请码，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return inviteReadOnlyWriteMessage;
+    if (isInviteWriteBusy) return '上一次邀请码操作正在保存中，请稍候…';
+    if (invite.revoked) return '这个邀请码已经吊销过了，不需要重复吊销。';
+
+    _busyInviteId = invite.id;
+    _notify();
+    try {
+      final InviteRevokeDto written = await api.revokeInvite(invite.id);
+      if (_disposed) return null;
+      if (written.id != invite.id) {
+        // API 层已验过；这里再守一次，避免「吊销了别的码」被当成功。
+        await refreshInvites();
+        return '服务端返回的邀请码与这次操作不一致，请刷新邀请码列表确认。';
+      }
+      for (int index = 0; index < _invites.length; index++) {
+        if (_invites[index].id == invite.id) {
+          _invites[index] = _invites[index].revokedCopy();
+          break;
+        }
+      }
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 404：这一行已经不在了（别的设备删过 / 不属于这个孩子）。
+      if (error.kind == WriteFailureKind.notFound ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshInvites();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '吊销请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _busyInviteId = null;
+      _notify();
+    }
+  }
+
+
 
   // =================================================== 规则编辑（修 C10）
 

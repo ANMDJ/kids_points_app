@@ -55,7 +55,7 @@ class _AddWishSheetState extends State<AddWishSheet> {
           subtitle: '当前可用积分 ${widget.store.points}',
           actionLabel: '保存心愿',
           actionIcon: Icons.favorite_rounded,
-          onAction: () {
+          onAction: () async {
             final String title = titleController.text.trim();
             if (title.isEmpty) {
               widget.messenger.showSnackBar(
@@ -63,7 +63,20 @@ class _AddWishSheetState extends State<AddWishSheet> {
               );
               return;
             }
-            widget.store.addWish(title: title, cost: cost, emoji: emoji);
+            // W5-C：live 模式真的 POST /wishes；孩子的权限若是「需要审批」，
+            // 服务端 403 `APPROVAL_REQUIRED` ⇒ 返回可读原因，**弹窗不关、
+            // 输入不丢**，让家长知道这次没保存。
+            final String? message = await widget.store.submitAddWish(
+              title: title,
+              cost: cost,
+              emoji: emoji,
+            );
+            if (!sheetContext.mounted) return;
+            if (message != null) {
+              widget.messenger.hideCurrentSnackBar();
+              widget.messenger.showSnackBar(SnackBar(content: Text(message)));
+              return;
+            }
             Navigator.of(sheetContext).pop();
             widget.messenger.showSnackBar(
               SnackBar(content: Text('已添加心愿：$title（$cost 积分）')),

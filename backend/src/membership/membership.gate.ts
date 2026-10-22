@@ -80,6 +80,34 @@ export function resolveMembership(row: MembershipLookupRow | null): MembershipVe
 }
 
 /**
+ * 会话角色按成员位**收口**（W5-H，2026-10-22）—— 取更严的那个。
+ *
+ * ── 为什么需要它 ────────────────────────────────────────────────────────────
+ *   `DeviceSession.activeRole` 与 `ChildMember.role` 是两份事实：前者是"这台设备
+ *   此刻用什么模式"，后者是"这个人在这个家里是什么身份"。降级时
+ *   `PrismaMembersRepository.changeMemberRole` 会在**同一事务**里把该用户的
+ *   guardian 会话收回 child；但"写路径记得同步"不该是唯一保障 ——
+ *   只要还有一条路径（手工改库、将来的批量脚本、迁移）留下了一张 guardian 的票，
+ *   被降级的人就还能以家长身份操作。
+ *
+ *   于是这里再加一道**读路径**的收口：矩阵查表用的角色 = min(会话角色, 成员位角色)。
+ *   屏障二因此不可能高于屏障一给出的身份 —— 这与 02 §3「屏障三只能更严」是同一条
+ *   方向性约束，只不过收紧的是**角色**本身。
+ *
+ * ── 它不是"提权"也不会降别人的权 ─────────────────────────────────────────
+ *   · 成员位是 guardian、会话是 child ⇒ child（模式没切换，本来就该是 child）；
+ *   · 成员位是 child、会话是 guardian ⇒ child（降级立即生效）；
+ *   · 会话是 viewer ⇒ viewer（矩阵一律 DENY，与 `resolveVerdict` 的 fail-closed 一致）。
+ */
+export function clampRoleToMembership(
+  sessionRole: Role | 'viewer',
+  membershipRole: Role
+): Role | 'viewer' {
+  if (sessionRole === 'viewer') return 'viewer'
+  return sessionRole === 'guardian' && membershipRole === 'guardian' ? 'guardian' : 'child'
+}
+
+/**
  * 形状问题（**不是**权限判定）的专用错误。
  *
  * 为什么要有自己的类型：守卫要把它翻成 **500 + 具体 code**，而其它异常（网络 / 连接池）

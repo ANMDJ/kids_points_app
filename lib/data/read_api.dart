@@ -136,6 +136,39 @@ class ReadApiClient {
     return HomeDto.fromJson(await _get('/home'));
   }
 
+  /// `GET /trash`：回收站里被软删的规则 / 心愿 / 习惯（W5-F）。
+  ///
+  /// 孩子也能看（矩阵 `view_trash` child ALLOW）——「我删掉的那张卡去哪了」
+  /// 是他最需要自己确认的事；恢复 / 彻底删除仍然只有家长能做（服务端 403）。
+  ///
+  /// 不分页：后端会一次性返回整个回收站（低频、小集合）。
+  Future<TrashListDto> fetchTrash() async {
+    return TrashListDto.fromJson(await _get('/trash'));
+  }
+
+  /// `GET /members`：当前孩子的**活跃**成员位（W5-H）。
+  ///
+  /// 孩子也能看（矩阵 `view_members` child ALLOW）：列表只含昵称 / 角色 /
+  /// 时间，不含手机号、`openId`、PIN。**不分页** —— 单孩子量小，被移出的人
+  /// 不会出现在列表里（只能在审计里看到）。
+  ///
+  /// 写入口（改角色 / 移出）在 `WriteApi` 上；谁能对谁做什么由服务端判定，
+  /// 响应里**没有** `canChangeRole` / `canRemove` 这类结论字段。
+  Future<MemberListDto> fetchMembers() async {
+    return MemberListDto.fromJson(await _get('/members'));
+  }
+
+  /// `GET /invites`：当前孩子的邀请码（W5-I，`view_invites` 仅家长 ALLOW）。
+  ///
+  /// 返回的是**凭据本身**（`code`），所以孩子身份请求会被服务端 403；
+  /// 客户端据此不要在孩子视角里调它（见 `InviteSheet` 的角色闸门）。
+  ///
+  /// 列表含已用完 / 已过期 / 已吊销的行 —— 状态由界面按事实现算，
+  /// 服务端不删行（否则「我上周发的码怎么没了」无法解释）。
+  Future<InviteListDto> fetchInvites() async {
+    return InviteListDto.fromJson(await _get('/invites'));
+  }
+
   /// 第一页传 `cursor: null`；之后把响应里的 [RecordsPageDto.nextCursor]
   /// **原样**传回来。游标不是 offset，客户端不许自己拼。
   Future<RecordsPageDto> fetchRecords({
@@ -151,6 +184,41 @@ class ReadApiClient {
     if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
 
     return RecordsPageDto.fromJson(await _get('/records', query));
+  }
+
+  /// `GET /approvals`：家长审批收件箱（W5-D）。
+  ///
+  /// [status] 只能取 `pending` / `approved` / `rejected` / `withdrawn` /
+  /// `invalidated` / `expired` / `all`（后端 DTO 的枚举同口径）；**不收**客户端
+  /// 自造的过滤词 —— 猜错只会拿到 400，不如在这里直接报错。
+  /// 第一页传 `cursor: null`，之后把 [ApprovalsPageDto.nextCursor] 原样带回。
+  Future<ApprovalsPageDto> fetchApprovals({
+    String status = 'pending',
+    int limit = 20,
+    String? cursor,
+  }) async {
+    const Set<String> allowed = <String>{
+      'pending',
+      'approved',
+      'rejected',
+      'withdrawn',
+      'invalidated',
+      'expired',
+      'all',
+    };
+    if (!allowed.contains(status)) {
+      throw ArgumentError.value(status, 'status', '不在后端允许的状态列表里');
+    }
+    if (limit < 1 || limit > 100) {
+      throw ArgumentError.value(limit, 'limit', '必须在 1–100 之间（后端 DTO 同口径）');
+    }
+    final Map<String, String> query = <String, String>{
+      'status': status,
+      'limit': '$limit',
+    };
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+
+    return ApprovalsPageDto.fromJson(await _get('/approvals', query));
   }
 
   Future<Object?> _get(String path, [Map<String, String>? query]) async {

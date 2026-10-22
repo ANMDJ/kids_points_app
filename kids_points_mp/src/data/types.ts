@@ -248,6 +248,27 @@ export interface TrashItem {
   expired: boolean
 }
 
+/**
+ * 线值 → 枚举（`'point_rule' | 'wish' | 'habit'`）—— W5-F。
+ *
+ * **不认识的返回 null**（调用方决定是报错还是忽略）。与 Flutter
+ * `trashKindFromWire` 同一张表：两端各写一份映射，迟早有一边认不出新类型。
+ *
+ * 注意：`TrashKind` 本身就是线值，所以这里只做**白名单校验**，
+ * 不做命名转换（`point_rule` 不写成 `pointRule`）。
+ */
+export function trashKindFromWire(raw: string): TrashKind | null {
+  switch (raw.trim()) {
+    case 'point_rule':
+      return 'point_rule'
+    case 'wish':
+      return 'wish'
+    case 'habit':
+      return 'habit'
+  }
+  return null
+}
+
 /** 回收站条目类型的展示文案。 */
 export function trashKindLabelOf(kind: TrashKind): string {
   switch (kind) {
@@ -275,6 +296,251 @@ export function trashRetentionText(
   const left = trashRetentionDays - days
   if (left <= 0) return "已过保留期"
   return `还能恢复 ${left} 天`
+}
+
+/**
+ * 批量清理的**结果事实**（W5-F）：清掉几条、几条没清掉、第一条失败原因。
+ *
+ * 为什么不只是一个数字：批量清理是**逐条**调的，第 3 条失败时前 2 条已经真的
+ * 删了 —— 只说「失败」会让家长以为一条都没清，只说「成功」又是撒谎。
+ * 与 Flutter `TrashPurgeOutcome` 同构。
+ */
+export interface TrashPurgeOutcome {
+  /** 已彻底删除的条数 */
+  purged: number
+  /** 没能删掉的条数（0 = 全部成功） */
+  failed: number
+  /** 第一条可读的失败原因（`failed === 0` 时为 null） */
+  error: string | null
+}
+
+/**
+ * 批量清理结果的**展示串** —— 部分成功必须分段说清。
+ *
+ * 放在这里（而不是组件里）与 [trashRetentionText] 同理：这是唯一一处
+ * 把「清掉 N 条 / 没清掉 M 条」翻译成中文的地方，页面不各自造句。
+ */
+export function trashPurgeOutcomeText(outcome: TrashPurgeOutcome): string {
+  if (outcome.failed <= 0) {
+    return outcome.purged > 0
+      ? `已清理 ${outcome.purged} 条`
+      : '没有可清理的内容'
+  }
+  if (outcome.purged > 0) {
+    return `已清理 ${outcome.purged} 条，还有 ${outcome.failed} 条没清掉：${outcome.error}`
+  }
+  return `没能清理：${outcome.error}`
+}
+
+// ============================================================ 家庭成员（W5-H）
+
+/** 成员位的库内状态（`GET /members` 目前只下发 `active`）。 */
+export type MemberStatus = 'active' | 'removed'
+
+/** `PATCH /members/:id` 唯一接受的两个目标角色（`viewer` 不是合法目标）。 */
+export type MutableMemberRole = Extract<MemberRole, 'child' | 'guardian'>
+
+/**
+ * 家庭成员（`GET /members` 的一行）。
+ *
+ * **只有事实**：昵称 / 角色 / 状态 / 时间 / `isSelf`。没有
+ * `canChangeRole` / `canRemove` —— 「我是家长」由
+ * `store.canManageMembers` 从 `isSelf` 那一行推出来，服务端仍是最终裁决者
+ * （被拒绝时按 403 的 `code` 解释原因，`25-w5h-handoff.md` §2.6）。
+ */
+export interface FamilyMember {
+  memberId: string
+  userId: string
+  /** 服务端原样下发的昵称；null = 没设置（界面用「未命名成员」占位）。 */
+  displayName: string | null
+  role: MemberRole
+  status: MemberStatus
+  joinedAt: number
+  removedAt: number | null
+  /** 服务端算的「这一行是不是我」：客户端不知道自己的 userId。 */
+  isSelf: boolean
+}
+
+/** 昵称的展示值：空白与 null 都不能画成一行空白（那看起来像加载失败）。 */
+export function memberNameOf(displayName: string | null): string {
+  const trimmed = (displayName ?? '').trim()
+  return trimmed === '' ? '未命名成员' : trimmed
+}
+
+/** 角色徽标文案；`viewer` 只在历史数据里出现。 */
+export function memberRoleLabelOf(role: MemberRole): string {
+  switch (role) {
+    case 'guardian':
+      return '家长'
+    case 'child':
+      return '孩子'
+    case 'viewer':
+      return '访客'
+  }
+}
+
+function pad2(value: number): string {
+  return value < 10 ? `0${value}` : `${value}`
+}
+
+/** 「2026-10-01 加入」—— 本地时区；不做「几天前」这类会随刷新漂移的文案。 */
+export function memberJoinedText(joinedAt: number): string {
+  const date = new Date(joinedAt)
+  if (Number.isNaN(date.getTime())) return '加入时间未知'
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
+    date.getDate()
+  )} 加入`
+}
+
+/**
+ * 可切换到的另一个角色；家长 ⇒ 孩子，孩子 ⇒ 家长。
+ *
+ * 返回 null 表示「没有可切的角色」（`viewer` 不是合法目标角色）。
+ * 真正提交前仍会被服务端屏障二复核。
+ */
+export function switchableMemberRole(role: MemberRole): MutableMemberRole | null {
+  switch (role) {
+    case 'guardian':
+      return 'child'
+    case 'child':
+      return 'guardian'
+    case 'viewer':
+      return null
+  }
+}
+
+/** 「设为孩子 / 设为家长」按钮文案（没有可切角色时为 null）。 */
+export function switchableMemberRoleLabel(role: MemberRole): string | null {
+  const target = switchableMemberRole(role)
+  if (target === null) return null
+  return target === 'child' ? '设为孩子' : '设为家长'
+}
+
+// ============================================================ 邀请码（W5-I）
+
+/** 一个邀请码最多能被几个人用（后端 DTO `@Max(10)` 同口径）。 */
+export const INVITE_MAX_USES = 10
+
+/** 邀请码最长有效期（天），对应后端 `MAX_INVITE_TTL_DAYS = 30`。 */
+export const INVITE_MAX_TTL_DAYS = 30
+
+/** 邀请码长度：服务端 8 位、不含易混字符（0/O/1/I/L）。 */
+export const INVITE_CODE_LENGTH = 8
+
+/**
+ * 邀请码只能邀请 `child` / `guardian`。
+ *
+ * `viewer` 不是合法目标角色（后端 `CreateInviteDto` 用 `@IsIn` 拒绝）；
+ * `mapInvite` 遇到它会显式报错，而不是画出一张「加入后什么都做不了」的票。
+ */
+export type InviteRole = Extract<MemberRole, 'child' | 'guardian'>
+
+/** 邀请码的**可用状态**（`GET /invites` 的派生结论，客户端现算）。 */
+export type InviteCodeStatus = 'usable' | 'exhausted' | 'expired' | 'revoked'
+
+/**
+ * 邀请码（`GET /invites` 的一行 / `POST /invites` 的回包）。
+ *
+ * 服务端只下发**事实**：`usedCount` / `maxUses` / `expiresAt` / `revoked`
+ * （`invites.types.ts` 的「不下发结论」纪律）。「还能不能用」由
+ * [inviteStatusOf] 在渲染时现算 —— 缓存一个 `expired` 布尔值，
+ * 弹窗开着跨过有效期就会说谎。
+ */
+export interface InviteCode {
+  id: string
+  /** 服务端生成的 8 位码，客户端**不改写**它。 */
+  code: string
+  role: InviteRole
+  maxUses: number
+  usedCount: number
+  expiresAt: number
+  revoked: boolean
+  createdAt: number
+}
+
+/**
+ * 还剩几个名额。
+ *
+ * 服务端理论上不会让 `usedCount` 超过 `maxUses`，这里仍夹到 0，
+ * 避免一条越界的行被画成负数。
+ */
+export function inviteRemainingUses(invite: InviteCode): number {
+  const left = invite.maxUses - invite.usedCount
+  return left > 0 ? left : 0
+}
+
+export function inviteIsExpiredAt(invite: InviteCode, now: number): boolean {
+  return invite.expiresAt <= now
+}
+
+/**
+ * 某个时刻的状态。三类「不能用」按**最确定的事实**排序：
+ * 已吊销 ⇒ 已用完 ⇒ 已过期（一个码可能同时满足多条，徽标只说最重要的那条）。
+ */
+export function inviteStatusOf(
+  invite: InviteCode,
+  now: number = Date.now()
+): InviteCodeStatus {
+  if (invite.revoked) return 'revoked'
+  if (invite.usedCount >= invite.maxUses) return 'exhausted'
+  if (inviteIsExpiredAt(invite, now)) return 'expired'
+  return 'usable'
+}
+
+/** 状态徽标文案（双端口径一致，见 Flutter `inviteCodeStatusLabel`）。 */
+export function inviteStatusLabelOf(status: InviteCodeStatus): string {
+  switch (status) {
+    case 'usable':
+      return '可用'
+    case 'exhausted':
+      return '已用完'
+    case 'expired':
+      return '已过期'
+    case 'revoked':
+      return '已吊销'
+  }
+}
+
+/** 角色徽标文案；复用成员口径（家长 / 孩子），邀请码不会是访客。 */
+export function inviteRoleLabelOf(role: InviteRole): string {
+  return memberRoleLabelOf(role)
+}
+
+/** 「已用 1/3」—— 名额是这张票最要紧的信息，放在最前面。 */
+export function inviteUsageText(invite: InviteCode): string {
+  return `已用 ${invite.usedCount}/${invite.maxUses}`
+}
+
+/**
+ * 「有效至 2026-11-01 12:00」—— 本地时区。
+ *
+ * 不用「还有 7 天」：相对文案会随刷新漂移，且跨天时算不准。
+ */
+export function inviteExpiresText(expiresAt: number): string {
+  const date = new Date(expiresAt)
+  if (Number.isNaN(date.getTime())) return '有效期未知'
+  return `有效至 ${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
+    date.getDate()
+  )} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+/**
+ * 展示用的分组：`ABCD2345` ⇒ `ABCD-2345`（与后端 `formatInviteCode` 同形）。
+ *
+ * **只用于展示**：复制出去的仍是原始 `code`，服务端 `normalizeInviteCode`
+ * 会去掉连字符，两种写法都能加入。
+ */
+export function inviteDisplayCode(code: string): string {
+  if (code.length !== INVITE_CODE_LENGTH) return code
+  return `${code.slice(0, 4)}-${code.slice(4)}`
+}
+
+/**
+ * 吊销成功后的本地副本：服务端回包只有 `{id, revoked: true}`，
+ * 其余事实保持不变（不重拉也能立刻把按钮收掉）。
+ */
+export function revokedInviteCopy(invite: InviteCode): InviteCode {
+  return { ...invite, revoked: true }
 }
 
 // ============================================================ 规则版本（修 C10）

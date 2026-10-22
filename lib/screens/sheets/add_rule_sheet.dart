@@ -213,10 +213,22 @@ Future<void> showRuleActionsSheet(
   final AppStore store = AppScope.of(context);
   final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
+  // 这条规则**当前**生成的习惯（没有就是还没加入，或已经被移出到回收站）。
+  // 首页习惯是独立实体（A1），删规则不会连带删习惯 —— 所以这里要单独给出口。
+  Habit? habitFromRule;
+  for (final Habit habit in store.habits) {
+    if (habit.ruleId == rule.id) {
+      habitFromRule = habit;
+      break;
+    }
+  }
+
   await showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
     builder: (BuildContext sheetContext) {
+      // 提升成 final：闭包里用可空可变局部变量不会被流分析提升。
+      final Habit? habit = habitFromRule;
       return SheetFrame(
         title: rule.title,
         subtitle: ruleDetail(rule),
@@ -254,6 +266,32 @@ Future<void> showRuleActionsSheet(
               },
             ),
             const SizedBox(height: 10),
+            if (habit != null) ...<Widget>[
+              _ActionRow(
+                icon: Icons.remove_circle_outline_rounded,
+                label: '把“${habit.title}”移出首页习惯',
+                danger: true,
+                onTap: () async {
+                  // 修 C9 / W5-F：首页习惯也是**软删**（进回收站 90 天可恢复），
+                  // 已发生的打卡流水继续带 habitId 回指，不会断链。
+                  // live 模式走 DELETE /habits/:id；矩阵里孩子 DENY，服务端 403。
+                  final String? message =
+                      await store.submitRemoveHabit(habit);
+                  if (!sheetContext.mounted) return;
+                  if (message != null) {
+                    messenger.showSnackBar(SnackBar(content: Text(message)));
+                    return;
+                  }
+                  Navigator.of(sheetContext).pop();
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text('已移出首页习惯，90 天内可在「我的 · 回收站」恢复'),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
             _ActionRow(
               icon: Icons.delete_outline_rounded,
               label: '移到回收站',

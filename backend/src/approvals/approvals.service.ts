@@ -18,6 +18,8 @@ import {
 } from '../contracts/approval-policy'
 import { resolveVerdict } from '../contracts/permission-matrix'
 import type { Actor } from '../permissions/actor'
+import { decodeApprovalCursor } from './approval.cursor'
+import { toInboxPage, type ApprovalInboxPageDto } from './approval-inbox.mapper'
 import {
   APPROVALS_REPOSITORY,
   type ApprovalRow,
@@ -25,6 +27,10 @@ import {
 } from './approvals.repository'
 import type { CreateApprovalRequestDto } from './dto/create-approval-request.dto'
 import type { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
+import type { ListApprovalsQueryDto } from './dto/list-approvals.query'
+
+/** 收件箱默认每页条数（`ListApprovalsQueryDto` 的上界是 100）。 */
+const DEFAULT_PAGE_SIZE = 20
 
 /** service 的返回：状态码由判定结果决定（202 待批 / 201 自批已执行），故显式带出来。 */
 export interface ServiceResult {
@@ -66,6 +72,35 @@ export class ApprovalsService {
   // 这既让 tsx / esbuild 这类不产出 metadata 的加载器不至于静默注入失败，
   // 也让令牌改名时编译期就能发现（字符串令牌写错是运行时才炸）。
   constructor(@Inject(APPROVALS_REPOSITORY) private readonly port: ApprovalsPort) {}
+
+  /**
+   * `GET /approvals` —— 家长收件箱（W5-D）。
+   *
+   * ── 权限为什么不在本方法里判 ────────────────────────────────────────────────
+   *   端点挂的是 `@RequireAction('review_approvals')`（guardian ALLOW / child DENY），
+   *   判定由 `PermissionsGuard` 消费矩阵完成。在这里再写一次 `actor.role === 'guardian'`
+   *   就等于开了第二处权限定义 —— 与本文件头注释的硬约束冲突。
+   *   因此本方法只拿到 `childId`（屏障一的结论），不接收 actor。
+   *
+   * ── 为什么「孩子能不能看自己的申请」不在这个端点 ────────────────────────────
+   *   本端点回答「**待我批准**的申请」，这是家长视图；孩子查自己的申请是另一个
+   *   语义（且需要 `requesterUserId = 本人` 的收口）。混在一起会让「孩子看到全家的
+   *   审批」成为一次参数失误。孩子端目前只看提交申请的返回体（`submitRedeemWish`）。
+   *
+   * ★ 游标解析放在 service（而不是 DTO）：DTO 只管形状，语义错误要能带
+   *   `INVALID_APPROVAL_CURSOR` 这个**可分辨**的 code。
+   */
+  async list(query: ListApprovalsQueryDto, childId: string): Promise<ApprovalInboxPageDto> {
+    const limit = query.limit ?? DEFAULT_PAGE_SIZE
+    const cursor = query.cursor === undefined ? undefined : decodeApprovalCursor(query.cursor)
+    const rows = await this.port.listForChild({
+      childId,
+      status: query.status,
+      limit,
+      cursor
+    })
+    return toInboxPage(rows, limit)
+  }
 
   /**
    * `POST /approvals` —— 建一条审批请求（`02` §9.3 / §9.25 / §9.26 / §9.27）。

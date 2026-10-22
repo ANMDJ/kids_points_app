@@ -25,9 +25,22 @@ import {
 const VERDICTS: Verdict[] = ['ALLOW', 'REQUIRE_APPROVAL', 'DENY']
 const ROLES: Role[] = ['guardian', 'child']
 
-test('规模与唯一性：25 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
-  assert.equal(ALL_ACTIONS.length, 25)
-  assert.equal(new Set(ALL_ACTIONS).size, 25, '动作键有重复')
+test('规模与唯一性：31 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
+  assert.equal(ALL_ACTIONS.length, 31)
+  assert.equal(new Set(ALL_ACTIONS).size, 31, '动作键有重复')
+})
+
+test('W5-H 成员管理：看成员两侧都放行，改角色 / 移出只给家长（02 §2）', () => {
+  // 三个动作的方向不能靠"实现时记对"—— 矩阵是唯一事实源，这里把它钉住：
+  // 一旦有人把 change_member_role 放宽成 child ALLOW，孩子就能给自己升权。
+  assert.equal(resolveVerdict('view_members', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('view_members', 'child'), 'ALLOW')
+  assert.equal(resolveVerdict('change_member_role', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('change_member_role', 'child'), 'DENY')
+  assert.equal(resolveVerdict('remove_member', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('remove_member', 'child'), 'DENY')
+  // viewer 没有列 ⇒ 一律 DENY（fail-closed），包括"看成员"。
+  assert.equal(resolveVerdict('view_members', 'viewer'), 'DENY')
 })
 
 test('形状完整：每个动作必须恰好有 guardian / child 两列（不得缺角色列）', () => {

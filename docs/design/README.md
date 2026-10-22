@@ -25,7 +25,16 @@
 | [`16-w4d-handoff.md`](./16-w4d-handoff.md) | **阶段 W4-D 交接单**（打卡 / 撤销写入）：`POST /records/check-in` / `:id/reverse` 的单事务 8 步、共用 `appendDraftInTx()`（锁 + 库钟 + 严格递增 + 余额 CAS）、业务日 `[start,end)` 与撤销释放名额、幂等三态与 `undo:<recordId>`、**真库抓到的 naive timestamp +8h / 未来边界行推后所有打卡 / 快照必须来自规则版本行**、前端写入口仍未放开 | ✅ W4-D 已收口 |
 | [`17-w4e-handoff.md`](./17-w4e-handoff.md) | **阶段 W4-E 交接单**（双端 live 打卡 / 撤销）：独立 `WriteTransport`（不改只读路径）、`submitCheckIn` / `submitUndoCheckIn`、写成功后先落地返回流水再刷新快照、`executedRecordId==record.id` 强校验、业务码优先的 409 / 404 文案、双击串行与幂等键、**live 无写客户端必须拒绝而不是本地假写** | ✅ W4-E 已收口 |
 | [`18-w5a-handoff.md`](./18-w5a-handoff.md) | **阶段 W5-A 交接单**（规则写端点）：四条路由（建 / 改 / 软删 / 按规则加习惯）＋三道屏障 ＋ `Idempotency-Key`、`expectedVersion` 乐观锁与 409 文案、**DELETE 无 body 也无 `Content-Type`**、回包 `ruleId` / `executedRecordId` 类同款「验明正身」、带符号分值原样发出、写回包与 `GET /home` 共用 `mapRule` / `mapHabit`、删除先改本地镜像再刷新、**缺陷闸门 E15 改为钉参数形状** | ✅ W5-A 已收口 |
-| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **25 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库 |
+| [`19-w5b-handoff.md`](./19-w5b-handoff.md) | **阶段 W5-B 交接单**（记一笔写端点）：`POST /records/adjust` ＋三道屏障（孩子 403）＋幂等、**余额由服务端锁内决定**（409 `INSUFFICIENT_POINTS`）、请求体集合封闭（`childId` / `source` / `balanceAfter` 不许客户端说）、0 分三层拒绝、live 不预置本地流水（id / 余额只认回包）、弹层 `saving` 态、双端 12 条运行时用例 | ✅ W5-B 已收口（**基线数字已被 20 号单取代**） |
+| [`20-w5c-handoff.md`](./20-w5c-handoff.md) | **阶段 W5-C 交接单**（心愿兑换）：兑换**没有独立路由**，只能走 `POST /approvals`（`action='redeem'`）、请求体只发 `action + targetId`（不发 `costSnapshot` / `autoApprove`）、**`pending` 不是成功**（`null` 只留给 `approved`）、`approved` 只刷新服务端快照、409 `WISH_ALREADY_REDEEMED` 说「没有提交」、`status` 保持字符串降级、本地心愿只用于拼文案、**兑换前确认弹层**（live 说「提交申请 / 批准后才扣」，预览说「立即扣除」，取消 0 请求）、入口判据 `isWishWriteReadOnly`（原 `isReadOnly` 会让 live 兑换永远点不动）、真库补 409 用例 | ✅ W5-C 已收口 |
+| [`21-w5d-handoff.md`](./21-w5d-handoff.md) | **阶段 W5-D 交接单**（家长审批收件箱 · 小程序镜像）：收件箱是**独立 store 切片**（403 不污染首页读状态）、`summary=null` **只禁批准不禁拒绝**（坏行不能永久卡住）、未知 `status` 显示「状态未知（x）」、`decideApproval` 三层拦截（本地判死 → `decidingApprovalId` 防串批 → 409 重拉）、**批准**重拉首页 + 列表 / **拒绝**只重拉列表、空态四分（预览 / 403 / 读失败 / 真空）、切筛选重新向服务端要第一页（`all` 不发 `status`）、首帧把 `idle` 当 loading、底部 tab 3 → **4**（`currentIndex` 三处同步）、`run-w5d.mjs` 16 条＋**夹具必须用 ISO 时间**这个坑 | ✅ W5-D 已收口 |
+| [`22-w5e-handoff.md`](./22-w5e-handoff.md) | **阶段 W5-E 交接单**（档案改名）：`PATCH /child`（200 `{childId, name}`，身份只来自会话、路径无 id）、矩阵 `edit_child_profile`（孩子 403）、**无 `Idempotency-Key`**（同名在锁内短路 ⇒ 构造幂等、不写 UPDATE 不写审计）、单事务 `FOR UPDATE` ＋ `child.rename` 快照（防审计 `A→C` 丢一段）、**16 字只按码点判一处**（DTO 32 是 UTF-16 粗上限）、`P2025→404` / `P2002→409`、双端 `submitRenameChild()` **写后不重拉 `/home`**（回包即权威）、`isProfileWriteReadOnly` 取代全局 `isReadOnly`、Flutter 弹窗改 `TextFormField` 修「controller 已 dispose」、小程序不再 `slice(0,16)` 静默截断 | ✅ W5-E 已收口 |
+| [`23-w5f-handoff.md`](./23-w5f-handoff.md) | **阶段 W5-F 交接单**（回收站 · 软删 90 天）：`DELETE /habits/:id` 与 `/trash` 三条路由（`view_trash` 孩子 **ALLOW**、恢复/彻底删除孩子 DENY）、**服务端只下发 `deletedAt`，`expired` 由双端同一 90 天常量现算**（不缓存、不自动清理、过期条目仍列出）、恢复由构造幂等 / 彻底删除重复调用得 404（故都不加 `Idempotency-Key`）、彻底删除两道闸（`TRASH_ITEM_NOT_DELETED` / `TRASH_ITEM_REFERENCED`）、习惯的父规则还在回收站 ⇒ `TRASH_PARENT_RULE_DELETED`、审计必须写在 `delete()` **之前** 且 `after = JsonNull`、`PointRuleVersion` 是 `Restrict` 要先删版本行、**回收站读失败绝不清空列表**（清空＝假装已彻底删除）、小程序分支只认 `readApi !== null` **不看 `usingPreview`**、未知 `kind` 一律响亮失败（400 / `malformed`，绝不跳过一行）、回包 `{kind,id}` 验明正身、批量清理如实报 `purged`/`failed` | ✅ W5-F 已收口 |
+| [`24-w5g-handoff.md`](./24-w5g-handoff.md) | **阶段 W5-G 交接单**（邀请码）：`/invites` 四条路由（`invite_member` guardian ALLOW / child DENY；`accept` **只有身份屏障** —— 被邀请人按定义还不是成员）、**原子占位 = 一条 `UPDATE … WHERE usedCount < maxUses AND expiresAt > now() AND revoked = false RETURNING`**（端口上**没有** `findByCode()`，TOCTOU 无处可写）、占位与成员位 / 会话 / 审计**同一事务**（失败回滚 ⇒ 名额不被烧）、真库并发 **10 个请求 vs `maxUses=3` ⇒ 恰好 3 成功 / 7×409**、四种不可用收敛成同一 409、形状错 400 `INVITE_CODE_MALFORMED`（不猜 `O→0`）、`ALREADY_MEMBER` 不烧名额不改角色、`removed` 成员用新码回来复用同一行、共享平板 ⇒ `DEVICE_SESSION_CONFLICT`、审计**不写码**、均不加 `Idempotency-Key`、会话 TTL **30 天**（偏离 `02 §7` 5 分钟，PIN 未落地）、`viewer` 不可邀请、**演示脚本 `npm run seed:demo`**（演示码 `MAMA2345`，用真实校验器断言） | ✅ W5-G 已收口（服务端；**双端 UI 未建**） |
+| [`25-w5h-handoff.md`](./25-w5h-handoff.md) | **阶段 W5-H 交接单**（成员管理）：`/members` 三条路由（`view_members` 孩子 **ALLOW** / `change_member_role` / `remove_member` 孩子 DENY）、**最后一位家长保护靠 `SELECT … ORDER BY id FOR UPDATE` 锁住该孩子全部成员位**（先查后写与单条条件 `UPDATE` 在 READ COMMITTED 下都能双双通过）、降级与**同事务收回 `DeviceSession.activeRole`** ＋ 读路径 `clampRoleToMembership()`（矩阵角色 = min(会话, 成员位)）、两条写路由**禁止作用于自己**（`CANNOT_MODIFY_SELF`）、`PATCH` 同角色 / `DELETE` 重复调用都是**构造幂等**（不写第二条审计、`removedAt` 不变）、移出**不删会话**（否则 `MEMBER_REMOVED` 退化成 401）、线格式只给 `role`/`status`/`isSelf` 不给权限结论、审计快照只含 `role`/`status`、`viewer` 不可作为目标角色、真库 **3 家长环形降级 ⇒ 恰好 2 成功 / 1×409**、**新增测试守卫 ④**（文件级 `✔` ⇒ 红，专治 `describe` 被关进 hook 的 D12 式假绿；已在 `test:canfail` C/C2 常设证伪） | ✅ W5-H 已收口（服务端；**双端 UI 未建**） |
+| [`26-w5i-handoff.md`](./26-w5i-handoff.md) | **阶段 W5-I 交接单**（双端邀请码界面）：**先拉成员再拉邀请码**（`invite_member` 仅 guardian ALLOW，用 403 探测角色会把权限画成故障）、状态**渲染时现算**且优先级 `revoked > exhausted > expired`（先答库里的既成事实，再答依赖时钟的判断）、生成表单是**封闭选项**（1/3/5 人 · 1/7/30 天；服务端 1..10 / 1..30）、`POST /invites` **不带**幂等键而吊销是构造幂等、回包 `role`/`maxUses`/`id` **回显校验**、复制**裸码**（展示才分组）、已吊销行不再画吊销按钮、空态**三分**（没拉到 / 加载中 / 真的没有）、预览模式**不编假码**、live 无写客户端**拒绝而不本地假写**、生成 409 与吊销 404 重拉而吊销成功只改本行、Flutter **+8** / 小程序 **19** 条用例、**`accept` 仍无客户端（等 L2 登录）** | ✅ W5-I 已收口（**双端 UI 已建**；`accept` 与成员管理 UI 未建） |
+| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **29 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-21 矩阵同步至 29 动作） |
+
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
@@ -41,7 +50,46 @@
 > 打卡 / 长按撤销会落库并刷新服务端快照；**其它写入口（记一笔 / 心愿 / 档案）仍只读**。
 > **W5-A** 起规则页四条写入口也不再只读：`POST /point-rules`、`PATCH`（带 `expectedVersion`
 > 乐观锁）、`DELETE`（软删进回收站）、`POST /point-rules/:id/habits`，双端同构。
-> 记一笔 / 心愿 / 习惯 CRUD / 档案 / 邀请等其余写端点仍未建。
+> **W5-B** 起首页「记一笔」也真写：`POST /records/adjust`（余额与 `balanceAfter` 由服务端锁内决定，
+> 409 `INSUFFICIENT_POINTS` 会带原因返回），双端同构。
+> **W5-C** 起心愿「兑换」也真写：**兑换没有独立路由**，双端都走 `POST /approvals`
+> （`action='redeem'`，请求体只有 `action + targetId`）；回包 `pending` 时**还没扣分**，
+> 因此 `submitRedeemWish()` 只在 `approved` 时返回 `null`。
+> 点「兑换」**先弹确认**（live：「提交给家长确认，批准后才扣」；预览：「立即扣除」），取消不发请求。
+> **W5-D** 起**家长审批收件箱双端都有 UI**（`GET /approvals` + `POST /approvals/:id/decide`）：
+> 待处理 / 已通过 / 已拒绝 / 全部四个筛选、`summary=null` 只禁批准不禁拒绝、
+> 403 如实说「没有批准权限」、切筛选重新向服务端要第一页、批准后重拉首页快照。
+> 小程序底部导航由 3 个 tab 变 **4 个**（审批插在心愿与「我的」之间）。
+> **W5-E** 起「我的」页的昵称也能真改：`PATCH /child`（guardian 专属，孩子 403），
+> 回包 `{ childId, name }` 直接覆盖本地档案 —— **写后不重拉 `/home`**（回包即权威，
+> 再拉一次可能用滞后快照把新名字盖回去）。同名改名回 200 但**不写库、不写审计**（构造幂等）。
+> 昵称长度只按**码点**判一处（服务端 16 个字符，emoji 算 1 个）。
+> **W5-F** 起删除全部改成**软删 + 回收站**：`DELETE /habits/:id`（孩子 403）与
+> `GET /trash`、`POST /trash/:kind/:id/restore`、`DELETE /trash/:kind/:id`；
+> 回收站**孩子也能看**（`view_trash` ALLOW），恢复 / 彻底删除只给家长。
+> 服务端只下发 `deletedAt`，`expired` 由双端同一份 90 天常量现算；
+> 到期**不自动清理**，过期条目仍列出（标红、只能彻底删除）。
+> **W5-G** 起邀请码有端点：`POST /invites`（建）/ `GET /invites`（列）/ `POST /invites/:id/revoke`
+> （`invite_member`，孩子 403）与 `POST /invites/accept`（**只有身份屏障** —— 被邀请人按定义
+> 还不是成员）。**占位是一条条件 `UPDATE … RETURNING`**，端口上根本没有「只查不占」的方法；
+> 占位 / 成员位 / 设备会话 / 审计在**同一事务**，失败一律回滚（名额不被烧）。
+> ⚠️ 它解决的是「已有账号的人加入新家庭」，**「全新设备的第一次加入」仍要等登录链路（L2）**。
+> **W5-H** 起成员管理有端点：`GET /members`（`view_members`，**孩子也 ALLOW** —— 列表只含昵称 / 角色 / 时间）、
+> `PATCH /members/:id`（`change_member_role`）、`DELETE /members/:id`（`remove_member`），后两条孩子 403。
+> **「家里不会一个家长都不剩」由库层面的串行化保证**：先 `SELECT … ORDER BY id FOR UPDATE` 锁住这个孩子的
+> 全部成员位再计数（先查后写的两个并发请求会双双看到 `count=2`）。降级在**同一事务**里把该用户的
+> `DeviceSession.activeRole` 收回 `child`，读路径再用 `clampRoleToMembership()` 收一次
+> （矩阵角色 = min(会话角色, 成员位角色)）。两条写路由都**禁止作用于自己**（否则自我降级 = 把自己锁在门外，
+> 而没有家长能救你）。`PATCH` 同角色、`DELETE` 重复调用都是**构造幂等**（不写第二条审计、`removedAt` 不变）。
+> 移出**不删会话**（删了屏障一只能回 401，把「你被移出」伪装成「你没登录」）。
+> ⚠️ 双端**都还没有成员管理界面**，「退出家庭」也不存在（`DELETE` 刻意不接受删自己）。
+> **W5-I** 起**双端都有邀请码界面**（「我的 → 邀请码」底部弹窗）：家长可生成（角色 / 名额 / 有效期
+> 三个封闭选项）、复制裸码、吊销；孩子看到的是「请让家长生成一个码给你」，**不会**用一个注定 403
+> 的请求去探测角色（先 `GET /members` 拿 `isSelf` 再决定拉不拉 `/invites`）。邀请码状态
+> （可用 / 已用完 / 已过期 / 已吊销）**渲染时现算**、优先级 `revoked > exhausted > expired`；
+> 生成 409 与吊销 404 都会重拉列表，吊销成功只改本行。**`POST /invites/accept` 仍无客户端** ——
+> 全新设备的第一次加入要等 L2 登录链路（`05` §6），详见 [`26-w5i-handoff.md`](./26-w5i-handoff.md) §5。
+> 头像、恢复演示数据仍未建；审批**没有推送**、**没有撤回入口**。
 > `ApprovalsPort` **不再是 501** —— **W3-A** 起有库时是真 Prisma 适配器（同事务写流水/余额/审计），
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
@@ -103,6 +151,9 @@
     —— 守门人 A2 那条 `final int dailyLimit;` 断言**被新语义作废**，与台账同批改掉（`03` §0 开头的 C4 说明）。
   - **审计的抓法**：只断言 `auditLog.length == 1` 会**全绿放行**「存引用」的假审计；真断言是"写完审计再改原对象，再读审计，内容必须不变"（两端都有）。
   - **诚实边界**：`AuditAction` 只列**前端真能触达**的 5 类动作，成员增删 / 角色切换 / 同意（consent）**本轮未实现**、也没有伪造取值 —— 不假装覆盖（`03` §C11 现状）。
+    > **W5-H 补记（2026-10-22）**：服务端现在**会写** `member.role_change` / `member.remove`
+    > （Prisma `ActionType` 已有这两个值），但**客户端的 `AuditAction` 枚举仍未覆盖**它们 ——
+    > 双端还没有成员管理界面，也没有审计查看页。别把「服务端会写」读成「前端看得见」。
   - **证伪自测 6/6**（`03` 验收门有逐例清单）：台账改回「未修」、物理删回退、审计改成 `push`、少一处 `activeOnly`、`updateRule` 偷换 id —— 每例都**点名对应条目**变红，还原（sha256 比对）后回绿。
 - **C5（✅ 已收口 2026-10-13；交接单 [`09-c5-handoff.md`](./09-c5-handoff.md)）**：**`D9`** 图标字段跨端类型不一致 ——
   双端数据层只存**名字**（Flutter `icon: IconData` → `iconName: String`），名字的唯一事实收进
@@ -975,6 +1026,242 @@
     `flutter analyze` → **0 issue**；`flutter test` → **75/75**。无新增迁移。
     ⑩ 仍不粉饰：习惯 CRUD / 心愿 / 档案 / 邀请 / 记一笔仍未接后端；未做真机联调与压测。
     交接单：[`18-w5a-handoff.md`](./18-w5a-handoff.md)。
+
+
+**W5-B 进展（2026-10-20）：记一笔写端点 + 双端接线**
+
+    ① **一条路由**：`POST /records/adjust`（`201`），名字沿用 `01` §3 / `02` §6 的动作名
+    `adjust_points` 与 `/records` + 动作的既有形状，不另造 `/points/adjust`。
+    ② **三道屏障 + 幂等**：设备会话 → 成员 → 权限矩阵；`adjust_points` 对孩子 DENY（403），
+    孩子要加分必须走 `request_points_bonus` 审批；带 `Idempotency-Key` 重放只执行一次。
+    ③ **余额由服务端锁内决定**：客户端**不**用本地 `points` 预判够不够扣，
+    不足则 409 `INSUFFICIENT_POINTS` → 两端统一文案「这次操作会把余额扣成负数，没有保存」。
+    ④ **请求体集合封闭**：`childId` 来自会话、`source` 由角色派生、`balanceAfter` 由账本算，
+    客户端多传任一字段都是 400 —— 不许客户端决定「给谁加分」或「加完剩多少」。
+    ⑤ **0 分三层拒**：`PointsStepper(min: 1)` / 两端 `submitQuickNote()` / 服务端 `@NotEquals(0)`。
+    ⑥ **live 不预置本地流水**：`id` 与 `balanceAfter` 只认回包，先落地再 `refreshFromServer()`，
+    否则刷新后会出现两条同内容流水（一条本地 id、一条服务端 id）。
+    ⑦ **弹层 `saving` 态**：按钮变「保存中…」，失败不关弹层（家长可改数字重试）；
+    并发第二击由 store 的 `writeInFlight` 拦住，返回「上一次操作正在保存中」。
+    ⑧ 真跑基线（2026-10-20）：`backend npm test` → **404/404**；`npm run test:db` → **136/136**；
+    `npm run ci` → **0**；小程序 `tsc --noEmit` → **0**；`.tmp_test/run.js` → **72/72**（W5-B 12 条）；
+    `flutter analyze` → **0 issue**；`flutter test` → **83/83**。无新增迁移。
+    ⑨ 仍不粉饰：心愿兑换 / 习惯 CRUD / 档案 / 邀请仍未接后端；孩子端没有「申请加分」入口；
+    未做真机联调与压测。
+    交接单：[`19-w5b-handoff.md`](./19-w5b-handoff.md)。
+
+
+**W5-C 进展（2026-10-20）：心愿兑换走审批 + 双端接线**
+
+    ① **没有新路由**：`redeem` 在矩阵里对两个角色都是 `REQUIRE_APPROVAL` ⇒ 唯一正确入口是
+    `POST /approvals`（`action='redeem'`，`targetId=wishId`）。客户端不另造 `/wishes/:id/redeem`，
+    也不替服务端判断"我能不能直接扣"。
+    ② **请求体最小**：只发 `action + targetId`。`costSnapshot` 由服务端按当时的 `Wish.cost` 快照
+    （申请时的价格，不是批准时的）；`autoApprove` 不发 —— 孩子发它是 400 `SELF_APPROVAL_NOT_ALLOWED`，
+    家长也不该被这个界面代勾（9.27 的二次确认是有意的防误触）。
+    ③ **`pending` 不是成功**：`submitRedeemWish()` 只在 `approved` 返回 `null`；
+    `pending` 返回「已提交给家长确认：批准后才会扣 N 分…」，`rejected` / `withdrawn` /
+    `invalidated`（带 `autoReason` 的具体原因）/ **未知状态**（不猜，让人刷新）各有文案。
+    ④ **`approved` 只刷快照**：不本地减分 —— `balanceAfter` 由服务端锁内算，客户端余额可能已过期。
+    ⑤ **`status` 保持字符串**：服务端将来加状态时降级成"未知，请刷新"，而不是解析崩溃。
+    ⑥ **409 `WISH_ALREADY_REDEEMED` 说「没有提交」**：此时服务端没建审批行，
+    写"提交失败"会让人去审批页找一条不存在的申请。
+    ⑦ **本地心愿只用于拼文案**：列表里找不到该 id 也照样发请求（列表可能已过期），
+    有没有、能不能兑换由服务端回答（404 / 409）。
+    ⑧ **点「兑换」先弹确认，取消就一次请求都不发**：文案由 `redeemConfirmText()` 给 ——
+    live 说「提交给家长确认 / 批准后才会扣 N 分 / 现在还没有扣」（按钮写**提交申请**），
+    预览说「立即扣除」（按钮写**确认兑换**）。同一个「确定」按钮会让用户按下去才知道是申请还是扣分。
+    顺手修掉一个真缺陷：心愿页原来用 `isReadOnly`（＝ `isLiveMode`）做兑换拦截，
+    **live 模式点兑换只会弹「只读模式」**，审批请求永远发不出去；改用 `isWishWriteReadOnly`，
+    并补一条 widget 用例从界面点下去钉住（取消 0 次请求 / 确认 1 次 `POST /approvals`）。
+    ⑨ 真跑基线（2026-10-20）：`backend npm test` → **434/434**；`npm run test:db` → **137/137**
+    （`approvals-db` 新增 1 条 409）；小程序 `tsc --noEmit` → **0**；`.tmp_test/run.js` →
+    **91/91**（W5-C 19 条）；`flutter analyze` → **0 issue**；`flutter test` → **105/105**。无新增迁移。
+    ⑩ 仍不粉饰：**家长审批页双端都没有**（`pending` 只能靠后端 `decide` 或手动刷新推进）；
+    `redeem` vs `request_redeem`（guardian=ALLOW）的动作选择仍待产品口径（确认弹层已就位，
+    改口径时只需换文案与动作）；`pending` 之后没有撤销入口；
+    首页「记一笔」/ 我的页仍用旧口径 `isReadOnly` 挡（`adjust_points` 是 guardian ALLOW /
+    child DENY，孩子被挡住是"歪打正着"，但文案说的是「还没接后端」——待换成真话）；
+    习惯 CRUD / 档案 / 邀请未接后端；未做真机联调与压测。
+    交接单：[`20-w5c-handoff.md`](./20-w5c-handoff.md)。
+
+
+**W5-E 进展（2026-10-21）：档案改名 `PATCH /child` + 双端「我的」页真写**
+
+    ① **一条路由、一个字段**：`PATCH /child`（单数、路径无 id），body 只有 `name`。
+    孩子身份只来自会话（`x-kp-device-id` + `x-kp-child-id`）；body 里出现 `childId` / `points`
+    一律 400 —— 客户端不许指定「改谁」，也不许顺手改积分。
+    ② **不加 `Idempotency-Key`，因为 PATCH 由构造幂等**：同名改名在**锁内**短路，
+    回 200 但不写 UPDATE、不写 `child.rename` 审计。重试不会产生第二份副作用，
+    也不会在审计里留下两条一模一样的「A→A」。
+    ③ **单事务 + `SELECT … FOR UPDATE`**：先读后写就是 TOCTOU（两位家长同时改，
+    第二次的 before 会读到已被覆盖的值，审计变成 `B→C` 而真实轨迹是 `A→B→C`）。
+    锁内一次做完：锁行（顺带确认 `status='active'`）→ 比名字 → UPDATE → 写审计快照。
+    `P2025 → 404 CHILD_NOT_FOUND`、`P2002 → 409 CHILD_NAME_CONFLICT`，其余 500（不伪装业务拒绝）。
+    ④ **16 个字符只有一处判据**：DTO 的 `MaxLength(32)` 是 **UTF-16 粗上限**（16 个 emoji = 32 unit，
+    正好不被误伤）；真正的判定在 service 按**码点**（`Array.from(name).length`），
+    错误码只有 `CHILD_NAME_EMPTY` / `CHILD_NAME_TOO_LONG`。双端输入框不判长度、更不截断。
+    ⑤ **写后不重拉 `/home`**：PATCH 回包 `{ childId, name }` 在锁内产生 ⇒ 权威值；
+    再拉一次可能用滞后快照把新名字盖回去。用例钉住「改名后 `fetchHome` 次数不变」。
+    （W4-E / W5-B 的「先落地再刷新」不冲突：那两条要的是回包里没有的余额与流水。）
+    ⑥ **`isProfileWriteReadOnly` 取代全局 `isReadOnly`**：后者等于「live 模式」，
+    拿它挡昵称会让 live 永远点不动 —— 与 W5-C 修 `isWishWriteReadOnly` 同一个病。
+    live 但没有写客户端时返回只读文案且**本地档案不动**（没保存就先改＝假成功）。
+    ⑦ 顺手修掉两个真缺陷：Flutter 弹窗原来用 `TextEditingController` 并在 `dispose()` 后
+    仍被回调引用（保存即崩），改为 `TextFormField(initialValue)`；小程序原来
+    `slice(0, 16)` **静默改写用户输入**（输入 20 字「保存成功」，库里是前 16 字），
+    现在直接发原值，超长由服务端拒绝并翻成中文。
+    ⑧ 状态条与只读文案也改成现在的事实：可写分支由「打卡与撤销会实时保存」改为
+    「打卡 / 记一笔 / 兑换 / 昵称均会实时保存」；`readOnlyWriteMessage` 不再说
+    「兑换 / 档案还没接后端」（旧事实），改成「写客户端未就绪或尚未接后端」；
+    `profileReadOnlyWriteMessage` 同理。前缀 `只读模式：` 保留（用例靠它识别）。
+    ⑨ 真跑基线（2026-10-21）：`backend npm test` → **456/456**（26 文件，新增
+    `child-http.test.ts` 13 条）；`flutter analyze` → **0 issue**；`flutter test` → **132/132**
+    （新增 10 条）；小程序 `tsc --noEmit` → **0**、`build:weapp` → **0**；
+    `.tmp_test/run.js` → **91/91**（老用例无回归）、`run-w5e.mjs` → **10/10**、w4c/w4e/w5a/w5b/w5c/w5d
+    全部 `ALL PASS`。无新增迁移（`AuditLog.action` 是 `String`）。
+    ⑩ ★ **一个假红陷阱**：`npx tsx test/child-http.test.ts` 会 **13 条全 500**
+    （`Cannot read properties of undefined (reading 'renameChild')`）—— tsx(esbuild) 不支持
+    `emitDecoratorMetadata`，Nest 注入拿不到类型。用例必须走 `npm test`（tsc 先编译）。
+    ⑪ 仍不粉饰：只有昵称可改（头像 / 生日 / `childId` 不行，孩子端永远 403）；
+    `PrismaChildrenRepository` 的行锁只有端口替身用例，**没有真库并发对照**；
+    回收站恢复 / 彻底删除、恢复演示数据仍只读（**W5-F 起前两项已落地，见下**）；小程序 `showModal({editable})` 依赖基础库
+    2.17.1 且无降级 UI；改名不通知其它设备；未做真机联调。
+    交接单：[`22-w5e-handoff.md`](./22-w5e-handoff.md)。
+
+**W5-F 进展（2026-10-21）：回收站 —— 删除改成软删 + 双端回收站**
+
+    ① **删除只改状态位**（`status='deleted'` + `deletedAt`），主体留在库里：流水通过
+    `ruleId` / `wishId` / `habitId` 回指，物理删除会让「这 +1 分按什么规则给的」永久断链。
+    `DELETE /habits/:id` 与已有的规则 / 心愿删除同口径，进回收站 90 天可恢复。
+    ② **90 天只有一个事实、一份判定**：`GET /trash` 只下发 `deletedAt`，不下发 `expiresAt`
+    也不下发 `expired` —— 保留期是纯函数（`isTrashExpired`），双端各一份已测试实现。
+    服务端再算一遍就等于两个 90 天常量。配套两条：过期条目**仍然列出**（标红、只允许彻底删除），
+    到期**不会自动清理**（到期 ≠ 必须删，物理删除永远是显式动作）。
+    ③ **恢复由构造幂等、彻底删除不是**：`status='active'` 时恢复直接回同一 `{kind,id}` 且
+    不写第二条审计；彻底删除重复调用得 404（这一项真的不在了，这就是正确答案）。
+    所以两条路由都**不加** `Idempotency-Key` —— 加了只会多出「缓存说成功、库里已没有」的中间态。
+    ④ **彻底删除两道闸**：`status != 'deleted'` ⇒ 409 `TRASH_ITEM_NOT_DELETED`；
+    还有流水指着它 ⇒ 409 `TRASH_ITEM_REFERENCED`（附条数）。后者必须显式 `count` ——
+    `ruleId` / `wishId` 根本没有外键，`habitId` 的 `SetNull` 只会静默置空。
+    `PointRuleVersion` 是 `onDelete: Restrict`，顺序必须是「审计 → 版本行 → 主体」，
+    而且审计要在 `delete()` **之前**写（删完就没有 before 了），`after` 只能写 `Prisma.JsonNull`。
+    ⑤ **恢复习惯要先恢复规则**：父规则还在回收站 ⇒ 409 `TRASH_PARENT_RULE_DELETED`。
+    否则会恢复出一个「看着能打卡、一点就 `HABIT_RULE_GONE`」的假可用状态。
+    ⑥ **孩子能看、不能改**：`view_trash` guardian/child 都 ALLOW，`restore_trash_item` /
+    `purge_trash_item` / `delete_habit` 孩子 DENY。「我删掉的卡不见了」是 C9 的原始抱怨，
+    看见回收站能消除恐惧；但恢复 / 彻底删除是不可逆的配置变更，仍归监护人。
+    ⑦ **读失败绝不清空列表**：空列表在这个界面上等于「已经全部彻底删除」。读失败只置
+    `trashError` 并保留旧条目。小程序这里的分支**只看 `readApi !== null`，不看 `usingPreview`**
+    —— 后者会被「首页读失败」连带翻成 true，让回收站悄悄退化成本地镜像（看起来正常、实际少条目），
+    已由 `run-w5f.mjs` 钉死。
+    ⑧ **未知 `kind` 一律响亮失败**：服务端 400 `TRASH_KIND_INVALID`（不是 404：地址拼错了，
+    不能回答「已经没了」）；小程序 `mapTrash()` 抛 `malformed`（跳过一行＝暗示被彻底删除）；
+    写路径先过白名单，未知名**一个请求都不发**。回包 `{kind,id}` 必须与请求一致，否则 `malformed`。
+    ⑨ **批量清理说真话**：`TrashPurgeOutcome { purged, failed, error }` —— 逐条调，
+    第 3 条失败时前 2 条已经真删了，只报「失败」会让家长以为一条都没清。
+    ⑩ 真跑基线（2026-10-21）：`backend npm test` → **477/477**（27 文件，新增
+    `trash-http.test.ts` 16 条 / 3 组）；`npm run build` → 0；`contracts:emit` → **29 个动作**；
+    `flutter analyze` → **0 issue**；`flutter test` → **149/149**；小程序 `tsc --noEmit` → **0**、
+    `build:weapp` → **0**、`run.js` → **ALL PASS**（含 5 个子 runner）、`run-w5f.mjs` → **19/19**，
+    w4c/w4e/w5a/w5b/w5c/w5d/w5e 全部 `ALL PASS`。新增迁移只做一件事：
+    `ActionType` 加 4 个枚举值（三张表的 `status` / `deletedAt` 在 W0 就有）。
+    ⑪ 仍不粉饰：到期**不自动清理**（没有后台任务）；`lockChildBalance()` 之后的 count→delete
+    只有端口替身用例、**没有真库并发对照**；回收站不分页（无上限保护）；孩子端按钮不按角色隐藏
+    （客户端先拦 + 服务端 403 兜底）；没有撤销删除（只能去回收站恢复）；跨设备不同步；
+    批量清理的二次确认用 `showModal`，老基础库无降级 UI；未做真机联调。
+    交接单：[`23-w5f-handoff.md`](./23-w5f-handoff.md)。
+
+**W5-G 进展（2026-10-22）：邀请码 —— 一个家庭怎么把第二个人拉进来**
+
+    ① **`accept` 是全项目唯一一条「只有身份屏障」的路由**：它的被授权人按定义还**不是**成员，
+    若也要求成员位，这条路由对真正的被邀请人永远 403。判据换成「持有家长签发的码」——
+    屏障一由**码本身**替代（guardian 生成、有次数上限、有有效期、可吊销，且占位是库层面原子的）。
+    代价必须说清：**它解决不了「全新设备的第一次加入」**，那需要登录链路（L2 / `code2session`）。
+    ② **占位是一条条件 `UPDATE … RETURNING`**（`usedCount < maxUses` / `expiresAt > now()` / `revoked = false`），
+    端口上**没有 `findByCode()`** —— `02 §8` 的「不得先查后改」成了结构性保证：想写 TOCTOU 得先改端口签名。
+    与 `02 §8` 示例的差异：示例是 snake_case，而 schema 没 `@map`，列名是 camelCase 且必须带引号。
+    ③ **占位 / 成员位 / 设备会话 / 审计同一事务**：`ALREADY_MEMBER`、`DEVICE_SESSION_CONFLICT` 等都发生在
+    占位成功之后，抛错整笔回滚 ⇒ 用户什么都没得到，就**不许烧掉一次名额**（真库组 D 钉住 `usedCount` 仍为 0）。
+    ④ **撞码重试必须每次开新事务**：PostgreSQL 事务一报错就 aborted，同事务里重试是假的
+    （第二次只会收到 `current transaction is aborted`）。重试 5 次仍撞 ⇒ 409 `INVITE_CODE_GENERATION_FAILED`。
+    ⑤ **四种不可用对客户端是同一句话**（不存在 / 用完 / 过期 / 吊销 ⇒ 409 `INVITE_CODE_UNAVAILABLE`）：
+    区分它们只会把 `accept` 变成「哪些码存在」的探测器，而用户能做的动作完全一样。
+    ⑥ **形状错是 400，不可用是 409**：7 位、含 `O` 这类是**输入**问题，说「码已失效」会让人去找家长重发；
+    规范化只做无歧义转换（去空白/连字符、转大写），**不猜 `O→0`**（字母表里本来就没有 `O`）。
+    ⑦ **`ALREADY_MEMBER` 不烧名额、不改角色**：角色只能由家长在成员管理里改，否则一张 `guardian` 码
+    就是自助升级凭证。并发下 `@@unique(childId,userId)` 是最终裁判（`P2002` ⇒ 409 而非 500）。
+    ⑧ **曾被移出的人用新码回来复用同一行**（`status='active'`、`joinedAt` 更新、`role` 以新码为准，id 不变）；
+    这台设备上已有**别人**的会话 ⇒ 409 `DEVICE_SESSION_CONFLICT`，**不静默覆盖**（共享平板在家里很常见）。
+    ⑨ **审计里不写码**，只记 `inviteCodeId`：码是凭据，写进审计等于复制到一个读取面更宽的表。
+    四条路由都**不加** `Idempotency-Key`：create 本来就该每次生成新码、revoke 构造幂等、accept 的次数上限即判据。
+    ⑩ **会话 TTL 30 天，不是 `02 §7` 的 5 分钟**（已知偏差）：5 分钟的前提是 PIN 校验切换角色，而那条写路径
+    至今没有端点 —— 照发 5 分钟会让刚加入的共同监护人悄悄掉回 child 且**无法提回**。回包如实给 `sessionExpiresAt`。
+    另：`viewer` **不是**可邀请角色（矩阵里没有列 ⇒ 加入后什么都做不了）；`GET /invites` 也要 `invite_member`
+    （列表回的是**码本身**，看得见就能加入，所以不该有 `view_invites`）。
+    ⑪ 真跑基线（2026-10-22）：`backend npm test` → **519/519**（29 文件，新增 `invite-code.test.ts` 15 条 +
+    `invites-http.test.ts` 27 条）；`npm run test:db` → **155/155**（10 文件，新增 `invites-db.dbtest.ts`
+    18 条 / 7 组，含 **10 并发 vs `maxUses=3` ⇒ 恰好 3 成功 + 7×409、`usedCount` 恒为 3**）；`typecheck` /
+    `typecheck:tests` / `build` → 0；`contracts:emit` → **29 个动作（无变化）**；**新增迁移 0 条**。
+    演示脚本 `npm run seed:demo` 连跑两次幂等，真 HTTP 冒烟 `GET /invites` 200 → accept 200 →
+    再 accept 409 `ALREADY_MEMBER` → `usedCount=1`。
+    ⑫ 仍不粉饰：双端**没有邀请码 UI**（四个端点只有 curl 能用）；没有成员管理端点（改角色 / 移出）——
+    **此条已由 W5-H 补齐，见下**；
+    `accept` **没有速率限制**（全项目还没有 throttler）；列表不分页；`usedByUserId` 只记**最后一个**人
+    （`maxUses>1` 时查不出「谁用过」）；`AuditLog.targetId` 不是外键；PIN 会话语义未落地；未做真机联调。
+    交接单：[`24-w5g-handoff.md`](./24-w5g-handoff.md)。
+
+**W5-H（成员管理，2026-10-22 已收口 · 服务端）**
+
+    ① 三条路由：`GET /members`（`view_members`）、`PATCH /members/:id`（`change_member_role`）、
+    `DELETE /members/:id`（`remove_member`），全部**三道屏障**。**孩子能看列表、不能改不能删**：
+    他本来就看得见「家里有谁」（选择器里能切到的就是他认识的），藏起来只会让界面出现「一个匿名家长」；
+    列表只含 `displayName` / `role` / `status` / `joinedAt` / `removedAt` / `isSelf`，**不含手机号、`openId`、PIN**。
+    ② ★ **最后一位家长的保护不能「先查后写」**：那是集合事实（`count(*)`），两个家长同时把对方降级，
+    双方都读到 2 ⇒ 双双成功、家里 0 位家长。单条条件 `UPDATE … WHERE (SELECT count(*)…) > 1` 也不够：
+    READ COMMITTED 下两条语句各看自己的语句快照。**做法是先 `SELECT … ORDER BY id FOR UPDATE` 锁住
+    这个孩子的全部成员位，再计数、再写**；第二笔事务等第一笔提交后在已提交的数据上重新计数
+    （EPQ 重检会丢掉已不满足条件的行）⇒ 多出来的那笔得到 409 `LAST_GUARDIAN_PROTECTED`。
+    锁粒度是「一个孩子的成员位」（家庭个位数行），都按 id 升序 ⇒ 不死锁；条件 UPDATE 的 count 子查询
+    **保留作第二道保险**（将来锁被重构掉时仍能挡住一部分）。
+    ③ **降级 = 同一事务收回会话**：`ChildMember.role` 改了而 `DeviceSession.activeRole` 没改，
+    等于降级只写了个字段。适配器在事务里把 `(childId, userId)` 上 `activeRole='guardian'` 的会话改成
+    `child`（**只动这个孩子**）；**升级不碰会话**（模式没切换，本来就该是 child）。
+    ④ **读路径再收一次**：`clampRoleToMembership()` ⇒ 矩阵查表用的角色 = **min(会话角色, 成员位角色)**。
+    写路径「记得同步」不该是唯一保障（手工改库 / 未来批量脚本 / 迁移都可能留下一张 guardian 的票）。
+    它不是提权：guardian 会话 + child 成员位 ⇒ child，viewer ⇒ viewer（矩阵一律 DENY）。
+    ⑤ **两条写路由都禁止作用于自己**（403 `CANNOT_MODIFY_SELF`）。自我降级 = 一次误触就把自己锁在门外，
+    而**没有家长能救回来**（能救的人也被你降掉了）；「退出家庭」是另一个产品决定（要定流水归属与数据迁移），
+    不该由 `DELETE /members/:id` 顺手实现。正是这两条拒绝让「最后一位家长」保护真正成立。
+    ⑥ **都不加 `Idempotency-Key`，也不加 `expectedVersion`**：`PATCH` 目标角色相同 ⇒ 200 且不写审计；
+    `DELETE` 已移出 ⇒ 200、`removedAt` 保持第一次的值、不写第二条审计。版本号只能防「基于旧视图的覆盖」，
+    而这里真正危险的并发是**两个家长同时把对方降级**，他们看到的是同一个版本（对策是 ② 的锁）。
+    ⑦ **移出不删会话**：删了只能回 401 `SESSION_NOT_FOUND`，把「你已被移出」伪装成「你没登录」，
+    用户会去重登、重登后还是什么都没有。会话留着，屏障一回 403 `MEMBER_REMOVED`。
+    ⑧ **线格式只下发事实不下发结论**：给 `role` / `status` / `isSelf`，**不给** `canChangeRole` / `canRemove` /
+    `actions[]` —— 结论由服务端屏障二现场判定。`isSelf` 是唯一「服务端算、客户端不该算」的字段
+    （客户端不知道自己的 userId）。`DELETE` 回 `{memberId, status:'removed', removedAt}` 而不是 204，
+    与 `{id, revoked}` / `ruleId` 同一手法：回包要与请求验明正身。
+    ⑨ **审计快照只含 `role` / `status`**（`member.role_change` / `member.remove`），
+    `pinHash` / `restrictions` / `openId` 一律不进审计（审计表读取面宽得多）。
+    ⑩ **`viewer` 不能作为 `PATCH` 的目标角色**（`@IsIn(['child','guardian'])`）：降成 viewer = 让他看得见、
+    什么都做不了（矩阵无列 ⇒ 一律 DENY），那不是降权而是制造死账号。`viewer` 目前只有历史数据里可能存在。
+    ⑪ 真跑基线（2026-10-22）：`backend npm test` → **544/544**（30 文件，新增 25 条）；
+    `npm run test:db` → **173/173**（11 文件，新增 `members-db.dbtest.ts` **18 条 / 5 组**，含
+    **3 家长环形降级 ⇒ 恰好 2 成功 + 1×409、库里恒剩 1 位家长**）；`typecheck` / `typecheck:tests` /
+    `build` → 0；`contracts:emit` → **31 个动作**（新增 `view_members` / `change_member_role`）；
+    `honesty:probe` 4/4、`defects:check` 19/19；**新增迁移 1 条**（`20261022090000_member_actions`，
+    只加 `ActionType` 两个枚举值，无 DDL 动表）。
+    ⑫ ★ **本轮最值得记住的坑**：`members-db.dbtest.ts` 的 `after()` 少了一个 `})`，18 条用例全被关进
+    回调里 ⇒ Node 把**文件本身**记成一条 `✔`，`test:db` 报 156 全绿（守卫 ②「tests ≥ 文件数」照样满足）。
+    已在 `scripts/run-tests.mjs` 加**守卫 ④**：出现**顶格**的 `<…>.test.js (…ms)` 行 ⇒ 红并点名文件；
+    并把它**常设证伪**进 `npm run test:canfail` 的 C / C2 两组（现场写夹具、要求非 0 退出码且点名，
+    `finally` 里删除；夹具里的 `it` 必须通过，否则红在 Node 自己而不是守卫上）。**守卫必须能变红，否则它只是装饰。**
+    ⑬ 仍不粉饰：双端**没有成员管理 UI**（三条端点只有 curl 能调）；「退出家庭」不存在；
+    `ChildMember` 没有 `updatedAt`（「什么时候改的角色」只能查审计）；列表不分页、不筛 `removed`；
+    `viewer` 无法创建；PIN / 5 分钟会话刷新未落地（故「降级即收票」是唯一降权手段）；未做真机联调。
+    交接单：[`25-w5h-handoff.md`](./25-w5h-handoff.md)。
+
 
 
 ### 文档缺陷修正记录

@@ -7,9 +7,18 @@ import {
   type ReadEnvironment
 } from './read_api'
 import { ReadApiException } from './read_api_errors'
-import { HabitDto, RuleDto } from './read_dto'
+import { HabitDto, InviteDto, MemberDto, RuleDto, WishDto } from './read_dto'
 import { WriteApiException } from './write_api_errors'
-import { WrittenRecordDto } from './write_dto'
+import {
+  ApprovalDto,
+  ChildProfileDto,
+  InviteRevokeDto,
+  MemberRemoveDto,
+  TrashTargetDto,
+  WrittenRecordDto
+} from './write_dto'
+import type { MemberRole, MutableMemberRole } from './types'
+import { INVITE_MAX_TTL_DAYS, INVITE_MAX_USES } from './types'
 
 /** 写端点用到的 HTTP 方法（与后端 REST 语义一致，幂等哈希按真实方法算）。 */
 export type WriteMethod = 'POST' | 'PATCH' | 'DELETE'
@@ -82,6 +91,19 @@ export interface WriteApi {
   ): Promise<WrittenRecordDto>
 
   /**
+   * 「记一笔」（`adjust_points`）：家长手动加 / 扣分。
+   *
+   * `points` **带符号**（负 = 扣分），与回包同构 —— 调用方不需要再取反；
+   * 服务端按锁内余额算 `balanceAfter` 并落一条 `category='adjust'` 的流水。
+   */
+  adjust(input: {
+    title: string
+    points: number
+    note?: string
+    idempotencyKey?: string
+  }): Promise<WrittenRecordDto>
+
+  /**
    * 新建规则。`points` 带符号（负 = 扣分），服务端落库时拆成
    * 「正数分值 + direction」，回包仍是带符号的分值。
    */
@@ -116,6 +138,159 @@ export interface WriteApi {
 
   /** 按规则生成首页习惯。返回与 `GET /home` 的 `habits[]` 同构的行。 */
   addHabitFromRule(ruleId: string, idempotencyKey?: string): Promise<HabitDto>
+
+  /**
+   * 新增心愿（`add_wish`）。
+   *
+   * 家长 ⇒ 直接落库；孩子的权限矩阵若是 `REQUIRE_APPROVAL`，服务端回
+   * 403 `APPROVAL_REQUIRED` —— 这里**不吞**该业务码，由 store 翻成
+   * 「需要家长确认」，界面据此提示，而不是假装保存成功。
+   */
+  createWish(input: {
+    title: string
+    cost: number
+    emoji: string
+    idempotencyKey?: string
+  }): Promise<WishDto>
+
+  /**
+   * 软删心愿（`delete_wish`，进回收站）。返回服务端确认删除的 `wishId`。
+   *
+   * 删除**不碰流水**：已发生的兑换记录继续带 `wishId` 回指这条心愿（修 C9）。
+   */
+  deleteWish(wishId: string, idempotencyKey?: string): Promise<string>
+
+  /**
+   * 软删首页习惯（`DELETE /habits/:id`，`delete_habit`，W5-F）—— 修 C9。
+   *
+   * 服务端只改 `status='deleted'` + `deletedAt`，**不碰流水**，因此卡片上的
+   * 历史打卡仍能回指这条习惯。返回服务端确认删除的 `habitId`。
+   */
+  deleteHabit(habitId: string, idempotencyKey?: string): Promise<string>
+
+  /**
+   * 从回收站恢复一条（`POST /trash/:kind/:id/restore`，W5-F）。
+   *
+   * `kind` 只接受 `point_rule` / `wish` / `habit` —— 拼错的类型在**发请求之前**
+   * 就抛错（服务端会回 400 `TRASH_KIND_INVALID`，用户不该看到本可避免的错误）。
+   */
+  restoreTrashItem(kind: string, id: string): Promise<TrashTargetDto>
+
+  /**
+   * 彻底删除回收站里的一条（`DELETE /trash/:kind/:id`）—— **不可逆**，W5-F。
+   *
+   * 服务端只允许删「已经在回收站里」的条目；拒绝（还有流水引用 / 根本没软删）
+   * 时原样抛 4xx，由 store 把 `userMessage` 展示给用户。
+   */
+  purgeTrashItem(kind: string, id: string): Promise<TrashTargetDto>
+
+  /**
+   * 申请兑换心愿（`POST /approvals`，`action='redeem'`）。
+   *
+   * 后端**没有**独立的「兑换」路由：`redeem` 在权限矩阵里对两个角色都是
+   * `REQUIRE_APPROVAL`，所以唯一的正确路径就是建一条审批请求。
+   * `costSnapshot` **不由客户端提交** —— 服务端按心愿当前价格快照，
+   * 客户端说了不算（否则改一个数字就能少扣分）。
+   *
+   * 回包 `status === 'pending'` 时**还没有扣分**：界面必须说
+   * 「已提交，等家长确认」，不能说「兑换成功」。
+   */
+  requestRedeem(wishId: string, idempotencyKey?: string): Promise<ApprovalDto>
+
+  /**
+   * 家长批准 / 拒绝一条申请（`POST /approvals/:id/decide`，W5-D）。
+   *
+   * `decision` 只接受 `approved` / `rejected` —— 其他终态（`expired` /
+   * `invalidated`）由服务端自己落，客户端不能"替服务端宣布失效"。
+   *
+   * 回包是审批单本身：`approved` 时 `executedRecordId` 指向真正落下的流水
+   * （调用方随后刷新快照就能看到余额变化），`rejected` 时为 null。
+   *
+   * 只有家长角色调得通：孩子设备会拿到 403；重复处理 / 已过期 / 前提变化
+   * 都是 409（`ALREADY_DECIDED` / `APPROVAL_EXPIRED` / `APPROVAL_INVALIDATED`）——
+   * 页面据此刷新列表，而不是把失败当成"网络问题"让用户反复重试。
+   */
+  decideApproval(
+    approvalId: string,
+    input: { approve: boolean; idempotencyKey?: string }
+  ): Promise<ApprovalDto>
+
+  /**
+   * 改孩子昵称（`PATCH /child`，`edit_child_profile`，W5-E）。
+   *
+   * 幂等：改成同一个名字时服务端**不写库也不写审计**，直接回 200，
+   * 所以这里不带幂等键。
+   *
+   * 回包 `childId` 必须等于本设备会话的孩子；不一致说明这次改名落到了
+   * 别人头上 ⇒ 抛 `malformed`，绝不写进本地档案。
+   */
+  renameChild(name: string): Promise<ChildProfileDto>
+
+  /**
+   * 改成员角色（`PATCH /members/:id`，`change_member_role`，W5-H）。
+   *
+   * `role` 只接受 `guardian` / `child`：`viewer` 不是合法目标角色
+   * （邀请码也建不出它），传进来在**发请求之前**就拒绝。
+   *
+   * 常见业务拒绝（都必须原样展示，不能让界面假装成功）：
+   *   · 403 `CANNOT_MODIFY_SELF` —— 两条写路由都禁止作用于自己
+   *     （自我降级 = 把自己锁在门外，而没有家长能救你）
+   *   · 403 `FORBIDDEN` —— 当前角色不是家长
+   *   · 409 `LAST_GUARDIAN_PROTECTED` —— 会把这个孩子降成 0 位家长
+   *   · 409 `MEMBER_NOT_ACTIVE` —— 目标成员位已被移出
+   *   · 404 `MEMBER_NOT_FOUND` —— 不存在 / 属于别的孩子（同一句话）
+   *
+   * 同角色重复提交在服务端是**构造幂等**（200、不写第二条审计），
+   * 因此不需要幂等键。回包 `role` 必须等于请求的角色 —— 不一致说明契约漂移，
+   * 宁可显式失败。
+   */
+  changeMemberRole(
+    memberId: string,
+    role: MutableMemberRole
+  ): Promise<MemberDto>
+
+  /**
+   * 移出成员（`DELETE /members/:id`，`remove_member`，W5-H）。
+   *
+   * 服务端只做**软删**（`status='removed'`）并**保留会话**：删会话会把
+   * 「你被移出」伪装成「你没登录」（401）。重复调用是构造幂等
+   * （200、`removedAt` 保持第一次的值）。
+   *
+   * 403 `CANNOT_MODIFY_SELF`（不能移出自己 ⇒ 没有自助「退出家庭」）、
+   * 403 `FORBIDDEN`、409 `LAST_GUARDIAN_PROTECTED` 都按原样展示。
+   * 回包 `memberId` 必须等于请求的 id。
+   */
+  removeMember(memberId: string): Promise<MemberRemoveDto>
+
+  /**
+   * 生成邀请码（`POST /invites`，`invite_member`，W5-I）。
+   *
+   * 参数范围在**发请求之前**就按后端 DTO 判掉（`@IsIn(['child','guardian'])`、
+   * `@Max(10)` / `@Max(30)`）：越界一定会 400，白跑一趟还要等网络。
+   *
+   * 回包是**新码全量行**（`{ id, code, role, maxUses, usedCount, expiresAt,
+   * revoked, createdAt }`）—— 直接插到列表头，不重拉整页：重拉会让刚生成的码
+   * 排到服务端顺序里的某个位置，用户复制错了就是别人的码。
+   *
+   * 常见业务拒绝：403 `FORBIDDEN`（不是家长）、409
+   * `INVITE_CODE_GENERATION_FAILED`（连续撞码，服务端放弃）。
+   */
+  createInvite(input: {
+    role: MutableMemberRole
+    maxUses: number
+    expiresInDays: number
+  }): Promise<InviteDto>
+
+  /**
+   * 吊销邀请码（`POST /invites/:id/revoke`，`invite_member`，W5-I）。
+   *
+   * 构造幂等：已经吊销过的码再吊销仍是 200（且不写第二条审计）。404
+   * `INVITE_NOT_FOUND` = 不存在或不属于这个孩子（同一句话，不泄露别家 id）。
+   *
+   * 回包只有 `{ id, revoked }` —— 服务端不回整行，客户端不要把「200」
+   * 理解成「这次真的改了一行」，也不要拿它去覆盖别的字段。
+   */
+  revokeInvite(inviteId: string): Promise<InviteRevokeDto>
 }
 
 /** `POST /records/check-in` 与 `POST /records/:id/reverse` 的客户端。 */
@@ -164,6 +339,31 @@ export class WriteApiClient implements WriteApi {
       'POST',
       `/records/${encodeURIComponent(id)}/reverse`,
       note === '' ? {} : { note },
+      parseWrittenRecord,
+      input.idempotencyKey
+    )
+  }
+
+  async adjust(input: {
+    title: string
+    points: number
+    note?: string
+    idempotencyKey?: string
+  }): Promise<WrittenRecordDto> {
+    const title = input.title.trim()
+    if (title === '') {
+      throw new Error('title 不能为空')
+    }
+    if (input.points === 0) {
+      throw new Error('points 不能为 0')
+    }
+    const note = input.note?.trim() ?? ''
+    return this.send(
+      'POST',
+      '/records/adjust',
+      note === ''
+        ? { title, points: input.points }
+        : { title, points: input.points, note },
       parseWrittenRecord,
       input.idempotencyKey
     )
@@ -273,6 +473,281 @@ export class WriteApiClient implements WriteApi {
     )
   }
 
+  async createWish(input: {
+    title: string
+    cost: number
+    emoji: string
+    idempotencyKey?: string
+  }): Promise<WishDto> {
+    const title = input.title.trim()
+    if (title === '') throw new Error('title 不能为空')
+    if (!Number.isInteger(input.cost) || input.cost < 1) {
+      throw new Error('cost 必须是 ≥ 1 的整数')
+    }
+    const emoji = input.emoji.trim()
+    if (emoji === '') throw new Error('emoji 不能为空')
+    return this.send(
+      'POST',
+      '/wishes',
+      {
+        title,
+        cost: input.cost,
+        emoji
+        // 配色**不传**：由服务端按「空档优先，否则 id 哈希」决定，
+        // 避免客户端和服务端各算一次而给出两个颜色。
+      },
+      (raw) => this.parseWish(raw),
+      input.idempotencyKey
+    )
+  }
+
+  async deleteWish(wishId: string, idempotencyKey?: string): Promise<string> {
+    const id = this.requireId(wishId, 'wishId')
+    const decoded = await this.send<unknown>(
+      'DELETE',
+      `/wishes/${encodeURIComponent(id)}`,
+      // DELETE 没有请求体：目标已经在路径里，幂等哈希也按 null body 计算。
+      null,
+      (raw) => raw,
+      idempotencyKey
+    )
+    const returned =
+      typeof decoded === 'object' && decoded !== null
+        ? (decoded as Record<string, unknown>).wishId
+        : undefined
+    if (returned !== id) {
+      // 回包确认的不是「我删的那条」⇒ 宁可报错，也不能让界面假装删对了。
+      throw WriteApiException.malformed(
+        '$.wishId',
+        `删除回包的 wishId 与请求不一致：${String(returned)} != ${id}`
+      )
+    }
+    return id
+  }
+
+  async deleteHabit(habitId: string, idempotencyKey?: string): Promise<string> {
+    const id = this.requireId(habitId, 'habitId')
+    const decoded = await this.send<unknown>(
+      'DELETE',
+      `/habits/${encodeURIComponent(id)}`,
+      // DELETE 没有请求体：目标已经在路径里，幂等哈希也按 null body 计算。
+      null,
+      (raw) => raw,
+      idempotencyKey
+    )
+    const returned =
+      typeof decoded === 'object' && decoded !== null
+        ? (decoded as Record<string, unknown>).habitId
+        : undefined
+    if (returned !== id) {
+      // 回包确认的不是「我删的那条」⇒ 宁可报错，也不能让界面假装删对了。
+      throw WriteApiException.malformed(
+        '$.habitId',
+        `删除回包的 habitId 与请求不一致：${String(returned)} != ${id}`
+      )
+    }
+    return id
+  }
+
+  async restoreTrashItem(kind: string, id: string): Promise<TrashTargetDto> {
+    const safeKind = this.trashKind(kind)
+    const safeId = this.requireId(id, 'id')
+    return this.send<TrashTargetDto>(
+      'POST',
+      `/trash/${safeKind}/${encodeURIComponent(safeId)}/restore`,
+      null,
+      (raw) => TrashTargetDto.fromJson(raw, '$', safeKind, safeId)
+    )
+  }
+
+  async purgeTrashItem(kind: string, id: string): Promise<TrashTargetDto> {
+    const safeKind = this.trashKind(kind)
+    const safeId = this.requireId(id, 'id')
+    return this.send<TrashTargetDto>(
+      'DELETE',
+      `/trash/${safeKind}/${encodeURIComponent(safeId)}`,
+      null,
+      (raw) => TrashTargetDto.fromJson(raw, '$', safeKind, safeId)
+    )
+  }
+
+  /**
+   * 回收站只认三个线值；拼错的类型**在发请求之前**就报错 ——
+   * 否则服务端会回 400 `TRASH_KIND_INVALID`，用户看到一条本可避免的错误。
+   */
+  private static readonly trashKinds = ['point_rule', 'wish', 'habit'] as const
+
+  private trashKind(kind: string): string {
+    const value = kind.trim()
+    if (!(WriteApiClient.trashKinds as readonly string[]).includes(value)) {
+      throw new Error(`未知回收站类型：${value}（应为 point_rule / wish / habit）`)
+    }
+    return value
+  }
+
+  async requestRedeem(
+    wishId: string,
+    idempotencyKey?: string
+  ): Promise<ApprovalDto> {
+    const id = this.requireId(wishId, 'wishId')
+    return this.send<ApprovalDto>(
+      'POST',
+      '/approvals',
+      {
+        action: 'redeem',
+        targetId: id
+        // `autoApprove` **不发**：那是「申请人要求自批」的显式勾选，
+        // 孩子没有批准资格 ⇒ 只会换来 400；家长也不该被这个界面代勾。
+      },
+      (raw) => this.parseApproval(raw),
+      idempotencyKey
+    )
+  }
+
+  async decideApproval(
+    approvalId: string,
+    input: { approve: boolean; idempotencyKey?: string }
+  ): Promise<ApprovalDto> {
+    const id = this.requireId(approvalId, 'approvalId')
+    return this.send<ApprovalDto>(
+      'POST',
+      // 审批单 id 放进路径，客户端不用（也不该）自己拼查询串。
+      `/approvals/${encodeURIComponent(id)}/decide`,
+      { decision: input.approve ? 'approved' : 'rejected' },
+      (raw) => this.parseApproval(raw),
+      input.idempotencyKey
+    )
+  }
+
+  async renameChild(name: string): Promise<ChildProfileDto> {
+    const trimmed = name.trim()
+    if (trimmed === '') {
+      // 空名字在本地就拒：服务端一定会 400，白跑一趟还要等网络。
+      // 长度**不在客户端**判：16 个字符是按 code point 算的，
+      // 判定只留一份在服务端（emoji / 组合字符在 JS 里数出来不一样）。
+      throw new Error('name 不能为空')
+    }
+    return this.send(
+      'PATCH',
+      '/child',
+      { name: trimmed },
+      (raw) => {
+        const dto = this.parseChildProfile(raw)
+        const sessionChildId = this.config.childId.trim()
+        if (dto.childId !== sessionChildId) {
+          throw WriteApiException.malformed(
+            '$.childId',
+            `回包 childId=${dto.childId} 与当前会话 childId=${sessionChildId} 不一致`
+          )
+        }
+        return dto
+      }
+    )
+  }
+
+  async changeMemberRole(
+    memberId: string,
+    role: MutableMemberRole
+  ): Promise<MemberDto> {
+    const id = this.requireId(memberId, 'memberId')
+    if (role !== 'guardian' && role !== 'child') {
+      // `viewer` 不是合法目标角色（后端 DTO 用 @IsIn(['child','guardian'])）。
+      // 在本地就拒绝，不浪费一次必然 400 的往返。
+      throw new Error('role 只能是 guardian / child')
+    }
+    return this.send(
+      'PATCH',
+      `/members/${encodeURIComponent(id)}`,
+      { role },
+      (raw) => {
+        const dto = this.parseMember(raw)
+        if (dto.memberId !== id) {
+          // 回包指向别的成员 ⇒ 会话串号 / 后端 bug。
+          // 把别人的角色改掉是权限事故，宁可显式失败。
+          throw WriteApiException.malformed(
+            '$.memberId',
+            `回包 memberId=${dto.memberId} 与请求 ${id} 不一致`
+          )
+        }
+        if (dto.role !== role) {
+          // 请求降级、回包仍是家长 ⇒ 界面会以为降级成功。
+          throw WriteApiException.malformed(
+            '$.role',
+            `回包 role=${dto.role} 与请求 ${role} 不一致`
+          )
+        }
+        return dto
+      }
+    )
+  }
+
+  async removeMember(memberId: string): Promise<MemberRemoveDto> {
+    const id = this.requireId(memberId, 'memberId')
+    return this.send(
+      'DELETE',
+      `/members/${encodeURIComponent(id)}`,
+      null,
+      (raw) => this.parseMemberRemove(raw, id)
+    )
+  }
+
+  async createInvite(input: {
+    role: MutableMemberRole
+    maxUses: number
+    expiresInDays: number
+  }): Promise<InviteDto> {
+    const { role, maxUses, expiresInDays } = input
+    if (role !== 'guardian' && role !== 'child') {
+      // `viewer` 不是可邀请的角色（后端 DTO：@IsIn(['child','guardian'])）。
+      throw new Error('role 只能是 guardian / child')
+    }
+    if (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > INVITE_MAX_USES) {
+      throw new Error(`maxUses 必须是 1–${INVITE_MAX_USES} 的整数`)
+    }
+    if (
+      !Number.isInteger(expiresInDays) ||
+      expiresInDays < 1 ||
+      expiresInDays > INVITE_MAX_TTL_DAYS
+    ) {
+      throw new Error(`expiresInDays 必须是 1–${INVITE_MAX_TTL_DAYS} 的整数`)
+    }
+    // 不带幂等键：每次生成**都该是新码**（同一个键重放会拿回同一张票，
+    // 家长会以为「生成失败」而反复点）。参数范围已在上面拦过。
+    return this.send(
+      'POST',
+      '/invites',
+      { role, maxUses, expiresInDays },
+      (raw) => {
+        const dto = this.parseInvite(raw)
+        if (dto.role !== role) {
+          // 要的是孩子码、回包却是家长码 ⇒ 发出去就是一次权限事故。
+          throw WriteApiException.malformed(
+            '$.role',
+            `回包 role=${dto.role} 与请求 ${role} 不一致`
+          )
+        }
+        if (dto.maxUses !== maxUses) {
+          // 名额被悄悄改写会让「发给 3 个人」变成「只发给 1 个人」。
+          throw WriteApiException.malformed(
+            '$.maxUses',
+            `回包 maxUses=${dto.maxUses} 与请求 ${maxUses} 不一致`
+          )
+        }
+        return dto
+      }
+    )
+  }
+
+  async revokeInvite(inviteId: string): Promise<InviteRevokeDto> {
+    const id = this.requireId(inviteId, 'inviteId')
+    return this.send(
+      'POST',
+      `/invites/${encodeURIComponent(id)}/revoke`,
+      null,
+      (raw) => this.parseInviteRevoke(raw, id)
+    )
+  }
+
   private requireId(value: string, name: string): string {
     const id = value.trim()
     if (id === '') throw new Error(`${name} 不能为空`)
@@ -297,6 +772,86 @@ export class WriteApiClient implements WriteApi {
   private parseHabit(raw: unknown): HabitDto {
     try {
       return HabitDto.fromJson(raw, '$')
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseWish(raw: unknown): WishDto {
+    try {
+      return WishDto.fromJson(raw, '$')
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseApproval(raw: unknown): ApprovalDto {
+    try {
+      return ApprovalDto.fromJson(raw, '$')
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseChildProfile(raw: unknown): ChildProfileDto {
+    try {
+      return ChildProfileDto.fromJson(raw, '$')
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseMember(raw: unknown): MemberDto {
+    try {
+      return MemberDto.fromJson(raw, '$')
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseMemberRemove(raw: unknown, expectedMemberId: string): MemberRemoveDto {
+    try {
+      return MemberRemoveDto.fromJson(raw, '$', expectedMemberId)
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseInvite(raw: unknown): InviteDto {
+    try {
+      return InviteDto.fromJson(raw, '$')
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseInviteRevoke(
+    raw: unknown,
+    expectedInviteId: string
+  ): InviteRevokeDto {
+    try {
+      return InviteRevokeDto.fromJson(raw, '$', expectedInviteId)
     } catch (error) {
       if (error instanceof ReadApiException) {
         throw WriteApiException.malformed('$', error.detail ?? undefined)

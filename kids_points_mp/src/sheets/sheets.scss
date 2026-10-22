@@ -157,3 +157,347 @@
   font-size: f2r(13);
   color: $text-secondary;
 }
+
+.kp-trash__status {
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-trash__status-text {
+  font-size: f2r(12.5);
+  color: $text-secondary;
+}
+
+/* 加载失败用告警色：它必须一眼区别于“回收站是空的”。 */
+.kp-trash__status-text.is-error {
+  color: $point-spend;
+}
+
+// ───────────────────────────────────────────── 家庭成员（W5-H）
+// 一行 = 昵称 + 角色徽标 + 加入时间；家长看别人时多两个写入口。
+// 「我是谁 / 我能不能改」全部来自 store（`isSelf` / `canManageMembers`），
+// 这里只负责排版，不做任何权限推测。
+.kp-member__list {
+  display: flex;
+  flex-direction: column;
+  gap: f2r(10);
+}
+
+.kp-member__row {
+  padding: f2r(14) f2r(16);
+  border-radius: f2r(16);
+  background-color: $surface;
+}
+
+.kp-member__head {
+  display: flex;
+  align-items: center;
+}
+
+.kp-member__name {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(14.5);
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.kp-member__pill {
+  flex-shrink: 0;
+  margin-left: f2r(6);
+  padding: f2r(3) f2r(10);
+  border-radius: f2r(999);
+  background-color: $primary-soft;
+}
+
+.kp-member__pill.is-self {
+  background-color: $primary-deep;
+}
+
+.kp-member__pill-text {
+  font-size: f2r(12);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-member__pill-text.is-self {
+  color: $surface;
+}
+
+.kp-member__meta {
+  display: block;
+  margin-top: f2r(4);
+  font-size: f2r(11.5);
+  color: $text-secondary;
+}
+
+.kp-member__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: f2r(10);
+}
+
+.kp-member__chip {
+  padding: f2r(8) f2r(14);
+  border-radius: f2r(999);
+  background-color: $primary-soft;
+}
+
+.kp-member__chip:active {
+  opacity: 0.8;
+}
+
+.kp-member__chip + .kp-member__chip {
+  margin-left: f2r(8);
+}
+
+.kp-member__chip.is-danger {
+  background-color: #fdf1e9;
+}
+
+/* 在途行整体降透明度即可：文案已经换成「处理中…」，不重复加灰。 */
+.kp-member__chip.is-disabled {
+  opacity: 0.5;
+}
+
+.kp-member__chip.is-disabled:active {
+  opacity: 0.5;
+}
+
+.kp-member__chip-text {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-member__chip-text.is-danger {
+  color: $point-spend;
+}
+
+.kp-member__empty {
+  padding: f2r(24) 0;
+  text-align: center;
+}
+
+.kp-member__empty-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-member__status {
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-member__status-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-member__status-text {
+  font-size: f2r(12.5);
+  color: $text-secondary;
+}
+
+.kp-member__error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(12.5);
+  color: $point-spend;
+}
+
+.kp-member__status-row .kp-member__chip {
+  margin-left: f2r(8);
+  padding: f2r(6) f2r(12);
+}
+
+// ───────────────────────────────────────────── 邀请码（W5-I）
+// 一屏三块：生成表单 / 状态行 / 码列表。
+// 「可用 / 已用完 / 已过期 / 已吊销」由 `inviteStatusOf` 现算后传进来，
+// 这里只按 `is-usable` 决定配色，不做任何业务判断。
+.kp-invite__card-title {
+  display: block;
+  font-size: f2r(14);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-invite__label {
+  display: block;
+  margin-bottom: f2r(6);
+  font-size: f2r(11.5);
+  font-weight: 600;
+  color: $text-secondary;
+}
+
+.kp-invite__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: f2r(8);
+}
+
+.kp-invite__submit {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: f2r(12);
+}
+
+.kp-invite__list {
+  display: flex;
+  flex-direction: column;
+  gap: f2r(10);
+}
+
+.kp-invite__row {
+  padding: f2r(14) f2r(16);
+  border-radius: f2r(16);
+  background-color: $surface;
+}
+
+.kp-invite__head {
+  display: flex;
+  align-items: center;
+}
+
+/* 码本身是这一行的主角：等比宽字体 + 字距，抄写时不容易串行。 */
+.kp-invite__code {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(17);
+  font-weight: 700;
+  letter-spacing: f2r(1);
+  color: $text-primary;
+}
+
+.kp-invite__pill {
+  flex-shrink: 0;
+  margin-left: f2r(8);
+  padding: f2r(3) f2r(10);
+  border-radius: f2r(999);
+  background-color: $chip-bg;
+}
+
+.kp-invite__pill.is-usable {
+  background-color: $primary-soft;
+}
+
+.kp-invite__pill-text {
+  font-size: f2r(12);
+  font-weight: 600;
+  color: $text-secondary;
+}
+
+.kp-invite__pill-text.is-usable {
+  color: $primary-text;
+}
+
+.kp-invite__meta {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(12);
+  color: $text-secondary;
+}
+
+.kp-invite__expires {
+  display: block;
+  margin-top: f2r(2);
+  font-size: f2r(11.5);
+  color: $text-hint;
+}
+
+.kp-invite__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: f2r(10);
+}
+
+.kp-invite__chip {
+  margin-left: f2r(8);
+  padding: f2r(6) f2r(14);
+  border-radius: f2r(999);
+  background-color: $primary-soft;
+}
+
+.kp-invite__chip:active {
+  opacity: 0.8;
+}
+
+.kp-invite__chip.is-danger {
+  background-color: #fdf1e9;
+}
+
+/* 在途 / 禁用态整体降透明度即可：文案已经换成「生成中… / 吊销中…」。 */
+.kp-invite__chip.is-disabled {
+  opacity: 0.5;
+}
+
+.kp-invite__chip.is-disabled:active {
+  opacity: 0.5;
+}
+
+.kp-invite__chip-text {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-invite__chip-text.is-danger {
+  color: $point-spend;
+}
+
+.kp-invite__empty {
+  padding: f2r(24) 0;
+  text-align: center;
+}
+
+.kp-invite__empty-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-invite__status {
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-invite__status-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-invite__status-text {
+  font-size: f2r(12.5);
+  color: $text-secondary;
+}
+
+.kp-invite__error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(12.5);
+  color: $point-spend;
+}
+
+.kp-invite__hint {
+  padding: f2r(8) 0;
+}
+
+.kp-invite__hint-text {
+  font-size: f2r(12);
+  line-height: 1.5;
+  color: $text-secondary;
+}

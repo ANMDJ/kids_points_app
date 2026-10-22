@@ -7,6 +7,8 @@ import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
 import type { IconName } from '../../components/Icon/icons'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
+import InviteSheet from '../../sheets/InviteSheet'
+import MemberSheet from '../../sheets/MemberSheet'
 import TrashSheet from '../../sheets/TrashSheet'
 import { ALLOW_DEMO_RESET, useStore } from '../../data/store'
 import { withAlpha } from '../../utils/color'
@@ -14,9 +16,6 @@ import { pushPage, switchTab } from '../../utils/nav'
 import { prompt, toast } from '../../utils/toast'
 import { useSheet } from '../../utils/useSheet'
 import './index.scss'
-
-/** 昵称最长 16 个字符（对应 Flutter TextField 的 maxLength）。 */
-const NAME_MAX_LENGTH = 16
 
 interface MenuItem {
   icon: IconName
@@ -58,17 +57,23 @@ export default function Profile() {
   // 不新增路由，恢复 / 彻底删除各一条路径。
   const trashSheet = useSheet()
   const trashCount = store.trashItems().length
+  // W5-H：成员列表 / 改角色 / 移出都由服务端判定；孩子也能看列表
+  // （矩阵 `view_members`），写入口按自己那一行的角色隐藏。
+  const memberSheet = useSheet()
+  // W5-I：邀请码面板自己先确认角色（`invite_member` 仅家长 ALLOW），
+  // 所以入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
+  const inviteSheet = useSheet()
 
   const handleRename = async () => {
-    if (store.isReadOnly) {
-      toast(store.readOnlyWriteMessage)
-      return
-    }
+    // 只读拦截交给 store（`submitRenameChild` 三种世界各自给结论），
+    // 页面不再自己判 `isReadOnly` —— 昵称在 live 模式下已经能真写。
     const name = await prompt('修改昵称', store.profile.name, '输入新的昵称')
     if (name === null) return
-    const trimmed = name.trim()
-    if (!trimmed) return
-    store.renameChild(trimmed.slice(0, NAME_MAX_LENGTH))
+    // 刻意**不**在本地截断、也不判长度：16 个字符按 code point 算，判定只留
+    // 一份在服务端；`slice(0, 16)` 还会静默改写用户输入（看着存上了，其实不是他写的）。
+    // 超长时服务端回 400 `CHILD_NAME_TOO_LONG`，store 翻成中文提示。
+    const message = await store.submitRenameChild(name)
+    toast(message ?? '昵称已更新')
   }
 
   const handleCopyId = () => {
@@ -96,7 +101,7 @@ export default function Profile() {
       safeBottom
       footer={
         <AppBottomNav
-          currentIndex={2}
+          currentIndex={3}
           onChanged={(index) => switchTab(index, 2)}
         />
       }
@@ -158,6 +163,34 @@ export default function Profile() {
             <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
+              onClick={() => memberSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#7fbf55', 34 / 255) }}
+              >
+                <Icon name='smile' size={19} color='#7fbf55' />
+              </View>
+              <Text className='kp-profile__menu-label'>家庭成员</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
+            <View
+              className='kp-profile__menu'
+              onClick={() => inviteSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#f6c64a', 34 / 255) }}
+              >
+                <Icon name='gift' size={19} color='#f6c64a' />
+              </View>
+              <Text className='kp-profile__menu-label'>邀请码</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
+            <View
+              className='kp-profile__menu'
               onClick={() => {
                 if (store.isReadOnly) {
                   toast(store.readOnlyWriteMessage)
@@ -193,6 +226,20 @@ export default function Profile() {
         {/* 修 C9：回收站弹窗（SheetFrame 本身就是覆盖层，挂在页面根节点内即可） */}
         {trashSheet.open ? (
           <TrashSheet visible={trashSheet.visible} onClose={trashSheet.hide} />
+        ) : null}
+        {/* W5-H：成员弹窗（打开时才拉 `GET /members`） */}
+        {memberSheet.open ? (
+          <MemberSheet
+            visible={memberSheet.visible}
+            onClose={memberSheet.hide}
+          />
+        ) : null}
+        {/* W5-I：邀请码弹窗（先确认角色，再拉 `GET /invites`） */}
+        {inviteSheet.open ? (
+          <InviteSheet
+            visible={inviteSheet.visible}
+            onClose={inviteSheet.hide}
+          />
         ) : null}
       </View>
     </GradientPage>

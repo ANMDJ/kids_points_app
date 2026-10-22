@@ -8,7 +8,13 @@ import {
 } from '@nestjs/common'
 
 import type { RequestWithActor } from '../permissions/actor'
-import { MemberRowShapeError, resolveMembership, toMembership } from './membership.gate'
+import {
+  MemberRowShapeError,
+  clampRoleToMembership,
+  resolveMembership,
+  toMembership,
+  type Membership
+} from './membership.gate'
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from './membership.repository'
 
 /**
@@ -86,13 +92,23 @@ export class MembershipGuard implements CanActivate {
     }
 
     // ④ 形状把关：不合格 ⇒ 500（数据/实现的问题，**不是**权限问题 —— 见 gate 文件头）
+    let membership: Membership
     try {
-      req.kpMember = toMembership(verdict.row)
+      membership = toMembership(verdict.row)
+      req.kpMember = membership
     } catch (err) {
       if (err instanceof MemberRowShapeError) {
         throw new InternalServerErrorException({ code: err.code, message: err.message })
       }
       throw err
+    }
+
+    // ⑤ 角色收口（W5-H）：矩阵查表用的角色 = min(会话角色, 成员位角色)。
+    //   降级会同时收回会话（同一事务），这里再收一次 —— 使"被降级的人仍是家长"
+    //   不可能由**漏掉某条写路径**造成。理由见 `clampRoleToMembership()` 的注释。
+    const effectiveRole = clampRoleToMembership(actor.role, membership.role)
+    if (effectiveRole !== actor.role) {
+      req.kpActor = { ...actor, role: effectiveRole }
     }
 
     return true

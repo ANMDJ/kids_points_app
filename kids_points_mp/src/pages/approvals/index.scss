@@ -1,0 +1,143 @@
+@use '../../styles/vars.scss' as *;
+
+// 固定一屏：标题栏 + 筛选行 + 中间滚动列表（与记录页同一套骨架）
+.kp-approvals {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.kp-approvals__header {
+  display: flex;
+  align-items: center;
+  height: f2r(56);
+  padding: 0 f2r(20);
+}
+
+.kp-approvals__title {
+  font-size: f2r(20);
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-approvals__count {
+  display: flex;
+  align-items: center;
+  margin-left: f2r(8);
+}
+
+.kp-approvals__spacer {
+  flex: 1;
+}
+
+.kp-approvals__refresh {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $text-secondary;
+  padding: f2r(6) f2r(4);
+}
+
+.kp-approvals__refresh.is-disabled {
+  opacity: 0.4;
+}
+
+.kp-approvals__filters {
+  display: flex;
+  align-items: center;
+  padding: 0 f2r(20);
+}
+
+// 每个标签右侧留 8（对应 Flutter 的 Padding(right: 8)）
+.kp-approvals__chip {
+  display: inline-block;
+  margin-right: f2r(8);
+}
+
+.kp-approvals__gap {
+  height: f2r(14);
+}
+
+.kp-approvals__scroll {
+  flex: 1;
+  height: 0;
+  overflow: hidden;
+}
+
+.kp-approvals__content {
+  padding: 0 f2r(20) f2r(28);
+}
+
+.kp-approvals__center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kp-approvals__spinner {
+  width: f2r(28);
+  height: f2r(28);
+  border: f2r(3) solid rgba(127, 191, 85, 0.2);
+  border-top-color: $primary-deep;
+  border-radius: 50%;
+  animation: kp-approvals-spin 0.8s linear infinite;
+}
+
+@keyframes kp-approvals-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.kp-approvals__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: f2r(12) 0 f2r(4);
+}
+
+.kp-approvals__footer-text {
+  font-size: f2r(11.5);
+  color: $text-hint;
+}
+
+.kp-approvals__more-spinner {
+  width: f2r(20);
+  height: f2r(20);
+  border: f2r(2) solid rgba(127, 191, 85, 0.2);
+  border-top-color: $primary-deep;
+  border-radius: 50%;
+  animation: kp-approvals-spin 0.8s linear infinite;
+}
+
+.kp-approvals__more-text {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+// 列表还在（旧数据）但最近一次刷新失败时的横幅
+.kp-approvals__error {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(12);
+  border-radius: f2r(12);
+  background-color: #fff6e9;
+}
+
+.kp-approvals__error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(11.5);
+  line-height: 1.45;
+  color: #b4762f;
+}
+
+.kp-approvals__error-action {
+  margin-left: f2r(10);
+  font-size: f2r(11.5);
+  font-weight: 700;
+  color: $primary-text;
+}

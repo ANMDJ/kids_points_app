@@ -96,18 +96,33 @@ export default function Wishlist() {
     )
   }
 
-  const handleRedeem = (wish: Wish) => {
-    if (store.isReadOnly) {
-      toast(store.readOnlyWriteMessage)
+  const handleRedeem = async (wish: Wish) => {
+    // 修：这里原本判的是 `store.isReadOnly`（＝ live 即真，那是"其余写入口仍只读"
+    // 的旧口径），于是 live 模式下点兑换只会提示只读，永远发不出审批请求。
+    // 与新增 / 删除统一改成 `isWishWriteReadOnly`。
+    if (store.isWishWriteReadOnly) {
+      toast(store.wishReadOnlyWriteMessage)
       return
     }
-    const ok = store.redeem(wish)
-    toast(ok ? `兑换成功：${wish.title}` : '积分还不够，继续加油打卡吧！')
+    // 兑换要扣分 / 要打扰家长：先确认。文案由 store 给 —— live 是
+    // 「提交申请、批准后才扣」，预览是「立即扣除」，页面不自己拼句子。
+    const ok = await confirm(
+      store.redeemConfirmText(wish),
+      '兑换心愿',
+      store.isLiveMode ? '提交申请' : '确认兑换',
+      '取消'
+    )
+    if (!ok) return
+    // live 模式走 `POST /approvals`（兑换在矩阵里是 REQUIRE_APPROVAL）：
+    // 回包 pending 时**还没有扣分**，所以文案必须由 store 给，
+    // 不能在这里写死「兑换成功」。
+    const message = await store.submitRedeemWish(wish.id)
+    toast(message ?? `兑换成功：${wish.title}`)
   }
 
   const handleRemove = async (wish: Wish) => {
-    if (store.isReadOnly) {
-      toast(store.readOnlyWriteMessage)
+    if (store.isWishWriteReadOnly) {
+      toast(store.wishReadOnlyWriteMessage)
       return
     }
     // 修 C9：删除是**软删**（移到回收站，90 天内可恢复），不是物理删除 ——
@@ -119,8 +134,9 @@ export default function Wishlist() {
       '取消'
     )
     if (!ok) return
-    store.removeWish(wish)
-    toast('已移到回收站，90 天内可在「我的 · 回收站」恢复')
+    // live 模式必须等服务端确认；失败时把原因原样给用户，不假装删掉了。
+    const message = await store.submitRemoveWish(wish.id)
+    toast(message ?? '已移到回收站，90 天内可在「我的 · 回收站」恢复')
   }
 
   return (
@@ -203,8 +219,8 @@ export default function Wishlist() {
               expandedWidth={DESIGN_WIDTH - FAB_MARGIN * 2}
               height={FAB_HEIGHT}
               onClick={() => {
-                if (store.isReadOnly) {
-                  toast(store.readOnlyWriteMessage)
+                if (store.isWishWriteReadOnly) {
+                  toast(store.wishReadOnlyWriteMessage)
                   return
                 }
                 sheet.show()

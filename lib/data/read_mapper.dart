@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../models/approval.dart';
 import '../models/habit.dart';
+import '../models/invite.dart';
+import '../models/member.dart';
 import '../models/point_record.dart';
 import '../models/point_rule.dart';
+import '../models/trash.dart';
 import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_icons.dart';
@@ -76,9 +80,42 @@ HomeSnapshot mapHome(HomeDto dto) {
         .asMap()
         .entries
         .map((MapEntry<int, WishDto> entry) =>
-            _mapWish(entry.value, 'wishes[${entry.key}]'))
+            mapWish(entry.value, 'wishes[${entry.key}]'))
         .toList(growable: false),
   );
+}
+
+/// `GET /trash` → 回收站展示模型（W5-F）。
+///
+/// `kind` 在 DTO 里是**字符串**，在这里严格转枚举：不认识就抛 malformed ——
+/// 不能默默跳过一行（回收站少一条 = 家长以为它已经被彻底删掉了）。
+///
+/// `expired` 由 [isTrashExpired] 现算（同一份 90 天常量），不信任服务端字段
+/// —— 服务端本来也不下发它。
+List<TrashItem> mapTrash(TrashListDto dto, {DateTime? now}) {
+  final DateTime time = now ?? DateTime.now();
+  return dto.items
+      .asMap()
+      .entries
+      .map((MapEntry<int, TrashItemDto> entry) {
+        final TrashItemDto item = entry.value;
+        final String path = 'items[${entry.key}]';
+        final TrashKind? kind = trashKindFromWire(item.kind);
+        if (kind == null) {
+          throw ReadApiException.malformed(
+            '$path.kind',
+            detail: '未知回收站类型：${item.kind}',
+          );
+        }
+        return TrashItem(
+          kind: kind,
+          id: item.id,
+          title: item.title,
+          deletedAt: item.deletedAt,
+          expired: isTrashExpired(item.deletedAt, now: time),
+        );
+      })
+      .toList(growable: false);
 }
 
 RecordsPage mapRecordsPage(RecordsPageDto dto) {
@@ -131,7 +168,11 @@ PointRule mapRule(RuleDto dto, String path) {
   );
 }
 
-Wish _mapWish(WishDto dto, String path) {
+/// 单条心愿 DTO → UI 模型（写端点回包也走这里）。
+///
+/// `coverStyle` 由服务端给定（A–D）；预览模式新增心愿时由本地
+/// [pickCoverStyle] 算 —— 两处同一套算法，颜色不会因为“谁写的”而不同。
+Wish mapWish(WishDto dto, String path) {
   return Wish(
     id: dto.id,
     title: dto.title,
@@ -253,6 +294,58 @@ Color parseHexColor(String raw, String path) {
 String hexColorOf(Color color) =>
     '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
+// ───────────────────────── 家长审批收件箱（W5-D） ─────────────────────────
+
+/// 收件箱行 → 本地模型。
+///
+/// `summary == null`（服务端读不懂 payload，或 `kind` 比客户端新）**原样保留**：
+/// 页面据此显示「内容无法识别」并禁用批准。这里绝不编一个空摘要糊过去 ——
+/// 那等于让家长在看不见内容的情况下点「批准」。
+ApprovalInboxItem mapApprovalInboxItem(ApprovalInboxItemDto dto) {
+  return ApprovalInboxItem(
+    id: dto.id,
+    action: dto.action,
+    status: dto.status,
+    requesterUserId: dto.requesterUserId,
+    decidedByUserId: dto.decidedByUserId,
+    executedRecordId: dto.executedRecordId,
+    autoReason: dto.autoReason,
+    createdAt: dto.createdAt,
+    decidedAt: dto.decidedAt,
+    expiresAt: dto.expiresAt,
+    summary: dto.summary == null ? null : mapApprovalSummary(dto.summary!),
+  );
+}
+
+ApprovalSummary mapApprovalSummary(ApprovalSummaryDto dto) {
+  if (dto is RedeemSummaryDto) {
+    return RedeemSummary(wishId: dto.wishId, title: dto.title, cost: dto.cost);
+  }
+  if (dto is BonusSummaryDto) {
+    return BonusSummary(
+      amount: dto.amount,
+      reason: dto.reason,
+      ruleId: dto.ruleId,
+      habitId: dto.habitId,
+      basisTitle: dto.basisTitle,
+    );
+  }
+  if (dto is AddWishSummaryDto) {
+    return AddWishSummary(title: dto.title, cost: dto.cost, emoji: dto.emoji);
+  }
+  // sealed + 穷尽分支：将来新增摘要类型时编译器会在这里报错，逼着补文案。
+  throw ReadApiException.malformed('summary.kind',
+      detail: '未知的摘要类型 ${dto.runtimeType}');
+}
+
+ApprovalsPage mapApprovalsPage(ApprovalsPageDto dto) {
+  return ApprovalsPage(
+    items: dto.items.map(mapApprovalInboxItem).toList(growable: false),
+    hasMore: dto.hasMore,
+    nextCursor: dto.nextCursor,
+  );
+}
+
 // ───────────────────────────── 流水的图标 / 颜色 ─────────────────────────────
 
 class RecordIcon {
@@ -282,3 +375,108 @@ RecordIcon recordIconOf(
   }
   return const RecordIcon(IconNames.starFill, AppColors.starYellow);
 }
+
+// ───────────────────────────── 家庭成员（W5-H） ─────────────────────────────
+
+/// 线格式 → [FamilyMember]。
+///
+/// `role` / `status` 在 DTO 里是字符串，**只有这里**决定哪些值是认识的：
+/// 不认识就抛 [ReadApiException]（一条坏行会让整页显式失败），而不是
+/// 猜成 `child` —— 猜错等于把权限边界画错。
+FamilyMember mapMember(MemberDto dto, {String path = r'$'}) {
+  if (dto.memberId.trim().isEmpty) {
+    throw ReadApiException.malformed('$path.memberId', detail: 'memberId 不能为空');
+  }
+  final MemberRole? role = parseOperatorRole(dto.role, '$path.role');
+  if (role == null) {
+    throw ReadApiException.malformed('$path.role', detail: '角色不能为空');
+  }
+  return FamilyMember(
+    memberId: dto.memberId,
+    userId: dto.userId,
+    displayName: dto.displayName,
+    role: role,
+    status: _memberStatusFromWire(dto.status, '$path.status'),
+    joinedAt: dto.joinedAt,
+    removedAt: dto.removedAt,
+    isSelf: dto.isSelf,
+  );
+}
+
+List<FamilyMember> mapMembers(MemberListDto dto) {
+  return dto.items
+      .asMap()
+      .entries
+      .map((MapEntry<int, MemberDto> entry) =>
+          mapMember(entry.value, path: 'items[${entry.key}]'))
+      .toList(growable: false);
+}
+
+MemberStatus _memberStatusFromWire(String raw, String path) {
+  switch (raw) {
+    case 'active':
+      return MemberStatus.active;
+    case 'removed':
+      return MemberStatus.removed;
+  }
+  throw ReadApiException.malformed(path, detail: '未知成员状态：$raw');
+}
+
+// ───────────────────────────── 邀请码（W5-I） ─────────────────────────────
+
+/// 线格式 → [InviteCode]。
+///
+/// 三条本地校验，都是为了**不让界面说谎**：
+///   · `role` 不认识（含 `viewer`）⇒ 整次读取失败 —— 邀请码不该能建出 viewer，
+///     画成「访客」会让人以为这张票有用；
+///   · `maxUses < 1` ⇒ 契约漂移（后端 DTO 是 `@Min(1)`），不能算成「已用完」；
+///   · `usedCount` 越界 ⇒ 同样显式失败，不夹成 0/上限（那会隐藏真 bug）。
+InviteCode mapInvite(InviteDto dto, {String path = r'$'}) {
+  if (dto.id.trim().isEmpty) {
+    throw ReadApiException.malformed('$path.id', detail: 'id 不能为空');
+  }
+  if (dto.code.trim().isEmpty) {
+    throw ReadApiException.malformed('$path.code', detail: '邀请码不能为空');
+  }
+  final MemberRole? role = parseOperatorRole(dto.role, '$path.role');
+  if (role == null || role == MemberRole.viewer) {
+    // 后端 `CreateInviteDto` 用 `@IsIn(['child','guardian'])`：viewer 出现在
+    // 邀请码上是契约漂移，猜成 child 会把邀请的权限画错。
+    throw ReadApiException.malformed(
+      '$path.role',
+      detail: '邀请码角色只能是 guardian / child，收到 ${dto.role}',
+    );
+  }
+  if (dto.maxUses < 1) {
+    throw ReadApiException.malformed(
+      '$path.maxUses',
+      detail: 'maxUses 必须 ≥ 1，收到 ${dto.maxUses}',
+    );
+  }
+  if (dto.usedCount < 0 || dto.usedCount > dto.maxUses) {
+    throw ReadApiException.malformed(
+      '$path.usedCount',
+      detail: 'usedCount 必须在 0..${dto.maxUses} 之间，收到 ${dto.usedCount}',
+    );
+  }
+  return InviteCode(
+    id: dto.id,
+    code: dto.code,
+    role: role,
+    maxUses: dto.maxUses,
+    usedCount: dto.usedCount,
+    expiresAt: dto.expiresAt,
+    revoked: dto.revoked,
+    createdAt: dto.createdAt,
+  );
+}
+
+List<InviteCode> mapInvites(InviteListDto dto) {
+  return dto.items
+      .asMap()
+      .entries
+      .map((MapEntry<int, InviteDto> entry) =>
+          mapInvite(entry.value, path: 'items[${entry.key}]'))
+      .toList(growable: false);
+}
+

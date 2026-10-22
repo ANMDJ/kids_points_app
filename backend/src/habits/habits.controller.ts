@@ -15,9 +15,10 @@ import { MembershipGuard } from '../membership/membership.guard'
 import { PermissionsGuard } from '../permissions/permissions.guard'
 import { RequireAction } from '../permissions/require-action.decorator'
 import type { RequestWithActor } from '../permissions/actor'
+import type { WrittenRecordResponse } from '../read/read.mapper'
 import { CheckInHabitDto } from './dto/check-in-habit.dto'
 import { ReverseRecordDto } from './dto/reverse-record.dto'
-import { HabitsService, type WrittenRecordResponse } from './habits.service'
+import { HabitsService } from './habits.service'
 
 /**
  * 习惯打卡 / 撤销打卡的 HTTP 入口（W4-D，2026-10-19）。

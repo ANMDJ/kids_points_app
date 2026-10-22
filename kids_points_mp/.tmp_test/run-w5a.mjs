@@ -427,9 +427,15 @@ await checkAsync('W5-A store：删除走 DELETE，刷新失败也先本地软删
   assert.strictEqual(writeApi.calls.deleteRule[0].ruleId, 'rule-1')
   assert.ok(writeApi.calls.deleteRule[0].idempotencyKey)
   assert.strictEqual(store.rules.length, 0, '回收站条目不该出现在规则列表里')
-  const trash = store.trashItems()
-  assert.strictEqual(trash.length, 1, '软删的规则必须能在回收站里找到')
-  assert.strictEqual(trash[0].title, '每天练琴 30 分钟')
+  // W5-F 起 live 模式的回收站**以 `GET /trash` 为准**（本地列表只是首页镜像，
+  // 拿它当回收站会把服务端已恢复的条目又列出来）—— 刷新失败时本地确实软删了
+  // （上面 0 条已证明），但「回收站里能看到它」要等下一次成功拉取，
+  // 那条路径由 `run-w5f.mjs` 覆盖。
+  assert.strictEqual(
+    store.trashItems().length,
+    0,
+    'live 模式不许用本地镜像冒充回收站'
+  )
 })
 
 await checkAsync('W5-A store：加入习惯带上 ruleId，扣分规则本地先拒绝', async () => {

@@ -43,6 +43,34 @@ export interface AppendedRecordRow {
 }
 
 /**
+ * 锁住孩子的余额行并返回**锁内**余额 —— 写入事务的第一步（W5-B 从
+ * `PrismaHabitsRepository.lockChild()` 提出）。
+ *
+ * `appendDraftInTx()` 会再锁一次（同一事务内重复加锁是安全的），但**它拿不到
+ * 「锁之前的余额」**：草稿的 `balanceAfter` 必须由调用方按锁内余额算出来。
+ * 所以「先锁 + 读余额」必须是**一个**可复用动作，否则记一笔 / 打卡各写一份 SQL，
+ * 一边加了 `status='active'` 判断、另一边忘了，就会在已删除孩子上记账。
+ *
+ * 不存在 / 已软删 ⇒ 404，**绝不按 0 分兜底**（那会让 B6 以另一种形式回来）。
+ */
+export async function lockChildBalance(
+  tx: Prisma.TransactionClient,
+  childId: string
+): Promise<number> {
+  const rows = await tx.$queryRaw<{ pointsBalance: number }[]>`
+    SELECT "pointsBalance" FROM "Child"
+    WHERE "id" = ${childId} AND "status" = 'active'
+    FOR UPDATE`
+  if (rows.length === 0) {
+    throw new NotFoundException({
+      code: 'CHILD_NOT_FOUND',
+      message: `孩子 ${childId} 不存在、已删除或状态异常 —— 这笔分无处可记（拒绝，而不是造一条无主流水）。`
+    })
+  }
+  return rows[0].pointsBalance
+}
+
+/**
  * 在一个**已经打开**的事务里追加流水。
  *
  * 顺序（与 W2-B 的 `PrismaLedgerRepository.append()` 逐行一致）：

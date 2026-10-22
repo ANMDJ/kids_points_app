@@ -153,12 +153,18 @@ enum ActionType {
   add_wish
   request_redeem
   delete_wish
+  delete_habit
+  view_trash
+  restore_trash_item
+  purge_trash_item
   adjust_points
   request_points_bonus
   redeem
   request_approval
   review_approvals
   withdraw_request
+  view_members
+  change_member_role
   invite_member
   remove_member
   switch_role_mode

@@ -1,5 +1,7 @@
 import { BadRequestException } from '@nestjs/common'
 
+import { decodeKeysetCursor, encodeKeysetCursor } from '../common/keyset-cursor'
+
 /**
  * `/records` 的**键集游标**（W4-B，2026-10-19）。
  *
@@ -28,14 +30,14 @@ export interface RecordCursor {
   id: string
 }
 
-/** 游标长度上界：正常约 60 字符；给未来的 id 形态留余量，同时挡住超长垃圾串。 */
-const MAX_CURSOR_LENGTH = 256
-
-/** 由一行的 `(createdAt, id)` 生成游标。 */
+/**
+ * 由一行的 `(createdAt, id)` 生成游标。
+ *
+ * ★ 编解码本体在 `src/common/keyset-cursor.ts`（W5-D 抽出）—— `/approvals`
+ *   用同一套格式、**不同**的错误码，两份实现迟早漂移。
+ */
 export function encodeRecordCursor(input: RecordCursor): string {
-  return Buffer.from(`${input.createdAt.toISOString()}|${input.id}`, 'utf8').toString(
-    'base64url'
-  )
+  return encodeKeysetCursor(input)
 }
 
 /**
@@ -44,33 +46,12 @@ export function encodeRecordCursor(input: RecordCursor): string {
  * ★ 校验是**严格**的：base64 必须能往返、ISO 串必须与 `Date` 完全一致、
  *   id 不能为空。宽松解析（例如只 `new Date(iso)`）会把
  *   `2026-13-40` 这类串悄悄滚成别的日期，翻页于是从错误的位置开始。
+ *   `null` 一律翻成 400，**绝不**静默退回第一页。
  */
 export function decodeRecordCursor(raw: string): RecordCursor {
-  if (raw.length === 0 || raw.length > MAX_CURSOR_LENGTH) {
-    throw invalidCursor()
-  }
-
-  const text = Buffer.from(raw, 'base64url').toString('utf8')
-  // 往返比对：拒绝非规范 base64（Node 的 base64url 解码对多余字符很宽容）。
-  if (Buffer.from(text, 'utf8').toString('base64url') !== raw) {
-    throw invalidCursor()
-  }
-
-  const separator = text.indexOf('|')
-  if (separator <= 0) throw invalidCursor()
-
-  const iso = text.slice(0, separator)
-  const id = text.slice(separator + 1)
-  if (id.length === 0 || id.length > 128 || id.includes('|')) {
-    throw invalidCursor()
-  }
-
-  const createdAt = new Date(iso)
-  if (Number.isNaN(createdAt.getTime()) || createdAt.toISOString() !== iso) {
-    throw invalidCursor()
-  }
-
-  return { createdAt, id }
+  const position = decodeKeysetCursor(raw)
+  if (position === null) throw invalidCursor()
+  return position
 }
 
 /** 400 `INVALID_RECORD_CURSOR` —— 与 `limit` 越界同一层（入参形状问题，不是权限问题）。 */

@@ -1,7 +1,14 @@
 import { request } from '@tarojs/taro'
 
 import { ReadApiException } from './read_api_errors'
-import { HomeDto, RecordsPageDto } from './read_dto'
+import {
+  ApprovalsPageDto,
+  HomeDto,
+  InviteListDto,
+  MemberListDto,
+  RecordsPageDto,
+  TrashListDto
+} from './read_dto'
 
 /**
  * 设备身份的**两个请求头** —— 与后端 Guard 的常量必须一致
@@ -176,6 +183,82 @@ export class ReadApiClient {
       query.cursor = input.cursor
     }
     return RecordsPageDto.fromJson(await this.get('/records', query))
+  }
+
+  /**
+   * 家长审批收件箱（W5-D）。
+   *
+   * 与流水同一把键集游标：第一页 `cursor: null`，之后把 `nextCursor` 原样带回。
+   * `status` 不传 = 全部；**绝不**在客户端过滤 —— 本地只过滤已加载的一页
+   * 会漏掉后面同状态的申请（那是假「共 N 条」）。
+   *
+   * 只有家长 / 管理员调得通：孩子角色的设备会拿到 403（页面据此说明
+   * 「没有批准申请的权限」，而不是显示成「没有待审批」）。
+   */
+  async fetchApprovals(
+    input: {
+      status?: string | null
+      limit?: number
+      cursor?: string | null
+    } = {}
+  ): Promise<ApprovalsPageDto> {
+    const limit = input.limit ?? 20
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw ReadApiException.malformed(
+        'limit',
+        '必须在 1–100 之间（后端 DTO 同口径）'
+      )
+    }
+    const query: Record<string, string> = { limit: String(limit) }
+    if (input.status !== undefined && input.status !== null) {
+      query.status = input.status
+    }
+    if (
+      input.cursor !== undefined &&
+      input.cursor !== null &&
+      input.cursor !== ''
+    ) {
+      query.cursor = input.cursor
+    }
+    return ApprovalsPageDto.fromJson(await this.get('/approvals', query))
+  }
+
+  /**
+   * 回收站（`GET /trash`，W5-F）：被软删的规则 / 心愿 / 习惯。
+   *
+   * 孩子也能看（权限矩阵 `view_trash` 对 child 是 ALLOW）——「我删掉的
+   * 那张卡去哪了」是孩子会问的问题。不分页：低频、小集合。
+   */
+  async fetchTrash(): Promise<TrashListDto> {
+    return TrashListDto.fromJson(await this.get('/trash'))
+  }
+
+  /**
+   * 家庭成员（`GET /members`，W5-H）：当前孩子的**活跃**成员位。
+   *
+   * 孩子也能看（矩阵 `view_members` child ALLOW）：列表只含昵称 / 角色 /
+   * 时间，不含手机号、`openId`、PIN。不分页 —— 单孩子量小，被移出的人
+   * 不会出现在列表里（只能在审计里看到）。
+   *
+   * 写入口（改角色 / 移出）在 `WriteApi` 上；响应里**没有**
+   * `canChangeRole` / `canRemove` 这类结论字段，谁能对谁做什么由服务端判定。
+   */
+  async fetchMembers(): Promise<MemberListDto> {
+    return MemberListDto.fromJson(await this.get('/members'))
+  }
+
+  /**
+   * 邀请码列表（`GET /invites`，W5-I）：本孩子下所有未被删除的邀请码。
+   *
+   * **只有家长能看**（矩阵 `invite_member` 对 child 是 DENY）—— 调用方必须
+   * 先确认 `canManageInvites`，不要用一次注定 403 的请求去「探测」角色。
+   *
+   * 不分页：小集合，且返回的是**凭据**本身，翻页只会让「刚生成的码在哪」
+   * 更难找。响应用不下发「能不能用」的结论（`expired` / `usable`），
+   * 状态由 `inviteStatusOf` 现算。
+   */
+  async fetchInvites(): Promise<InviteListDto> {
+    return InviteListDto.fromJson(await this.get('/invites'))
   }
 
   private async get(

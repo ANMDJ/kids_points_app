@@ -95,6 +95,9 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   withdraw_request:       { guardian: 'ALLOW', child: 'ALLOW' },
 
   /* ── 成员与设置 ───────────────────────────────────────── */
+  // W5-H：看成员对孩子开放（"家里有谁"不是敏感数据）；改角色 / 移出只给家长。
+  view_members:           { guardian: 'ALLOW', child: 'ALLOW' },
+  change_member_role:     { guardian: 'ALLOW', child: 'DENY'  },
   invite_member:          { guardian: 'ALLOW', child: 'DENY'  },
   remove_member:          { guardian: 'ALLOW', child: 'DENY'  },
   switch_role_mode:       { guardian: 'ALLOW', child: 'ALLOW' },  // 受 PIN 保护

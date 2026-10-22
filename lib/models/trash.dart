@@ -87,8 +87,45 @@ extension TrashKindLabel on TrashKind {
   }
 }
 
+/// 清理结果的**事实**：清掉几条、几条没清掉、第一条失败原因（W5-F）。
+///
+/// 为什么不返回一个 int：批量清理是**逐条**调的，第 3 条失败时前 2 条
+/// 已经真的删了 —— 只说“失败”会让家长以为一条都没清，只说“成功”又是撒谎。
+class TrashPurgeOutcome {
+  const TrashPurgeOutcome({
+    required this.purged,
+    this.failed = 0,
+    this.error,
+  });
+
+  /// 已彻底删除的条数
+  final int purged;
+
+  /// 没能删掉的条数（0 = 全部成功）
+  final int failed;
+
+  /// 第一条可读的失败原因（`failed == 0` 时为 null）
+  final String? error;
+
+  bool get hasFailure => failed > 0;
+}
+
 /// 回收站条目类型的展示文案（与 Taro 侧的 `trashKindLabelOf` 同源）。
 String trashKindLabelOf(TrashKind kind) => kind.label;
+
+/// 线值 → 枚举。**不认识的返回 null**（调用方决定是报错还是忽略）——
+/// 与 Taro 侧的 `trashKindFromWire` 同一张表，避免两端各写一遍。
+TrashKind? trashKindFromWire(String raw) {
+  switch (raw.trim()) {
+    case 'point_rule':
+      return TrashKind.pointRule;
+    case 'wish':
+      return TrashKind.wish;
+    case 'habit':
+      return TrashKind.habit;
+  }
+  return null;
+}
 
 /// 回收站条目的展示模型（三类配置汇总成一个列表）。
 class TrashItem {

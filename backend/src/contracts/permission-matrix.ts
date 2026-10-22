@@ -41,11 +41,21 @@ export const PERMISSION_MATRIX = {
   check_in_habit: { guardian: 'ALLOW', child: 'ALLOW' },
   undo_check_in: { guardian: 'ALLOW', child: 'DENY' },
 
-  /* ── 规则 ─────────────────────────────────────────────── */
+  /* ── 规则 / 习惯 ───────────────────────────────────────── */
   add_rule: { guardian: 'ALLOW', child: 'DENY' },
   update_rule: { guardian: 'ALLOW', child: 'DENY' },
   delete_rule: { guardian: 'ALLOW', child: 'DENY' },
   add_habit_from_rule: { guardian: 'ALLOW', child: 'DENY' },
+  // 习惯的“新建”只有一条路：从规则采纳（`add_habit_from_rule`）。
+  // 删除是**软删**（进回收站 90 天，修 C9）；孩子不能把今天该做的事删掉。
+  delete_habit: { guardian: 'ALLOW', child: 'DENY' },
+
+  /* ── 回收站（W5-F）───────────────────────────────────── */
+  // 看：孩子也能看到被移走的内容（删之前本来就看得见，隐藏没有意义）。
+  // 恢复 / 彻底删除：只给家长 —— 那是“改变约定”与“不可逆”的决定。
+  view_trash: { guardian: 'ALLOW', child: 'ALLOW' },
+  restore_trash_item: { guardian: 'ALLOW', child: 'DENY' },
+  purge_trash_item: { guardian: 'ALLOW', child: 'DENY' },
 
   /* ── 心愿 ─────────────────────────────────────────────── */
   add_wish: { guardian: 'ALLOW', child: 'REQUIRE_APPROVAL' },
@@ -66,6 +76,11 @@ export const PERMISSION_MATRIX = {
   withdraw_request: { guardian: 'ALLOW', child: 'ALLOW' },
 
   /* ── 成员与设置 ───────────────────────────────────────── */
+  // 成员管理（W5-H）：**看得到成员**对孩子开放（"家里有谁"不是敏感数据，
+  // 藏起来只会让界面出现一个匿名家长）；**改角色 / 移出**只给家长 ——
+  // 那是改变"谁能管这个家"的决定。
+  view_members: { guardian: 'ALLOW', child: 'ALLOW' },
+  change_member_role: { guardian: 'ALLOW', child: 'DENY' },
   invite_member: { guardian: 'ALLOW', child: 'DENY' },
   remove_member: { guardian: 'ALLOW', child: 'DENY' },
   switch_role_mode: { guardian: 'ALLOW', child: 'ALLOW' }, // 受 PIN 保护（02 §7）
@@ -78,7 +93,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 25 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 31 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**

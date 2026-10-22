@@ -7,11 +7,12 @@ import '../data/app_store.dart';
 import '../theme/app_colors.dart';
 import '../widgets/app_bottom_nav.dart';
 import '../widgets/read_status_banner.dart';
+import 'approvals_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
 import 'wishlist_screen.dart';
 
-/// 三段式外壳：首页 / 心愿单 / 我的。
+/// 四段式外壳：首页 / 心愿单 / 审批 / 我的。
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -53,6 +54,7 @@ class _HomeShellState extends State<HomeShell> {
               children: const <Widget>[
                 HomeScreen(),
                 WishlistScreen(),
+                ApprovalsScreen(),
                 ProfileScreen(),
               ],
             ),
@@ -61,8 +63,24 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: AppBottomNav(
         currentIndex: _index,
-        onChanged: (int index) => setState(() => _index = index),
+        onChanged: (int index) => _select(index),
       ),
     );
+  }
+
+  /// 切 tab。审批页**懒加载**：`IndexedStack` 会在启动时就 build 它，
+  /// 若在 `initState` 里发请求，孩子设备一启动就会吃一个 403。
+  /// 因此只在第一次真正切到审批页时拉第一页（失败后由页面自己的「重试」再发）。
+  void _select(int index) {
+    setState(() => _index = index);
+    if (index != 2) return;
+    final AppStore store = AppScope.of(context);
+    if (!store.isLiveMode) return;
+    if (store.approvalReadStatus != ReadStatus.idle) return;
+    // 不能同步 notify（还在 build/setState 链上），推到下一帧。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(store.refreshApprovals());
+    });
   }
 }

@@ -64,6 +64,16 @@ export interface ReverseRecordInput {
   now: Date
 }
 
+/** 软删习惯的入参（W5-F，2026-10-21）。 */
+export interface DeleteHabitInput {
+  /** 会话里的孩子上下文（屏障一验过）。 */
+  childId: string
+  /** 要移出今日清单的习惯；必须属于 `childId`（跨孩子按 404 回答）。 */
+  habitId: string
+  operatorUserId: string
+  operatorRole: MemberRole
+}
+
 export interface HabitsPort {
   /**
    * 打一次卡：同事务内（孩子行锁）校验习惯 / 每日上限 → 内核构造草稿 →
@@ -86,6 +96,18 @@ export interface HabitsPort {
    *   · 409 `ALREADY_REVERSED` / `INSUFFICIENT_POINTS`（由内核/库层判）。
    */
   reverse(input: ReverseRecordInput): Promise<RecordRow>
+
+  /**
+   * **软删**一个习惯（移出今日清单 → 回收站，90 天内可恢复；修 C9）。
+   *
+   * 只改 `Habit.status` / `deletedAt`，**不碰** `PointRecord`：
+   * 已发生的打卡继续带 `habitId` 回指这条习惯（历史不能被今天的选择改写）。
+   *
+   * 失败语义：
+   *   · 404 `HABIT_NOT_FOUND`（含跨孩子）；
+   *   · 幂等：已经删过 ⇒ 原样返回 id，不写第二条审计。
+   */
+  deleteHabit(input: DeleteHabitInput): Promise<string>
 }
 
 /**
@@ -108,6 +130,16 @@ export class NotImplementedHabitsRepository implements HabitsPort {
       code: 'HABITS_PERSISTENCE_NOT_IMPLEMENTED',
       message:
         '撤销打卡尚未接线（无数据库装配）—— 拒绝假装成功：账面会与孩子看到的相反。' +
+        '请配置 DATABASE_URL 后重启（判据只有 prisma/database-enabled.ts 一处）。'
+    })
+  }
+
+  async deleteHabit(): Promise<string> {
+    throw new NotImplementedException({
+      code: 'HABITS_PERSISTENCE_NOT_IMPLEMENTED',
+      message:
+        '删除习惯尚未接线（无数据库装配）—— 拒绝假装成功：' +
+        '界面上少了一张卡，库里却还在，刷新后它会复活。' +
         '请配置 DATABASE_URL 后重启（判据只有 prisma/database-enabled.ts 一处）。'
     })
   }

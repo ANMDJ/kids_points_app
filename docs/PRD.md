@@ -409,7 +409,7 @@ User（自然人）
 
 | 需求点 | 规则 |
 |---|---|
-| 权限 | Agent `action-dispatcher` **消费同一张** `PERMISSION_MATRIX`（`contracts/permission-matrix.json`，25 动作，由 TS 生成） |
+| 权限 | Agent `action-dispatcher` **消费同一张** `PERMISSION_MATRIX`（`contracts/permission-matrix.json`，29 动作，由 TS 生成） |
 | 防提权 | Agent 伪造 `plan.role=guardian` 而实际为 child → **`401`，整份 plan 作废** |
 | 落账 | 与 HTTP 路径共用同一账本内核与不变量校验 |
 | 技术 | Python 3.12 + FastAPI + LangGraph |
@@ -463,7 +463,7 @@ User（自然人）
 
 ---
 
-## 7. 权限矩阵（25 个动作 · 唯一事实源）
+## 7. 权限矩阵（29 个动作 · 唯一事实源）
 
 > **权威定义**：`backend/src/contracts/permission-matrix.ts`；生成产物 `contracts/permission-matrix.json`
 > 供 Python Agent 消费。**HTTP Guard 与 Agent 只能读这一份，不得各写一版。**
@@ -480,6 +480,10 @@ User（自然人）
 | `add_rule` | ALLOW | **DENY** | 规则 |
 | `update_rule` | ALLOW | **DENY** | 规则 |
 | `delete_rule` | ALLOW | **DENY** | 规则 |
+| `delete_habit` | ALLOW | **DENY** | 习惯（软删，进回收站） |
+| `view_trash` | ALLOW | ALLOW | 回收站 |
+| `restore_trash_item` | ALLOW | **DENY** | 回收站 |
+| `purge_trash_item` | ALLOW | **DENY** | 回收站 |
 | `add_habit_from_rule` | ALLOW | **DENY** | 规则 |
 | `add_wish` | ALLOW | **REQUIRE_APPROVAL** | 心愿 |
 | `request_redeem` | ALLOW | **REQUIRE_APPROVAL** | 心愿 |
@@ -514,7 +518,7 @@ User（自然人）
 `MemberRole`（guardian/child/viewer）、`MemberStatus`、`UserStatus`、`RelationKind`、
 `ApprovalStatus`（5 终态）、`AutoReason`、`RuleDirection`（reward/penalty）、`RecordStatus`、
 `RecordCategory`、`RecordSource`（含 `child_self`）、`AgeBand`（4 学段）、`WishCoverStyle`、
-`ConsentStatus`、`DevicePlatform`、`ActionType`（25 动作）。
+`ConsentStatus`、`DevicePlatform`、`ActionType`（29 动作）。
 
 ### 8.2 表（18）
 
@@ -741,7 +745,7 @@ User（自然人）
 | 后端骨架 | ✅ 13 个模块（`approvals` / `device-session` / `membership` / `ledger` / `permissions` / `idempotency` 已有实体实现；其余仍为占位）＋ Prisma 7 adapter | `tsc --noEmit` / `nest build` EXIT=0 |
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
-| 跨语言契约 | ✅ `contracts/permission-matrix.json`（25 动作，由 TS 生成） | `contracts:emit` |
+| 跨语言契约 | ✅ `contracts/permission-matrix.json`（29 动作，由 TS 生成） | `contracts:emit` |
 | **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径 + 真库执行**：`approval-policy.ts`（含 W3-B 的 `withdrawDenial()`）＋ 真 HTTP `test/approvals-http.test.ts` ＋ 真库同事务 `test-db/approvals-execution-db.dbtest.ts`；W3-A / W3-B / W3-C 见 `design/README` | `npm test` → **14 个文件 / 261 条**；`npm run test:db` → **5 个文件 / 75 条**（均全绿） |
 | 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
 | 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **15 步全绿，`CI_EXIT=0`** |
@@ -751,7 +755,7 @@ User（自然人）
 
 | 项 | 状态 | 影响 |
 |---|---|---|
-| **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），**W4 起有只读 `GET /home` / `GET /records`**，**W4-D 起有打卡 / 撤销**，**W5-A 起有规则四条写端点**（`/point-rules` 建 / 改 / 软删 / 加习惯）；**其余端点尚不存在** | 剩余主体工作量（习惯 CRUD / 心愿 / 档案 / 邀请等） |
+| **后端业务实现** | ⚠️ **不再是空签名**（`permissions` 的屏障二 Guard、`approvals` 的 controller / 端口已有实体代码），**W4 起有只读 `GET /home` / `GET /records`**，**W4-D 起有打卡 / 撤销**，**W5-A 起有规则四条写端点**（`/point-rules` 建 / 改 / 软删 / 加习惯）；**W5-G（2026-10-22）起有邀请码四条端点**（`/invites` 建 / 列 / 吊销 + `/invites/accept` 原子占位）；**习惯 CRUD / 成员管理等端点仍不存在** | 剩余主体工作量（习惯 CRUD / 成员管理 / 双端邀请码界面）；`accept` 仍需调用方已有会话（登录链路 L2 未落地） |
 | **RBAC 三道屏障 ＋ 身份** | ✅ **身份与三道屏障都在请求路径上**（2026-10-15）：身份 `DeviceSessionGuard`（**角色 / userId 由服务端会话行给出**，客户端只发 `x-kp-device-id` ＋ `x-kp-child-id`；`x-kp-role` / `x-kp-user-id` 已废弃且不再被读取，W1-C）、屏障一 `MembershipGuard`、屏障二 `PermissionsGuard`（矩阵）、屏障三 `tightenVerdict()`（成员级收紧，W1-B）。⚠️ 但~~**成员位与会话查询都来自端口，默认实现是 501**（真库查询属 W2）~~ → **W2-D（2026-10-16）已结清：有库真查库、无库才是 501**、**金额阈值键此刻不生效**（属 dispatcher）、**设备凭据不可验证**（`deviceId` 可伪造 ⇒ 生产 503）、**PIN 切换 / 会话刷新未实现** | 三个端口的 Prisma 实现**均已交付**（`Membership` / `DeviceSession` = W2-D；`Approvals` = **W3-A**）；**别把"角色不再由客户端自选"读成"身份已完成"**（真正可验证的凭据要等 L2 之后的会话 token） |
 | **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` / `request_points_bonus` / `add_wish`；`autoReason` **五种全部可复现**；`expired` 有后台扫描（`ApprovalsExpiryService`）；`Idempotency-Key` 已接到 create / decide / withdraw（无库 501）。真库证据：`test-db/approvals-closing-db.dbtest.ts`（5 文件 / 75 条） | 审批状态机本身已收尾；W4 起是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点） |
 | **双端接 API** | ✅ **W4-C** 起双端只读接入；**W4-E** 起首页打卡 / 撤销真写；**W5-A** 起规则四条写入口真写（未配 env 仍为本地预览）；其余写入口仍本地 | 见 `design/` 的 W4 / W5-A 段；**"接了 API"≠"全部写入口都通了"** |
@@ -774,6 +778,10 @@ W3-A / W3-B / W3-C（审批执行路径 ＋ 撤回 ＋ 租户隔离 ＋ 执行�
    L3 推送凭据须在 W4 前到位。
 3. 后端其它业务模块（规则 / 习惯 / 心愿 / 邀请）按需在 W4–W6 补齐 —— 它们的端点
    **不在 W3 的验收范围**，不要因为审批已收尾就以为它们已经能用。
+   （**W5-G 已补上邀请码的服务端四条端点**，但双端没有界面、`accept` 仍需已登录会话；
+   **W5-H 已补上成员管理的服务端三条端点** —— `GET /members` / `PATCH /members/:id` /
+   `DELETE /members/:id`，含「最后一位家长」并发保护与降级即收回会话，双端同样**没有界面**；
+   习惯 CRUD 仍不存在 —— 详见 `design/24-w5g-handoff.md` 与 `design/25-w5h-handoff.md`。）
 
 审批的任何新写入路径**必须继续消费** `backend/src/contracts/approval-policy.ts`（P4 ＋ W3-B 的
 `withdrawDenial()`），不得在 controller / service 里另写一份「谁可以批准 / 谁能撤回」。

@@ -6,7 +6,13 @@ import {
   InternalServerErrorException,
   NotFoundException
 } from '@nestjs/common'
-import type { ApprovalRequest, AutoReason, MemberRole, Prisma } from '@prisma/client'
+import type {
+  ApprovalRequest,
+  ApprovalStatus,
+  AutoReason,
+  MemberRole,
+  Prisma
+} from '@prisma/client'
 
 import {
   AUDIT_ACTION_SELF_APPROVED,
@@ -14,6 +20,14 @@ import {
   withdrawDenial
 } from '../contracts/approval-policy'
 import type { ActionType, Role } from '../contracts/permission-matrix'
+import { pickCoverStyle } from '../contracts/wish-cover-style'
+import {
+  parseApprovalPayload,
+  type AddWishPayload,
+  type ApprovalPayload,
+  type BonusPayload,
+  type RedeemPayload
+} from './approval-payload'
 import {
   buildRecordDraft,
   LedgerDeniedError,
@@ -23,10 +37,12 @@ import {
 } from '../ledger/ledger.gate'
 import { PrismaService } from '../prisma/prisma.service'
 import type {
+  ApprovalListRow,
   ApprovalRow,
   ApprovalsPort,
   CreateApprovalInput,
   DecideApprovalInput,
+  ListApprovalsInput,
   WithdrawApprovalInput
 } from './approvals.repository'
 
@@ -210,6 +226,43 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
   async findById(id: string, childId: string): Promise<ApprovalRow | null> {
     const row = await this.prisma.approvalRequest.findFirst({ where: { id, childId } })
     return row === null ? null : toRow(row)
+  }
+
+  /**
+   * 收件箱列表（W5-D）—— 键集翻页，与 `/records` 同一套「`(createdAt, id)` 降序」。
+   *
+   * ── 为什么不复用 `findMany({ skip })` ──────────────────────────────────────
+   *   收件箱顶部每来一条新申请，`skip` 就会把上一页的最后一行再发一次；
+   *   游标钉在行上，新行只会出现在第一页之前。
+   *
+   * ── `take: limit + 1` 的用途 ───────────────────────────────────────────────
+   *   多取一行**只**用于判断「还有下一页」，随后被 service 丢掉；这样不必
+   *   额外发一条 `count`（count 与翻页不是同一时刻的视图，会自相矛盾）。
+   *
+   * ★ `status` 是**数据库条件**（`all` 除外），不是读出来再过滤：
+   *   对一个孩子来说审批会越攒越多，读全量再筛会把「收件箱」变成全表扫描。
+   */
+  async listForChild(input: ListApprovalsInput): Promise<ApprovalListRow[]> {
+    const status = input.status ?? 'pending'
+    const rows = await this.prisma.approvalRequest.findMany({
+      where: {
+        childId: input.childId,
+        ...(status === 'all' ? {} : { status: status as ApprovalStatus }),
+        ...(input.cursor === undefined
+          ? {}
+          : {
+              // 同一毫秒的多行靠 id 定序；两个条件必须写在**同一个 OR** 里，
+              // 否则会退化成「比这个时间早 **或** id 比它小」—— 跨毫秒乱序。
+              OR: [
+                { createdAt: { lt: input.cursor.createdAt } },
+                { createdAt: input.cursor.createdAt, id: { lt: input.cursor.id } }
+              ]
+            })
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: input.limit + 1
+    })
+    return rows.map(toListRow)
   }
 
 
@@ -859,16 +912,29 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
     tx: Prisma.TransactionClient,
     args: { childId: string; payload: AddWishPayload }
   ): Promise<ExecutionOutcome> {
-    await tx.wish.create({
+    // ★ 配色与 `POST /wishes` 走**同一个** `pickCoverStyle`（03 E16）：
+    //   若这里硬写 'A'，孩子申请批准出来的心愿会全部同色 —— 直写与审批两条入口
+    //   必须落出同一个形状，否则「同一件事两个样子」又回来了。
+    const active = await tx.wish.findMany({
+      where: { childId: args.childId, status: 'active' },
+      select: { coverStyle: true }
+    })
+    const taken = active.map((row) => row.coverStyle)
+
+    const created = await tx.wish.create({
       data: {
         childId: args.childId,
         title: args.payload.title,
         cost: args.payload.cost,
         emoji: args.payload.emoji,
-        coverStyle: 'A',
+        coverStyle: pickCoverStyle(taken, ''),
         status: 'active'
       }
     })
+    const coverStyle = pickCoverStyle(taken, created.id)
+    if (coverStyle !== created.coverStyle) {
+      await tx.wish.update({ where: { id: created.id }, data: { coverStyle } })
+    }
     return { kind: 'executed', recordId: null }
   }
 
@@ -999,38 +1065,6 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
   }
 }
 
-/** 兑换 / 申请兑换的快照形状（`02` §4.3）。读回来时**逐字段校验**，不信任 JSON 列。 */
-interface RedeemPayload {
-  wishId: string
-  titleSnapshot: string
-  costSnapshot: number
-}
-
-/**
- * `request_points_bonus` 的快照形状。
- *
- * ★ `ruleId` / `habitId` 至多一个（`snapshotBonusPayload` 保证）；
- *   `*TitleSnapshot` 是建请求时读到的标题 —— 批准时若对象已删，UI 仍能说清
- *   「你申请的是哪条规则/习惯的加分」。
- */
-interface BonusPayload {
-  amount: number
-  reason: string
-  ruleId: string | null
-  ruleTitleSnapshot: string | null
-  habitId: string | null
-  habitTitleSnapshot: string | null
-}
-
-/** `add_wish` 的快照形状（批准时才真正落 `Wish`）。 */
-interface AddWishPayload {
-  title: string
-  cost: number
-  emoji: string
-}
-
-/** 本文件认识的 payload 联合（动作类型决定该按哪个接口解析）。 */
-type ApprovalPayload = RedeemPayload | BonusPayload | AddWishPayload
 
 /** 执行结果：\"做成了\" 与 \"前提消失\" 是两条正常分支（后者要落 `invalidated`）。 */
 type ExecutionOutcome =
@@ -1088,6 +1122,23 @@ function toRow(row: ApprovalRequest): ApprovalRow {
   }
 }
 
+/**
+ * 列表行的映射：判定字段复用 `toRow`（**同一份**状态 / `autoReason` 口径），
+ * 再补上列表需要的 `payload` 与三个时间戳。
+ *
+ * ★ `payload` 原样交出去，解析在 service（`summarizeApprovalPayload`）：
+ *   仓储不该决定「列表该显示什么」，也不该因为一行坏数据把整页抛 500。
+ */
+function toListRow(row: ApprovalRequest): ApprovalListRow {
+  return {
+    ...toRow(row),
+    payload: row.payload,
+    createdAt: row.createdAt,
+    decidedAt: row.decidedAt,
+    expiresAt: row.expiresAt
+  }
+}
+
 /** 写入 `payload` 列的形状（`InputJsonObject` 不接受无索引签名的 interface）。 */
 function jsonOf(payload: ApprovalPayload): Prisma.InputJsonObject {
   if ('wishId' in payload) {
@@ -1112,144 +1163,6 @@ function jsonOf(payload: ApprovalPayload): Prisma.InputJsonObject {
     cost: payload.cost,
     emoji: payload.emoji
   }
-}
-
-/** 读 `payload` 列：**逐字段**校验（枚举外的值 / 缺字段 ⇒ 500，不猜）。 */
-function parseRedeemPayload(payload: Prisma.JsonValue): RedeemPayload {
-  const bad = (): never => {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message:
-        '审批 payload 形状不对（应含 wishId / titleSnapshot / costSnapshot）—— ' +
-        '这是库里的坏数据，拒绝据此扣分（那会造出一笔解释不清的流水）。'
-    })
-  }
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return bad()
-  const record = payload as Record<string, Prisma.JsonValue>
-  const { wishId, titleSnapshot, costSnapshot } = record
-  if (
-    typeof wishId !== 'string' ||
-    wishId === '' ||
-    typeof titleSnapshot !== 'string' ||
-    titleSnapshot === '' ||
-    typeof costSnapshot !== 'number' ||
-    !Number.isInteger(costSnapshot) ||
-    costSnapshot <= 0
-  ) {
-    return bad()
-  }
-  return { wishId, titleSnapshot, costSnapshot }
-}
-
-/**
- * 按**动作类型**解析 payload：动作决定形状，绝不允许\"一个解析器猜所有形状\"。
- * 任何缺字段 / 多余字段 / 类型不对 ⇒ 500 `INVALID_APPROVAL_PAYLOAD`（库里的坏数据）。
- */
-function parseApprovalPayload(action: ActionType, payload: Prisma.JsonValue): ApprovalPayload {
-  switch (action) {
-    case 'redeem':
-    case 'request_redeem':
-      return parseRedeemPayload(payload)
-    case 'request_points_bonus':
-      return parseBonusPayload(payload)
-    case 'add_wish':
-      return parseAddWishPayload(payload)
-    default:
-      throw new InternalServerErrorException({
-        code: 'INVALID_APPROVAL_ACTION',
-        message: `动作 ${action} 没有 payload 解析器 —— 可执行名单与解析实现已经漂移。`
-      })
-  }
-}
-
-function payloadRecord(payload: Prisma.JsonValue, what: string): Record<string, Prisma.JsonValue> {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message: `${what}的 payload 不是对象（收到 ${JSON.stringify(payload)}）—— 拒绝据此执行。`
-    })
-  }
-  return payload as Record<string, Prisma.JsonValue>
-}
-
-/** 读 `request_points_bonus` 的 payload：金额 / 事由 / 至多一个依据。 */
-function parseBonusPayload(payload: Prisma.JsonValue): BonusPayload {
-  const record = payloadRecord(payload, '加分申请')
-  const { amount, reason, ruleId, ruleTitleSnapshot, habitId, habitTitleSnapshot } = record
-
-  if (
-    typeof amount !== 'number' ||
-    !Number.isInteger(amount) ||
-    amount <= 0 ||
-    amount > 50 ||
-    typeof reason !== 'string'
-  ) {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message:
-        '加分申请的 payload 形状不对（应含 1..50 的 amount 与 reason）—— ' +
-        '这是库里的坏数据，拒绝据此加分。'
-    })
-  }
-  if (ruleId !== null && typeof ruleId !== 'string') {
-    throw new InternalServerErrorException({ code: 'INVALID_APPROVAL_PAYLOAD', message: 'ruleId 形状不对。' })
-  }
-  if (habitId !== null && typeof habitId !== 'string') {
-    throw new InternalServerErrorException({ code: 'INVALID_APPROVAL_PAYLOAD', message: 'habitId 形状不对。' })
-  }
-  if (ruleId !== null && habitId !== null) {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message: '加分申请同时带 ruleId 与 habitId —— 依据不唯一，无法复查。'
-    })
-  }
-  if (ruleTitleSnapshot !== null && typeof ruleTitleSnapshot !== 'string') {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message: 'ruleTitleSnapshot 形状不对。'
-    })
-  }
-  if (habitTitleSnapshot !== null && typeof habitTitleSnapshot !== 'string') {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message: 'habitTitleSnapshot 形状不对。'
-    })
-  }
-
-  return {
-    amount,
-    reason,
-    ruleId,
-    ruleTitleSnapshot,
-    habitId,
-    habitTitleSnapshot
-  }
-}
-
-/** 读 `add_wish` 的 payload：标题 / 成本 / 表情。 */
-function parseAddWishPayload(payload: Prisma.JsonValue): AddWishPayload {
-  const record = payloadRecord(payload, '新建心愿')
-  const { title, cost, emoji } = record
-  if (
-    typeof title !== 'string' ||
-    title.trim() === '' ||
-    title.length > 100 ||
-    typeof cost !== 'number' ||
-    !Number.isInteger(cost) ||
-    cost <= 0 ||
-    cost > 100_000 ||
-    typeof emoji !== 'string' ||
-    emoji.trim() === '' ||
-    emoji.length > 8
-  ) {
-    throw new InternalServerErrorException({
-      code: 'INVALID_APPROVAL_PAYLOAD',
-      message:
-        '新建心愿的 payload 形状不对（应含 title / 正整数 cost / emoji）—— ' +
-        '这是库里的坏数据，拒绝据此创建心愿。'
-    })
-  }
-  return { title, cost, emoji }
 }
 
 /**

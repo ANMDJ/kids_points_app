@@ -11,7 +11,8 @@ import '../theme/app_colors.dart';
 ///   ① 只在 `store.isLiveMode` 时出现 —— 本地预览不打扰用户；
 ///   ② 失败时**明确说出现在看到的是哪份数据**（空态 / 旧的服务端数据），
 ///      不能把 501/401 显示成「暂无记录」；
-///   ③ 只读就说只读 —— W4 没有写端点，不能让用户以为打卡已经保存。
+///   ③ 只读就说只读 —— 写客户端没就绪时不能让用户以为操作已经保存
+///      （W5-B/W5-E 之后「打卡 / 记一笔 / 兑换 / 昵称」都能真写，这句话只说给 false 分支）。
 class ReadStatusBanner extends StatelessWidget {
   const ReadStatusBanner({super.key});
 
@@ -62,7 +63,7 @@ class ReadStatusBanner extends StatelessWidget {
         foreground: AppColors.primaryText,
         icon: Icons.cloud_done_outlined,
         text: store.usesServerWrites
-            ? '数据来自服务器 · 打卡与撤销会实时保存'
+            ? '数据来自服务器 · 打卡 / 记一笔 / 兑换 / 昵称均会实时保存'
             : '只读模式 · 数据来自服务器（写入口尚未接入）',
       );
     }

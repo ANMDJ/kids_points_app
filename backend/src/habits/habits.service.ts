@@ -1,23 +1,13 @@
-import { ForbiddenException, Inject, Injectable } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common'
 import type { RecordSource } from '@prisma/client'
 
 import type { Actor } from '../permissions/actor'
-import { toRecordDto, type RecordDto } from '../read/read.mapper'
+import { toRecordDto, type WrittenRecordResponse } from '../read/read.mapper'
 import type { RecordRow } from '../read/read.repository'
 import { resolveBusinessTimeZone } from './business-day'
 import type { CheckInHabitDto } from './dto/check-in-habit.dto'
 import type { ReverseRecordDto } from './dto/reverse-record.dto'
 import { HABITS_REPOSITORY, type HabitsPort } from './habits.repository'
-
-export interface WrittenRecordResponse {
-  record: RecordDto
-  /**
-   * 本次真正写下的那条流水 id（撤销时是**冲正记录**，不是原记录）。
-   * ★ 幂等层用它填 `IdempotencyRecord.recordId`（`IdempotencyService.recordIdOf`），
-   *   方便事后回答"这个 key 究竟产生了哪一笔"。
-   */
-  executedRecordId: string
-}
 
 /**
  * 打卡 / 撤销打卡的**应用服务**（W4-D，2026-10-19）。
@@ -84,6 +74,31 @@ export class HabitsService {
       now: new Date()
     })
     return this.toResponse(row)
+  }
+
+  /**
+   * 软删一个习惯（W5-F）—— 移出今日清单，进回收站。
+   *
+   * 与打卡 / 撤销同一分工：本层只做规范化与防御性断言，库层事实（是否存在、
+   * 是否已删）在 Prisma 适配器的事务里判。
+   */
+  async deleteHabit(childId: string, habitId: string, actor: Actor): Promise<{ habitId: string }> {
+    this.assertWritable(actor)
+    const id = habitId.trim()
+    if (id === '' || id.length > 64) {
+      throw new BadRequestException({
+        code: 'HABIT_ID_INVALID',
+        message: '习惯 id 必须是 1..64 字符（cuid 尺度）。'
+      })
+    }
+    return {
+      habitId: await this.port.deleteHabit({
+        childId,
+        habitId: id,
+        operatorUserId: actor.userId,
+        operatorRole: actor.role
+      })
+    }
   }
 
   /** 本服务当前使用的业务时区（供日志/诊断；不参与 HTTP 契约）。 */

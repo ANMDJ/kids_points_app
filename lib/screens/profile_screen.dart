@@ -8,6 +8,8 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
+import 'sheets/invite_sheet.dart';
+import 'sheets/member_sheet.dart';
 import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
@@ -21,8 +23,9 @@ class ProfileScreen extends StatelessWidget {
     final int trashCount = store.trashItems().length;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
-    // live 模式只有读端点：本地改名 / 回收站 / 恢复演示数据都不会写回服务器。
-    // 统一提示，而不是让用户以为「改成功了，只是服务器没同步」。
+    // live 模式下昵称已经接了写端点（`PATCH /child`，W5-E）、回收站也接了
+    // 后端（W5-F）；只剩「恢复演示数据」是纯本地操作 —— 它若在 live 模式下
+    // 执行，会拿演示数据覆盖真实数据，所以只拦它。
     bool guardReadOnly() {
       if (!store.isReadOnly) return false;
       messenger.hideCurrentSnackBar();
@@ -41,10 +44,7 @@ class ProfileScreen extends StatelessWidget {
             Row(
               children: <Widget>[
                 GestureDetector(
-                  onTap: () {
-                    if (guardReadOnly()) return;
-                    _renameChild(context, store);
-                  },
+                  onTap: () => _renameChild(context, store),
                   child: Container(
                     width: 62,
                     height: 62,
@@ -155,12 +155,46 @@ class ProfileScreen extends StatelessWidget {
                     indent: 66,
                   ),
                   _MenuRow(
+                    icon: Icons.groups_rounded,
+                    color: AppColors.primaryDeep,
+                    label: '家庭成员',
+                    onTap: () {
+                      // W5-H：成员列表 / 改角色 / 移出都由服务端判定；
+                      // 孩子也能看列表（矩阵 `view_members`），写入口按角色隐藏。
+                      showMemberSheet(context);
+                    },
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.confirmation_number_rounded,
+                    color: AppColors.starYellow,
+                    label: '邀请码',
+                    onTap: () {
+                      // W5-I：生成 / 列表 / 吊销都由服务端判定（`invite_member`
+                      // 仅家长 ALLOW）。孩子点进来只看到「找家长要」的说明 ——
+                      // 面板内部先确认角色，不会先吃一个必然的 403。
+                      showInviteSheet(context);
+                    },
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
                     icon: Icons.delete_outline_rounded,
                     color: AppColors.pointSpend,
                     label: trashCount > 0 ? '回收站（$trashCount）' : '回收站',
                     onTap: () {
-                      // 回收站里的恢复 / 彻底删除都是写操作；live 模式下整入口拦截。
-                      if (guardReadOnly()) return;
+                      // W5-F：live 模式下回收站已经接了后端（`GET /trash` +
+                      // 恢复 / 彻底删除），不再整入口拦截 —— 孩子也能看
+                      // （矩阵 `view_trash`），恢复 / 彻底删除由服务端按角色判。
                       showTrashSheet(context);
                     },
                   ),
@@ -200,17 +234,24 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Future<void> _renameChild(BuildContext context, AppStore store) async {
-    final TextEditingController controller =
-        TextEditingController(text: store.profile.name);
+    // 在第一个 await 之前抓好 messenger：表单提交后页面可能已被弹走，
+    // 之后再 `ScaffoldMessenger.of(context)` 就是拿一个已失效的 context。
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    // 刻意不用 TextEditingController：`showDialog` 的 future 在 pop 那一刻就
+    // 完成了，弹层还在退场动画里继续 build TextField —— 此时 dispose 控制器会抛
+    // “A TextEditingController was used after being disposed”。
+    // 一个 `initialValue + onChanged` 的 TextFormField 就够，还自带状态管理。
+    String draft = store.profile.name;
     final String? name = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('修改昵称'),
-          content: TextField(
-            controller: controller,
+          content: TextFormField(
+            initialValue: store.profile.name,
             autofocus: true,
             maxLength: 16,
+            onChanged: (String value) => draft = value,
             decoration: const InputDecoration(hintText: '输入新的昵称'),
           ),
           actions: <Widget>[
@@ -219,15 +260,22 @@ class ProfileScreen extends StatelessWidget {
               child: const Text('取消'),
             ),
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+              onPressed: () => Navigator.of(dialogContext).pop(draft),
               child: const Text('保存'),
             ),
           ],
         );
       },
     );
-    controller.dispose();
-    if (name != null) store.renameChild(name);
+    if (name == null) return;
+
+    // 预览模式 ⇒ 本地改名（返回 null）；live 且已接写端点 ⇒ 真 PATCH；
+    // live 但没注入写客户端 ⇒ 返回只读文案，本地档案不动。
+    final String? message = await store.submitRenameChild(name);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(content: Text(message ?? '昵称已更新')),
+    );
   }
 }
 

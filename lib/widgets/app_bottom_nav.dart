@@ -10,7 +10,7 @@ class _NavItem {
   final String label;
 }
 
-/// 底部导航：首页 / 心愿单 / 我的。
+/// 底部导航：首页 / 心愿单 / 审批 / 我的。
 class AppBottomNav extends StatelessWidget {
   const AppBottomNav({
     super.key,
@@ -24,6 +24,7 @@ class AppBottomNav extends StatelessWidget {
   static const List<_NavItem> _items = <_NavItem>[
     _NavItem(Icons.home_rounded, Icons.home_rounded, '首页'),
     _NavItem(Icons.favorite_border_rounded, Icons.favorite_rounded, '心愿单'),
+    _NavItem(Icons.fact_check_outlined, Icons.fact_check_rounded, '审批'),
     _NavItem(
       Icons.sentiment_satisfied_alt_rounded,
       Icons.sentiment_very_satisfied_rounded,

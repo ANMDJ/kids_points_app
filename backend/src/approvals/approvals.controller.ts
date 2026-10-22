@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   Inject,
   Param,
   Post,
+  Query,
   Req,
   Res,
   UseGuards
@@ -17,8 +19,10 @@ import type { RequestWithActor } from '../permissions/actor'
 import { PermissionsGuard } from '../permissions/permissions.guard'
 import { RequireAction } from '../permissions/require-action.decorator'
 import { ApprovalsService } from './approvals.service'
+import type { ApprovalInboxPageDto } from './approval-inbox.mapper'
 import { CreateApprovalRequestDto } from './dto/create-approval-request.dto'
 import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
+import { ListApprovalsQueryDto } from './dto/list-approvals.query'
 
 /**
  * 审批 HTTP 入口（**本仓库第一个真实 controller**，2026-10-14 阶段 B4）。
@@ -68,6 +72,27 @@ export class ApprovalsController {
   /** 只用到 `status()`：用结构类型而非 import express 类型，免得为一行代码引入新依赖。 */
   private static applyStatus(res: { status(code: number): unknown }, code: number): void {
     res.status(code)
+  }
+
+  /**
+   * 家长收件箱（W5-D）：`GET /approvals?status=pending&limit=20&cursor=…`
+   *
+   * 屏障二：矩阵 `review_approvals`（guardian ALLOW / child **DENY**）——
+   * 孩子在这里就被 403 拦下，不会走到 service。这解决了一个具体事故：
+   * 之前孩子端只能看到「我提交的那条」的返回体，而家长端**完全没有**列表，
+   * 唯一能看到待批申请的途径是消息通知（不存在）——审批写进去了却没人看得到。
+   *
+   * ★ 响应 `200` 恒为分页对象（`items` / `hasMore` / `nextCursor`），
+   *   即使 `items` 为空也是 `200`：空收件箱是**正常状态**，不是错误。
+   *   权限 / 身份 / 游标错误分别是 403 / 401 / 400，码见 controller 头部。
+   */
+  @Get()
+  @RequireAction('review_approvals')
+  async list(
+    @Query() query: ListApprovalsQueryDto,
+    @Req() req: RequestWithActor
+  ): Promise<ApprovalInboxPageDto> {
+    return this.service.list(query, this.childIdOf(req))
   }
 
   // 屏障二：矩阵 `request_approval`（guardian ALLOW / child ALLOW）——

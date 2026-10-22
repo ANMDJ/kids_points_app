@@ -8,6 +8,7 @@ import { PermissionsModule } from '../permissions/permissions.module'
 import { hasDatabaseUrl } from '../prisma/database-enabled'
 import { PrismaModule } from '../prisma/prisma.module'
 import { HabitsController } from './habits.controller'
+import { HabitsLifecycleController } from './habits.lifecycle.controller'
 import { PrismaHabitsRepository } from './habits.prisma.repository'
 import {
   HABITS_REPOSITORY,
@@ -37,6 +38,8 @@ import { HabitsService } from './habits.service'
  *   在有 `.env` 的开发机与 CI 上验的是两件事。
  *
  * ⚠️ 尚未落地（W5+）：习惯 CRUD（`addHabitFromRule` 仍只有注释里的验收要求）。
+ *   2026-10-21 起 `DELETE /habits/:id`（软删 → 回收站）已在
+ *   `HabitsLifecycleController` 落地；创建/编辑仍然只经由规则（没有第二个入口）。
  */
 export function resolveHabitsRepositoryClass(hasDatabase: boolean): Type<HabitsPort> {
   return hasDatabase ? PrismaHabitsRepository : NotImplementedHabitsRepository
@@ -63,7 +66,7 @@ export class HabitsModule {
         // 带 `Idempotency-Key` 的请求要先过幂等层；无库时它自己 501（不假装保护已生效）。
         IdempotencyModule.register({ hasDatabase })
       ],
-      controllers: [HabitsController],
+      controllers: [HabitsController, HabitsLifecycleController],
       providers: [
         HabitsService,
         // 控制器上的三个 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块的 exports 提供。

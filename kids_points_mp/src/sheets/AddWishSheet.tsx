@@ -21,16 +21,30 @@ export default function AddWishSheet({
   const [title, setTitle] = useState('')
   const [cost, setCost] = useState(40)
   const [emoji, setEmoji] = useState('🎁')
+  // 保存中：按钮连点会发两次请求（幂等键虽能兜住，但没必要让用户看见两次 loading）
+  const [saving, setSaving] = useState(false)
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const trimmed = title.trim()
     if (trimmed === '') {
       toast('先给心愿起个名字吧～')
       return
     }
-    store.addWish(trimmed, cost, emoji)
-    onClose()
-    toast(`已添加心愿：${trimmed}（${cost} 积分）`)
+    if (saving) return
+    setSaving(true)
+    try {
+      // 预览模式走本地；live 模式等服务端回包再关面板 ——
+      // 失败（含 403 需家长确认）时面板和输入都留着，用户可以直接改。
+      const message = await store.submitAddWish(trimmed, cost, emoji)
+      if (message !== null) {
+        toast(message)
+        return
+      }
+      onClose()
+      toast(`已添加心愿：${trimmed}（${cost} 积分）`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const points = store.points

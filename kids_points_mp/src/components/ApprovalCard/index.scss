@@ -1,0 +1,155 @@
+@use '../../styles/vars.scss' as *;
+
+// 头部：图标 + 标题/内容 + 状态胶囊
+.kp-approval__head {
+  display: flex;
+  align-items: flex-start;
+}
+
+.kp-approval__badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(40);
+  height: f2r(40);
+  border-radius: f2r(13);
+  flex-shrink: 0;
+}
+
+.kp-approval__titles {
+  flex: 1;
+  min-width: 0;
+  margin-left: f2r(10);
+  margin-right: f2r(8);
+}
+
+.kp-approval__headline {
+  display: block;
+  font-size: f2r(14.5);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-approval__detail {
+  display: block;
+  margin-top: f2r(3);
+  font-size: f2r(12);
+  line-height: 1.4;
+  color: $text-secondary;
+  word-break: break-all;
+}
+
+// 右上角状态胶囊（待处理 = 实心剩余时间；已处理 = 浅底状态名）
+.kp-approval__pill {
+  display: flex;
+  align-items: center;
+  padding: f2r(5) f2r(10);
+  border-radius: f2r(999);
+  background-color: $chip-bg;
+  flex-shrink: 0;
+}
+
+.kp-approval__pill.is-filled {
+  background-color: #c6e8ac;
+}
+
+.kp-approval__pill-label {
+  font-size: f2r(12);
+  font-weight: 700;
+  color: $text-secondary;
+}
+
+.kp-approval__pill.is-filled .kp-approval__pill-label {
+  color: $primary-text;
+}
+
+.kp-approval__pill.is-approved .kp-approval__pill-label {
+  color: $primary-text;
+}
+
+.kp-approval__pill.is-rejected .kp-approval__pill-label {
+  color: $point-spend;
+}
+
+.kp-approval__time {
+  display: block;
+  margin-top: f2r(8);
+  font-size: f2r(11);
+  color: $text-hint;
+}
+
+.kp-approval__status {
+  display: block;
+  margin-top: f2r(4);
+  font-size: f2r(11);
+  color: $text-hint;
+}
+
+// 待处理卡片底部：左边不能批的原因，右边两个按钮
+.kp-approval__actions {
+  display: flex;
+  align-items: center;
+  margin-top: f2r(10);
+}
+
+.kp-approval__blocked {
+  flex: 1;
+  min-width: 0;
+  margin-right: f2r(8);
+  font-size: f2r(11);
+  line-height: 1.4;
+  color: $point-spend;
+}
+
+.kp-approval__spacer {
+  flex: 1;
+}
+
+.kp-approval__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: f2r(64);
+  padding: f2r(8) f2r(16);
+  border-radius: f2r(999);
+  margin-left: f2r(8);
+}
+
+.kp-approval__button.is-reject {
+  background-color: #fff0e6;
+}
+
+.kp-approval__button.is-approve {
+  background-color: $primary-deep;
+}
+
+.kp-approval__button.is-disabled {
+  opacity: 0.45;
+}
+
+.kp-approval__button-label {
+  font-size: f2r(13);
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.kp-approval__button.is-reject .kp-approval__button-label {
+  color: $point-spend;
+}
+
+// 提交中：占住按钮的位置，避免卡片高度跳一下
+.kp-approval__spinner {
+  width: f2r(20);
+  height: f2r(20);
+  margin-left: f2r(8);
+  border: f2r(2) solid rgba(127, 191, 85, 0.25);
+  border-top-color: $primary-deep;
+  border-radius: 50%;
+  animation: kp-approval-spin 0.8s linear infinite;
+}
+
+@keyframes kp-approval-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 
-import { appendDraftInTx } from '../ledger/ledger.append'
+import { habitSnapshot } from '../audit/config-snapshots'
+import { appendDraftInTx, lockChildBalance } from '../ledger/ledger.append'
 import {
   buildRecordDraft,
   LedgerDeniedError,
@@ -19,7 +20,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service'
 import type { RecordRow } from '../read/read.repository'
 import { businessDayOf, resolveBusinessTimeZone, type BusinessDay } from './business-day'
-import type { CheckInInput, HabitsPort, ReverseRecordInput } from './habits.repository'
+import type { CheckInInput, DeleteHabitInput, HabitsPort, ReverseRecordInput } from './habits.repository'
 
 /**
  * 打卡 / 撤销打卡的 **Prisma 适配器**（W4-D，2026-10-19）。
@@ -272,19 +273,71 @@ export class PrismaHabitsRepository implements HabitsPort {
   }
 
 
+  /**
+   * 软删一个习惯（W5-F）—— 与 `deleteWish` / `deleteRule` 同一手法：
+   *
+   *   锁孩子行 → 读习惯（**不加 status 过滤**）→ 已经删过就短路 →
+   *   `UPDATE status='deleted', deletedAt=now()` → 同事务写 `habit.delete` 审计。
+   *
+   * ★ 为什么不加 `status: 'active'` 过滤：那会把「重复删除」变成 404，
+   *   客户端重试一次就会看到「这条已经不存在了」—— 而事实是**它就在回收站**。
+   *   删除的语义是「让它不在清单里」，重复请求应该得到同一个答案。
+   *
+   * ★ 为什么不校验来源规则仍 active：删掉习惯是**减配**，不是加分。
+   *   规则已被删时更应该允许把它从清单里移走（否则会有删不掉的孤儿卡）。
+   */
+  async deleteHabit(input: DeleteHabitInput): Promise<string> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await this.lockChild(tx, input.childId)
+
+        const existing = await tx.habit.findFirst({
+          where: { id: input.habitId, childId: input.childId }
+        })
+        if (existing === null) {
+          throw new NotFoundException({
+            code: 'HABIT_NOT_FOUND',
+            message:
+              `习惯 ${input.habitId} 不存在或不属于孩子 ${input.childId} —— ` +
+              '拒绝删除（跨孩子一律按不存在回答）。'
+          })
+        }
+
+        // 幂等：已经软删过的不再写第二条审计（重复点删除不是第二次变更）。
+        if (existing.status === 'deleted') return existing.id
+
+        const deletedAt = new Date()
+        const deleted = await tx.habit.update({
+          where: { id: existing.id },
+          data: { status: 'deleted', deletedAt }
+        })
+
+        await tx.auditLog.create({
+          data: {
+            childId: input.childId,
+            actorUserId: input.operatorUserId,
+            actorRole: input.operatorRole,
+            action: 'habit.delete',
+            targetType: 'Habit',
+            targetId: deleted.id,
+            before: habitSnapshot(existing),
+            after: habitSnapshot(deleted)
+          }
+        })
+
+        return deleted.id
+      })
+    } catch (err) {
+      this.mapWriteError(err, 'deleteHabit')
+    }
+  }
+
+
   /** 锁孩子余额行；不存在 / 已删除 ⇒ 404（绝不按 0 分兜底）。 */
   private async lockChild(tx: Prisma.TransactionClient, childId: string): Promise<number> {
-    const rows = await tx.$queryRaw<{ pointsBalance: number }[]>`
-      SELECT "pointsBalance" FROM "Child"
-      WHERE "id" = ${childId} AND "status" = 'active'
-      FOR UPDATE`
-    if (rows.length === 0) {
-      throw new NotFoundException({
-        code: 'CHILD_NOT_FOUND',
-        message: `孩子 ${childId} 不存在或已删除 —— 打卡无处可记。`
-      })
-    }
-    return rows[0].pointsBalance
+    // ★ W5-B 起这条 SQL 只有一份实现（`lockChildBalance`）：
+    //   记一笔与打卡必须按**同一口径**判断「这个孩子还能不能记账」。
+    return lockChildBalance(tx, childId)
   }
 
   /**
@@ -402,7 +455,7 @@ export class PrismaHabitsRepository implements HabitsPort {
   }
 
   /** 把库层 / 内核的失败翻成 4xx（其余原样抛出 ⇒ 500，不伪装成业务拒绝）。 */
-  private mapWriteError(err: unknown, operation: 'checkIn' | 'reverse'): never {
+  private mapWriteError(err: unknown, operation: 'checkIn' | 'reverse' | 'deleteHabit'): never {
     if (err instanceof HttpException) throw err
 
     if (err instanceof LedgerDeniedError) {
@@ -419,6 +472,13 @@ export class PrismaHabitsRepository implements HabitsPort {
     }
 
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      if (err.code === 'P2025' && operation === 'deleteHabit') {
+        // 读到之后、更新之前被物理删除（只有彻底删除能走到这里）⇒ 404，不伪装成成功。
+        throw new NotFoundException({
+          code: 'HABIT_NOT_FOUND',
+          message: '要删除的习惯在写入前已经不存在了 —— 请刷新列表。'
+        })
+      }
       if (err.code === 'P2002') {
         if (JSON.stringify(err.meta ?? {}).includes('idempotencyKey')) {
           if (operation === 'reverse') {

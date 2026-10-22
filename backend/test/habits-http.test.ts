@@ -28,6 +28,7 @@ import { HabitsModule } from '../src/habits/habits.module'
 import {
   HABITS_REPOSITORY,
   type CheckInInput,
+  type DeleteHabitInput,
   type HabitsPort,
   type ReverseRecordInput
 } from '../src/habits/habits.repository'
@@ -111,6 +112,7 @@ function checkInRow(overrides: Partial<RecordRow> = {}): RecordRow {
 type PortFake = HabitsPort & {
   checkIns: CheckInInput[]
   reverses: ReverseRecordInput[]
+  deletes: DeleteHabitInput[]
   checkInError: Error | null
 }
 
@@ -118,7 +120,12 @@ function makePort(): PortFake {
   const port: PortFake = {
     checkIns: [],
     reverses: [],
+    deletes: [],
     checkInError: null,
+    async deleteHabit(input) {
+      port.deletes.push(input)
+      return input.habitId
+    },
     async checkIn(input) {
       port.checkIns.push(input)
       if (port.checkInError !== null) throw port.checkInError
@@ -197,6 +204,20 @@ async function post(
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body)
   })
+  return readResult(res)
+}
+
+/** `DELETE` 没有请求体 —— 与 `post` 分开，避免每次调用都要写一个多余的 `{}`。 */
+async function del(
+  baseUrl: string,
+  path: string,
+  headers: Record<string, string>
+): Promise<HttpResult> {
+  const res = await fetch(`${baseUrl}${path}`, { method: 'DELETE', headers })
+  return readResult(res)
+}
+
+async function readResult(res: Response): Promise<HttpResult> {
   const text = await res.text()
   let parsed: Record<string, unknown>
   try {
@@ -513,3 +534,74 @@ describe('组 D：HABIT_NOT_FOUND / 上限 / 非打卡记录 —— 状态码与
     assert.equal(res.body.code, 'HABIT_DAILY_LIMIT_REACHED')
   })
 })
+
+// ══ 组 E：DELETE /habits/:id —— 软删进回收站（W5-F，2026-10-21）════════════════
+describe('组 E：DELETE /habits/:id（软删 → 回收站）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port: PortFake
+
+  before(async () => {
+    port = makePort()
+    ;({ app, url } = await startApp({ port }))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.deletes.length = 0
+  })
+
+  it('缺身份头 ⇒ 401，端口零调用（回收站不是后门）', async () => {
+    const res = await del(url, `/habits/${HABIT_ID}`, {})
+    assert.equal(res.status, 401)
+    assert.equal(port.deletes.length, 0)
+  })
+
+  it('孩子删除习惯 ⇒ 403（矩阵 delete_habit child DENY），端口零调用', async () => {
+    const res = await del(url, `/habits/${HABIT_ID}`, CHILD)
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'FORBIDDEN')
+    assert.equal(port.deletes.length, 0)
+  })
+
+  it('家长删除 ⇒ 200 {habitId}，且 childId 来自会话而不是路径/请求体', async () => {
+    const res = await del(url, `/habits/${HABIT_ID}`, GUARDIAN)
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.body, { habitId: HABIT_ID })
+    assert.equal(port.deletes.length, 1)
+    // ★ `operatorRole` 来自会话（家长），不是请求体里能写的东西。
+    assert.deepEqual(port.deletes[0], {
+      childId: CHILD_ID,
+      habitId: HABIT_ID,
+      operatorUserId: 'u-dad',
+      operatorRole: 'guardian'
+    })
+  })
+
+  it('重复删除 ⇒ 仍然 200（库层幂等；不会因为"已经删过"变成 404）', async () => {
+    const first = await del(url, `/habits/${HABIT_ID}`, GUARDIAN)
+    const second = await del(url, `/habits/${HABIT_ID}`, GUARDIAN)
+    assert.equal(first.status, 200)
+    assert.equal(second.status, 200)
+    assert.deepEqual(second.body, { habitId: HABIT_ID })
+    assert.equal(port.deletes.length, 2, '两次请求都应到达端口（幂等由库层短路，不写第二条审计）')
+  })
+
+  it('带 Idempotency-Key 重放 ⇒ 只有第一次到达端口', async () => {
+    const replayPort = makePort()
+    const replayApp = await startApp({ port: replayPort, idempotency: makeIdempotencyFake() })
+    try {
+      const headers = { ...GUARDIAN, 'idempotency-key': 'habit-delete-1' }
+      const first = await del(replayApp.url, `/habits/${HABIT_ID}`, headers)
+      const second = await del(replayApp.url, `/habits/${HABIT_ID}`, headers)
+      assert.equal(first.status, 200)
+      assert.equal(second.status, 200)
+      assert.deepEqual(second.body, first.body)
+      assert.equal(replayPort.deletes.length, 1, '重放又删了一次 —— 幂等层没生效')
+    } finally {
+      await replayApp.app.close()
+    }
+  })
+})
+

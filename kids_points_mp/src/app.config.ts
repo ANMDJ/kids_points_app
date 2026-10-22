@@ -2,6 +2,7 @@ export default defineAppConfig({
   pages: [
     'pages/home/index',
     'pages/wishlist/index',
+    'pages/approvals/index',
     'pages/profile/index',
     'pages/record/index',
     'pages/rule/index'

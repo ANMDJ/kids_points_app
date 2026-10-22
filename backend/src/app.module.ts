@@ -1,18 +1,22 @@
 import { Module } from '@nestjs/common'
 import { ApprovalsModule } from './approvals/approvals.module'
 import { AuditModule } from './audit/audit.module'
+import { ChildrenModule } from './children/children.module'
 import { DeviceSessionModule } from './device-session/device-session.module'
 import { HabitsModule } from './habits/habits.module'
 import { IdempotencyModule } from './idempotency/idempotency.module'
 import { InvitesModule } from './invites/invites.module'
 import { LedgerModule } from './ledger/ledger.module'
 import { MembershipModule } from './membership/membership.module'
+import { MembersModule } from './members/members.module'
 import { NotificationsModule } from './notifications/notifications.module'
 import { OnboardingModule } from './onboarding/onboarding.module'
 import { PermissionsModule } from './permissions/permissions.module'
 import { PrismaModule } from './prisma/prisma.module'
 import { ReadModule } from './read/read.module'
+import { RecordsModule } from './records/records.module'
 import { RulesModule } from './rules/rules.module'
+import { TrashModule } from './trash/trash.module'
 import { WishesModule } from './wishes/wishes.module'
 
 /**
@@ -50,7 +54,18 @@ import { WishesModule } from './wishes/wishes.module'
     //   有库 ⇒ PrismaHabitsRepository（同事务写流水/余额/审计）；无库 ⇒ 501（不假装打卡成功）。
     //   不传参 ⇒ 按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
     HabitsModule.register(),
-    WishesModule,
+    // ★ 动态模块（W5-B，2026-10-20）：「记一笔」POST /records/adjust。
+    //   有库 ⇒ PrismaRecordsRepository（同事务写流水/余额/审计）；无库 ⇒ 501。
+    //   与 HabitsModule 分成两个模块：记一笔没有习惯，共享的只有账本内核。
+    RecordsModule.register(),
+    WishesModule.register(),
+    // ★ W5-F（2026-10-21）：回收站 `GET /trash` / `POST /trash/:kind/:id/restore` /
+    //   `DELETE /trash/:kind/:id`。有库 ⇒ PrismaTrashRepository；无库 ⇒ 501
+    //   （不返回空列表冒充"回收站是空的"）。
+    TrashModule.register(),
+    // ★ W5-E（2026-10-21）：`PATCH /child` 改昵称（guardian 专属，写 `child.rename` 审计）。
+    //   有库 ⇒ PrismaChildrenRepository；无库 ⇒ 501（不假装改名成功）。
+    ChildrenModule.register(),
     // ★ 动态模块（W2-D，2026-10-16）：它自己不选实现，但把"在哪个世界"转发给
     //   DeviceSessionModule / MembershipModule（同一个 hasDatabase 只有一个来源）。
     //   不传参 ⇒ 按环境推断，而 dotenv 已在 main.ts 第一行加载 —— 顺序是这个判断的前提。
@@ -59,7 +74,15 @@ import { WishesModule } from './wishes/wishes.module'
     //   有库 ⇒ PrismaReadRepository；无库 ⇒ 501（不返回空数据冒充成功）。
     ReadModule.register(),
     OnboardingModule,
-    InvitesModule,
+    // ★ W5-G（2026-10-22）：邀请码 `POST/GET /invites`、`POST /invites/:id/revoke`、
+    //   `POST /invites/accept`。有库 ⇒ PrismaInvitesRepository（条件 UPDATE 原子占位，
+    //   占位 + 成员位 + 会话 + 审计同一事务）；无库 ⇒ 501（不返回空列表冒充
+    //   「还没有邀请码」，也不假装加入成功）。
+    InvitesModule.register(),
+    // ★ W5-H（2026-10-22）：家庭成员 `GET /members` / `PATCH /members/:id` /
+    //   `DELETE /members/:id`。有库 ⇒ PrismaMembersRepository（最后一位家长保护 +
+    //   同事务收回会话 + 审计）；无库 ⇒ 501（不返回空列表冒充「家里只有我一个人」）。
+    MembersModule.register(),
     // ★ 动态模块（W2-D，2026-10-16）：有库 ⇒ PrismaDeviceSessionRepository
     //   （真查 DeviceSession，身份/角色由库给出）；没有 ⇒ 501（无库时连 PrismaService 都不建）。
     DeviceSessionModule.register(),

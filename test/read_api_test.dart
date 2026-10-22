@@ -8,8 +8,10 @@ import 'package:kids_points_app/data/app_store.dart';
 import 'package:kids_points_app/data/read_api.dart';
 import 'package:kids_points_app/data/read_api_errors.dart';
 import 'package:kids_points_app/data/read_dto.dart';
+import 'package:kids_points_app/data/read_mapper.dart';
 import 'package:kids_points_app/main.dart';
 import 'package:kids_points_app/models/point_record.dart';
+import 'package:kids_points_app/models/trash.dart';
 
 /// W4-B：`GET /records` 的游标分页 —— 客户端只做两件事：
 ///   ① 把 `nextCursor` **原样**回传（不自己拼时间戳 / offset）；
@@ -149,6 +151,125 @@ void main() {
       expect(() => client.fetchRecords(limit: 0), throwsArgumentError);
       expect(() => client.fetchRecords(limit: 201), throwsArgumentError);
     });
+  group('ReadApiClient.fetchTrash / mapTrash：回收站（W5-F）', () {
+    String trashJson(List<Map<String, Object?>> items) =>
+        jsonEncode(<String, Object?>{'items': items});
+
+    test('GET /trash：解析三类条目，并把 deletedAt 原样交给展示层', () async {
+      final List<Uri> calls = <Uri>[];
+      final _FakeTransport transport = _FakeTransport((Uri uri) async {
+        calls.add(uri);
+        return ReadHttpResponse(
+          statusCode: 200,
+          body: trashJson(<Map<String, Object?>>[
+            <String, Object?>{
+              'kind': 'point_rule',
+              'id': 'rule-1',
+              'title': '按时睡觉',
+              'deletedAt': '2026-10-20T08:00:00.000Z',
+            },
+            <String, Object?>{
+              'kind': 'wish',
+              'id': 'wish-1',
+              'title': '去动物园',
+              'deletedAt': '2026-10-21T08:00:00.000Z',
+            },
+            <String, Object?>{
+              'kind': 'habit',
+              'id': 'habit-1',
+              'title': '每天练琴',
+              'deletedAt': '2026-10-19T08:00:00.000Z',
+            },
+          ]),
+        );
+      });
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      final TrashListDto dto = await client.fetchTrash();
+
+      expect(calls.single.path, '/api/trash');
+      expect(
+        dto.items.map((TrashItemDto item) => item.kind),
+        <String>['point_rule', 'wish', 'habit'],
+      );
+      expect(dto.items.first.deletedAt.isUtc, isTrue);
+
+      final List<TrashItem> rows = mapTrash(
+        dto,
+        now: DateTime.utc(2026, 10, 21, 12),
+      );
+      expect(rows.map((TrashItem row) => row.kind), <TrashKind>[
+        TrashKind.pointRule,
+        TrashKind.wish,
+        TrashKind.habit,
+      ]);
+      // 服务端不下发 expiresAt：过期与否由客户端用同一份 90 天常量现算。
+      expect(rows.every((TrashItem row) => row.expired), isFalse);
+      expect(rows.first.retentionText(now: DateTime.utc(2026, 10, 21, 12)),
+          '还能恢复 89 天');
+    });
+
+    test('未知 kind ⇒ malformed，不能默默丢掉一行', () async {
+      final List<TrashItemDto> items = <TrashItemDto>[
+        TrashItemDto(
+          kind: 'record',
+          id: 'record-1',
+          title: '打卡',
+          deletedAt: DateTime.utc(2026, 10, 20),
+        ),
+      ];
+      expect(
+        () => mapTrash(TrashListDto(items: items),
+            now: DateTime.utc(2026, 10, 21)),
+        throwsA(isA<ReadApiException>().having(
+          (ReadApiException e) => e.detail ?? '',
+          'detail',
+          contains('未知回收站类型'),
+        )),
+      );
+    });
+
+    test('缺少 items / deletedAt 不合规 ⇒ malformed（不猜 now）', () async {
+      Future<TrashListDto> fetch(String body) {
+        final ReadApiClient client = ReadApiClient(
+          config: config,
+          transport: _FakeTransport(
+            (Uri uri) async => ReadHttpResponse(statusCode: 200, body: body),
+          ),
+        );
+        return client.fetchTrash();
+      }
+
+      await expectLater(
+        fetch(jsonEncode(<String, Object?>{'items': <Object?>[]})),
+        completes,
+      );
+      await expectLater(
+        fetch(jsonEncode(<String, Object?>{'rows': <Object?>[]})),
+        throwsA(isA<ReadApiException>()),
+      );
+      await expectLater(
+        fetch(trashJson(<Map<String, Object?>>[
+          <String, Object?>{'kind': 'wish', 'id': 'wish-1', 'title': 'x'},
+        ])),
+        throwsA(isA<ReadApiException>()),
+      );
+      await expectLater(
+        fetch(trashJson(<Map<String, Object?>>[
+          <String, Object?>{
+            'kind': 'wish',
+            'id': 'wish-1',
+            'title': 'x',
+            'deletedAt': 'not-a-date',
+          },
+        ])),
+        throwsA(isA<ReadApiException>()),
+      );
+    });
+  });
+
+
   });
 
   group('AppStore：keyset 加载更多', () {

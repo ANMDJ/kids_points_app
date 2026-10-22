@@ -71,6 +71,8 @@ const ID = {
   wishInsuff: `dbtest-${RUN}-wish-insuff`,
   wishDel: `dbtest-${RUN}-wish-del`,
   wishExpire: `dbtest-${RUN}-wish-expire`,
+  /** 已兑换过的心愿（`redeemed: true`）—— 只用于 409 `WISH_ALREADY_REDEEMED` 那格。 */
+  wishDone: `dbtest-${RUN}-wish-done`,
   wishR: `dbtest-${RUN}-wish-r`
 } as const
 
@@ -122,7 +124,7 @@ async function send(
  *   · child R：dad=guardian(**removed**) —— 与“没有成员位”必须分成两种 403
  *   · 会话：dad/kid/stranger 各一行（stranger 有会话但无成员位 ⇒ 屏障一要自己说话）、
  *           dad 在 R 上一行、以及一行**已过期**的 guardian（TTL 降级用）
- *   · 心愿：child P 四条（主用例 / 余额不足 / 待删除 / 待过期），child R 一条（越权用）
+ *   · 心愿：child P 五条（主用例 / 余额不足 / 待删除 / 待过期 / **已兑换**），child R 一条（越权用）
  *   · child P 的 `pointsBalance` 保持 0：本文件**不执行**兑换（执行路径另见
  *     `approvals-execution-db.dbtest.ts`），所以“余额不足”是这里的正常前提，
  *     而不是靠某个用例偷偷改余额制造出来的。
@@ -171,6 +173,9 @@ async function seed(): Promise<void> {
       { id: ID.wishInsuff, childId: ID.childP, title: '遥控车', cost: 30, emoji: '🚗' },
       { id: ID.wishDel, childId: ID.childP, title: '贴纸', cost: 20, emoji: '✨' },
       { id: ID.wishExpire, childId: ID.childP, title: '漫画书', cost: 40, emoji: '📚' },
+      // `redeemed: true` 是**历史事实**（兑换已经发生过），不是本文件执行的结果 ——
+      // 本文件不碰账本，`cleanup` 会复核 `PointRecord` 计数为 0。
+      { id: ID.wishDone, childId: ID.childP, title: '生日蛋糕', cost: 25, emoji: '🎂', redeemed: true },
       { id: ID.wishR, childId: ID.childR, title: '别人的心愿', cost: 10, emoji: '🎁' }
     ]
   })
@@ -179,7 +184,9 @@ async function seed(): Promise<void> {
   assert.equal(await prisma.child.count({ where: { id: { in: [ID.childP, ID.childR] } } }), 2)
   assert.equal(await prisma.childMember.count({ where: { childId: { in: [ID.childP, ID.childR] } } }), 3)
   assert.equal(await prisma.deviceSession.count({ where: { childId: { in: [ID.childP, ID.childR] } } }), 5)
-  assert.equal(await prisma.wish.count({ where: { childId: { in: [ID.childP, ID.childR] } } }), 5)
+  assert.equal(await prisma.wish.count({ where: { childId: { in: [ID.childP, ID.childR] } } }), 6)
+  // 夹具里的 `redeemed` 真的落库了（否则 409 用例只是“恰好也过”）
+  assert.equal((await prisma.wish.findUniqueOrThrow({ where: { id: ID.wishDone } })).redeemed, true)
 }
 
 /**
@@ -425,6 +432,40 @@ describe('组 E：审批落库 —— 建 pending / 拒绝 / 无效 / 过期', (
       'WISH_NOT_FOUND',
       `拿到 ${String(r.body.code)}：403 等于承认“这个 id 存在但不属于你”—— 越权探测的口子`
     )
+  })
+
+  /**
+   * W5-C：双端的兑换入口都走 `POST /approvals`，因此这个 409 是**客户端唯一能看见的**
+   * 「别重复兑换」信号 —— 两端 `write_api_errors` 直接按 code 翻文案。
+   *
+   * 钉住三件事：
+   *   ① 状态码是 409 ＋ `WISH_ALREADY_REDEEMED`（不是 400/404，客户端按 409 分流）；
+   *   ② **不建审批行** —— 建一条 pending 等于让家长再批一次、再扣一次分；
+   *   ③ 拒绝发生在快照阶段，所以**不写账本**（`cleanup` 会复核 `PointRecord` 为 0）。
+   */
+  it('★ 兑换一个**已经兑换过**的心愿 ⇒ 409 `WISH_ALREADY_REDEEMED`，且不建审批行', async () => {
+    const before = await prisma.approvalRequest.count({ where: { childId: ID.childP } })
+
+    const r = await send('/approvals', { body: { action: 'redeem', targetId: ID.wishDone }, headers: H.kid })
+
+    assert.equal(
+      r.status,
+      409,
+      `重复兑换拿到 ${r.status}：400 会让客户端以为“请求写错了”，404 会让孩子以为心愿没了`
+    )
+    assert.equal(r.body.code, 'WISH_ALREADY_REDEEMED')
+    assert.equal(
+      await prisma.approvalRequest.count({ where: { childId: ID.childP } }),
+      before,
+      '被拒的重复兑换留下了审批行 —— 家长会收到一条注定重复扣分的申请'
+    )
+    assert.equal(
+      await prisma.pointRecord.count({ where: { childId: ID.childP } }),
+      0,
+      '重复兑换产生了流水 —— 本文件不该写账本，写出来说明快照校验在扣分之后'
+    )
+    // 心愿本身保持已兑换状态，不被这次失败请求改动
+    assert.equal((await prisma.wish.findUniqueOrThrow({ where: { id: ID.wishDone } })).redeemed, true)
   })
 
   it('没有执行器的动作 ⇒ 400 `APPROVAL_ACTION_NOT_EXECUTABLE`（不落一条永远批不动的 pending）', async () => {

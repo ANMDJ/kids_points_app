@@ -1,24 +1,39 @@
 import type {
+  ApprovalInboxItemDto,
+  ApprovalsPageDto,
   HabitDto,
   HomeDto,
+  InviteDto,
+  InviteListDto,
+  MemberDto,
+  MemberListDto,
   RecordsPageDto,
   RecordDto,
-  RuleDto
+  RuleDto,
+  TrashItemDto,
+  TrashListDto,
+  WishDto
 } from './read_dto'
 import { ReadApiException } from './read_api_errors'
 import type { IconName } from '../components/Icon/icons'
+import type { ApprovalInboxItem, ApprovalsPage } from './approval'
 import type {
+  FamilyMember,
   Habit,
+  InviteCode,
   MemberRole,
   PointRecord,
   PointRule,
   RecordCategory,
   RecordSource,
+  TrashItem,
   Wish,
   WishCoverStyle
 } from './types'
 import {
+  isTrashExpired,
   recordSubtitle,
+  trashKindFromWire,
   wishCoverStyles
 } from './types'
 
@@ -57,21 +72,65 @@ export function mapHome(dto: HomeDto): HomeSnapshot {
     rewardCount: dto.rewardCount,
     habits: dto.habits.map((item, index) => mapHabit(item, `habits[${index}]`)),
     rules: dto.rules.map((item, index) => mapRule(item, `rules[${index}]`)),
-    wishes: dto.wishes.map((item, index) => ({
+    wishes: dto.wishes.map((item, index) =>
+      mapWish(item, `wishes[${index}]`)
+    )
+  }
+}
+
+/**
+ * 心愿 DTO → UI 模型（`GET /home` 与预览模式新增心愿共用）。
+ *
+ * `coverStyle` 由服务端给定（A–D）；预览模式新增心愿时由本地
+ * `pickCoverStyle` 算 —— 两处同一套算法，颜色不会因为“谁写的”而不同。
+ */
+export function mapWish(dto: WishDto, path = 'wish'): Wish {
+  return {
+    id: dto.id,
+    title: dto.title,
+    cost: dto.cost,
+    emoji: dto.emoji,
+    coverStyle: asEnum(
+      dto.coverStyle,
+      wishCoverStyles,
+      `${path}.coverStyle`
+    ) as WishCoverStyle,
+    redeemed: dto.redeemed,
+    status: 'active',
+    deletedAt: null
+  }
+}
+
+/**
+ * `GET /trash` → 回收站展示模型（W5-F）。
+ *
+ * `kind` 在 DTO 里是**字符串**，在这里严格校验：不认识就抛 malformed ——
+ * 不能默默跳过一行（回收站少一条 = 家长以为它已经被彻底删掉了）。
+ *
+ * `expired` 由 `isTrashExpired` 现算（同一份 90 天常量），不信任服务端字段
+ * —— 服务端本来也不下发它。
+ */
+export function mapTrash(
+  dto: TrashListDto,
+  now: number = Date.now()
+): TrashItem[] {
+  return dto.items.map((item: TrashItemDto, index: number) => {
+    const path = `items[${index}]`
+    const kind = trashKindFromWire(item.kind)
+    if (kind === null) {
+      throw ReadApiException.malformed(
+        `${path}.kind`,
+        `未知回收站类型：${item.kind}`
+      )
+    }
+    return {
+      kind,
       id: item.id,
       title: item.title,
-      cost: item.cost,
-      emoji: item.emoji,
-      coverStyle: asEnum(
-        item.coverStyle,
-        wishCoverStyles,
-        `wishes[${index}].coverStyle`
-      ) as WishCoverStyle,
-      redeemed: item.redeemed,
-      status: 'active',
-      deletedAt: null
-    }))
-  }
+      deletedAt: item.deletedAt,
+      expired: isTrashExpired(item.deletedAt, now)
+    }
+  })
 }
 
 /**
@@ -205,6 +264,50 @@ export function mapRecord(dto: RecordDto, path = 'record'): PointRecord {
   }
 }
 
+/**
+ * 审批收件箱一行 → 本地模型。
+ *
+ * `action` / `status` **不做枚举校验**（与 `ApprovalDto` 同口径）：后端将来加
+ * 动作或状态时，客户端要能如实显示「状态未知（xxx）」，不能在解析层崩掉。
+ * `summary` 已经在 DTO 层区分了「读不懂」与「契约漂移」：前者是 `null`。
+ */
+export function mapApprovalInboxItem(
+  dto: ApprovalInboxItemDto,
+  path = 'item'
+): ApprovalInboxItem {
+  if (
+    dto.summary !== null &&
+    dto.summary.kind === 'redeem' &&
+    dto.summary.wishId.trim() === ''
+  ) {
+    // 空 wishId 说明服务端快照坏了：批准它等于兑一个不存在的心愿。
+    throw ReadApiException.malformed(`${path}.summary.wishId`, '不能为空')
+  }
+  return {
+    id: dto.id,
+    action: dto.action,
+    status: dto.status,
+    requesterUserId: dto.requesterUserId,
+    decidedByUserId: dto.decidedByUserId,
+    executedRecordId: dto.executedRecordId,
+    autoReason: dto.autoReason,
+    createdAt: dto.createdAt,
+    decidedAt: dto.decidedAt,
+    expiresAt: dto.expiresAt,
+    summary: dto.summary
+  }
+}
+
+export function mapApprovalsPage(dto: ApprovalsPageDto): ApprovalsPage {
+  return {
+    items: dto.items.map((item, index) =>
+      mapApprovalInboxItem(item, `items[${index}]`)
+    ),
+    hasMore: dto.hasMore,
+    nextCursor: dto.nextCursor
+  }
+}
+
 function asEnum<T extends string>(
   value: string,
   allowed: readonly T[],
@@ -226,4 +329,83 @@ function requireHexColor(value: string, path: string): string {
     throw ReadApiException.malformed(path, `不是 #RGB / #RRGGBB 颜色：${value}`)
   }
   return trimmed
+}
+
+// ───────────────────────────── 家庭成员（W5-H） ─────────────────────────────
+
+/**
+ * 线格式 → [FamilyMember]。
+ *
+ * `role` / `status` 在 DTO 里是字符串，**只有这里**决定哪些值是认识的：
+ * 不认识就抛 [ReadApiException]（一条坏行会让整页显式失败），而不是
+ * 猜成 `child` —— 猜错等于把权限边界画错。
+ */
+export function mapMember(dto: MemberDto, path = '$'): FamilyMember {
+  if (dto.memberId.trim() === '') {
+    throw ReadApiException.malformed(`${path}.memberId`, 'memberId 不能为空')
+  }
+  return {
+    memberId: dto.memberId,
+    userId: dto.userId,
+    displayName: dto.displayName,
+    role: asEnum(dto.role, ['guardian', 'child', 'viewer'] as const, `${path}.role`),
+    status: asEnum(dto.status, ['active', 'removed'] as const, `${path}.status`),
+    joinedAt: dto.joinedAt,
+    removedAt: dto.removedAt,
+    isSelf: dto.isSelf
+  }
+}
+
+export function mapMembers(dto: MemberListDto): FamilyMember[] {
+  return dto.items.map((item, index) => mapMember(item, `items[${index}]`))
+}
+
+// ============================================================ 邀请码（W5-I）
+
+/**
+ * `InviteDto` → [InviteCode]。
+ *
+ * 比成员多两条**本地一致性校验**，都是「画错了会误导用户」的字段：
+ *   · `role` 只接受 `child` / `guardian` —— `viewer` 不是可邀请的角色，
+ *     画出来会变成一张「加入后什么都做不了」的票；
+ *   · `usedCount` 不能超过 `maxUses`、两者都必须是正整数 —— 名额是这张票
+ *     最要紧的信息，负剩余名额无法解释。
+ *
+ * `code` 不做格式校验：8 位是服务端生成的，但老数据 / 手工建的码只要能用
+ * 就该显示；格式只影响展示时的分组（`inviteDisplayCode`）。
+ */
+export function mapInvite(dto: InviteDto, path = '$'): InviteCode {
+  if (dto.id.trim() === '') {
+    throw ReadApiException.malformed(`${path}.id`, 'id 不能为空')
+  }
+  if (dto.code.trim() === '') {
+    // 空码复制出去什么都做不了，且用户会以为是自己的问题。
+    throw ReadApiException.malformed(`${path}.code`, 'code 不能为空')
+  }
+  if (dto.maxUses < 1) {
+    throw ReadApiException.malformed(
+      `${path}.maxUses`,
+      `maxUses=${dto.maxUses} 必须 ≥ 1`
+    )
+  }
+  if (dto.usedCount < 0 || dto.usedCount > dto.maxUses) {
+    throw ReadApiException.malformed(
+      `${path}.usedCount`,
+      `usedCount=${dto.usedCount} 超出 0–${dto.maxUses}`
+    )
+  }
+  return {
+    id: dto.id,
+    code: dto.code,
+    role: asEnum(dto.role, ['child', 'guardian'] as const, `${path}.role`),
+    maxUses: dto.maxUses,
+    usedCount: dto.usedCount,
+    expiresAt: dto.expiresAt,
+    revoked: dto.revoked,
+    createdAt: dto.createdAt
+  }
+}
+
+export function mapInvites(dto: InviteListDto): InviteCode[] {
+  return dto.items.map((item, index) => mapInvite(item, `items[${index}]`))
 }

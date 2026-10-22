@@ -10,10 +10,16 @@ interface NavItem {
   label: string
 }
 
-/** 首页 / 心愿单 / 我的，与 Flutter AppBottomNav 一致。 */
+/**
+ * 首页 / 心愿单 / 审批 / 我的，与 Flutter AppBottomNav 一致。
+ *
+ * 审批页排在「我的」之前：家长日常路径是「看孩子心愿 → 批申请」，
+ * 把审批埋进「我的」会变成三级入口。
+ */
 const ITEMS: NavItem[] = [
   { icon: 'home', activeIcon: 'homeFill', label: '首页' },
   { icon: 'heart', activeIcon: 'heartFill', label: '心愿单' },
+  { icon: 'listCheck', activeIcon: 'listCheck', label: '审批' },
   { icon: 'smile', activeIcon: 'smile', label: '我的' }
 ]
 

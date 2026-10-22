@@ -555,6 +555,37 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('预览模式：点兑换先确认，取消不扣分，确认后立即扣分', (WidgetTester tester) async {
+      final AppStore store = seededStore();
+      await pumpApp(tester, store);
+      await tester.tap(find.text('心愿单'));
+      await tester.pumpAndSettle();
+
+      final int before = store.points;
+      await tester.tap(find.text('兑换').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('兑换心愿'), findsOneWidget);
+      expect(
+        find.textContaining('立即扣除'),
+        findsOneWidget,
+        reason: '预览模式没有审批可等，确认就是真扣分，文案不能写「等家长确认」',
+      );
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(store.points, before, reason: '取消就是一分都不扣');
+
+      await tester.tap(find.text('兑换').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认兑换'));
+      await tester.pumpAndSettle();
+
+      expect(store.points, before - 40);
+      expect(store.wishes.any((dynamic w) => w.redeemed == true), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('新增心愿默认收在右下角，滚到底部后展开成整行按钮', (WidgetTester tester) async {
       final AppStore store = seededStore();
       for (int i = 0; i < 6; i++) {

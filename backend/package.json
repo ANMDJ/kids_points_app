@@ -21,6 +21,7 @@
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "seed": "prisma db seed",
+    "seed:demo": "tsx prisma/seed/demo-family.ts",
     "db:verify": "node scripts/verify-db.mjs",
     "contracts:emit": "node scripts/emit-matrix.mjs",
     "templates:check": "tsx scripts/check-templates.ts",

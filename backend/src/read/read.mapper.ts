@@ -101,6 +101,24 @@ export interface RecordDto {
   balanceAfter: number
 }
 
+/**
+ * 三个写端点（打卡 / 撤销 / 记一笔）的**统一响应**（W5-B 从 `habits.service` 搬来）。
+ *
+ * 为什么放在 mapper 而不是各业务模块：客户端只有一个 `WrittenRecordDto`，
+ * 它要求「写回包里的 record 与 `GET /records` 的行同构」。只要有一个端点自己
+ * 声明一份形状，`mapRecord()` 的严格解析就会在**那一条路径**上开始报 malformed ——
+ * 所以形状只能有一处定义。
+ */
+export interface WrittenRecordResponse {
+  record: RecordDto
+  /**
+   * 本次真正写下的那条流水 id（撤销时是**冲正记录**，不是原记录）。
+   * ★ 幂等层用它填 `IdempotencyRecord.recordId`（`IdempotencyService.recordIdOf`），
+   *   方便事后回答"这个 key 究竟产生了哪一笔"。
+   */
+  executedRecordId: string
+}
+
 export interface RecordsResponse {
   records: RecordDto[]
   /** 本次实际请求的上限（客户端可据此判断是否要「加载更多」）。 */

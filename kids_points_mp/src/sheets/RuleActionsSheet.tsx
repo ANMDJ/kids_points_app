@@ -25,6 +25,11 @@ export default function RuleActionsSheet({
 }: RuleActionsSheetProps) {
   if (!rule) return null
 
+  // 这条规则**当前**生成的习惯（没有就是还没加入，或已被移出到回收站）。
+  // 首页习惯是独立实体（A1）：删规则不会连带删习惯，所以这里要单独给出口 ——
+  // 与 Flutter `showRuleActionsSheet` 同构（C9 / W5-F）。
+  const habitFromRule = store.habits.find((item) => item.ruleId === rule.id)
+
   const handleAddToHabits = async () => {
     // 修 A1：扣分规则不能生成可打卡习惯（原先 Math.abs 会把扣分变成加分），
     // 被拒绝时必须把原因告诉家长（禁止静默失败）
@@ -35,6 +40,25 @@ export default function RuleActionsSheet({
     }
     onClose()
     toast(`“${rule.title}”已加入首页习惯`)
+  }
+
+  /**
+   * 把这条规则生成的习惯**移出首页**（C9 / W5-F）。
+   *
+   * 同样是软删（进回收站 90 天可恢复）：已发生的打卡流水继续带 `habitId`
+   * 回指，不会断链；live 走 `DELETE /habits/:id`（矩阵里孩子 DENY，服务端 403，
+   * 文案由 store 原样返回）。
+   */
+  const handleRemoveHabit = async () => {
+    const habit = habitFromRule
+    if (!habit) return
+    const message = await store.submitRemoveHabit(habit)
+    if (message) {
+      toast(message)
+      return
+    }
+    onClose()
+    toast('已移出首页习惯，90 天内可在「我的 · 回收站」恢复')
   }
 
   const handleRemove = async () => {
@@ -70,6 +94,17 @@ export default function RuleActionsSheet({
         onClick={handleAddToHabits}
       />
       <View className='kp-sheet-gap-10' />
+      {habitFromRule ? (
+        <View>
+          <ActionRow
+            icon='minus'
+            label={`把“${habitFromRule.title}”移出首页习惯`}
+            danger
+            onClick={handleRemoveHabit}
+          />
+          <View className='kp-sheet-gap-10' />
+        </View>
+      ) : null}
       <ActionRow
         icon='trash'
         label='移到回收站'

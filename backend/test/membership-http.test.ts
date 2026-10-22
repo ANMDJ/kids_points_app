@@ -228,6 +228,11 @@ function makeApprovalsFake(): ApprovalsFake {
     async expireDue(now, limit) {
       calls.push({ method: 'expireDue', input: { now, limit } })
       return 0
+    },
+    async listForChild(input) {
+      calls.push({ method: 'listForChild', input })
+      // 本文件不覆盖收件箱语义；返回空页，只证明「请求走到了业务层」。
+      return []
     }
   }
 }

@@ -51,6 +51,11 @@ class _QuickNoteSheetState extends State<QuickNoteSheet> {
   int amount = 1;
   String selectedReason = '';
 
+  /// 提交中：主按钮在这段时间里不再接受第二次点击。
+  /// 服务端那条路上写请求已经是串行的（store 自己也会拒绝并发），
+  /// 这里只是别让家长盯着一个毫无反应的按钮连点。
+  bool saving = false;
+
   @override
   void dispose() {
     reasonController.dispose();
@@ -65,20 +70,31 @@ class _QuickNoteSheetState extends State<QuickNoteSheet> {
         return SheetFrame(
           title: '记一笔',
           subtitle: '家长手动加分或扣分，孩子立刻能看到',
-          actionLabel: '保存（${delta > 0 ? '+' : ''}$delta 积分）',
+          actionLabel:
+              saving ? '保存中…' : '保存（${delta > 0 ? '+' : ''}$delta 积分）',
           actionIcon: Icons.check_rounded,
-          onAction: () {
+          onAction: () async {
+            if (saving) return;
             final String typed = reasonController.text.trim();
             final String reason = selectedReason.isNotEmpty
                 ? (typed.isEmpty ? selectedReason : '$selectedReason（$typed）')
                 : (typed.isEmpty ? '额外调整' : typed);
-            final String? message =
-                widget.store.addQuickNote(delta: delta, reason: reason);
+            setSheetState(() => saving = true);
+            // live 模式走 POST /records/adjust（余额与流水以服务端为准）；
+            // 预览模式仍是本地写入 —— 两种模式的返回值语义一致。
+            final String? message = await widget.store.submitQuickNote(
+              delta: delta,
+              reason: reason,
+              note: typed,
+            );
+            if (!mounted) return;
             if (message != null) {
-              // 修 B6：超额扣分会被拒绝，必须把原因告诉家长（禁止静默失败）
+              // 修 B6：超额扣分会被服务端拒绝，必须把原因告诉家长（禁止静默失败）
+              setSheetState(() => saving = false);
               widget.messenger.showSnackBar(SnackBar(content: Text(message)));
               return;
             }
+            if (!sheetContext.mounted) return;
             Navigator.of(sheetContext).pop();
             widget.messenger.showSnackBar(
               SnackBar(

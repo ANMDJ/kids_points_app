@@ -51,6 +51,10 @@ function makePort(): HabitsPort & { checkIns: CheckInInput[]; reverses: ReverseR
   return {
     checkIns,
     reverses,
+    async deleteHabit(input) {
+      // 软删在 service 用例里只验「规范化 + 转交」；库层事实由 Prisma 集成用例覆盖。
+      return input.habitId
+    },
     async checkIn(input) {
       checkIns.push(input)
       return rowOf({ source: input.source, operatorRole: input.operatorRole })

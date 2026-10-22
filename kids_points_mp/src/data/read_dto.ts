@@ -205,6 +205,316 @@ export class RecordsPageDto {
 }
 
 
+// ─────────────────────── 家长审批收件箱（W5-D） ───────────────────────
+
+/**
+ * `summary` 的线格式：按 `kind` 分派的三元联合。
+ *
+ * 服务端**不**下发展示串（`02` §4.3 / `approval-inbox.mapper.ts`）：
+ * 文案要随客户端语言与排版变化，塞进响应就会两端口径漂移。
+ */
+export type ApprovalSummaryDto =
+  | { kind: 'redeem'; wishId: string; title: string; cost: number }
+  | {
+      kind: 'bonus'
+      amount: number
+      reason: string
+      ruleId: string | null
+      habitId: string | null
+      basisTitle: string | null
+    }
+  | { kind: 'add_wish'; title: string; cost: number; emoji: string }
+
+/**
+ * `GET /approvals` 的一行。
+ *
+ * ★ 与 `ApprovalDto`（写回包）**不合并**：写回包只带判定结果，列表行带
+ *   `summary` / `createdAt` / `expiresAt`。合并会让写路径被迫读一堆用不上的
+ *   字段，也会让「列表多读一个字段」变成对写端点的契约要求。
+ */
+export class ApprovalInboxItemDto {
+  constructor(
+    readonly id: string,
+    readonly action: string,
+    readonly status: string,
+    readonly requesterUserId: string,
+    readonly decidedByUserId: string | null,
+    readonly executedRecordId: string | null,
+    readonly autoReason: string | null,
+    readonly createdAt: number,
+    readonly decidedAt: number | null,
+    readonly expiresAt: number,
+    /** `null` = payload 读不懂，或 `kind` 比客户端新 —— 一律显示「内容无法识别」。 */
+    readonly summary: ApprovalSummaryDto | null
+  ) {}
+
+  static fromJson(raw: unknown, path: string): ApprovalInboxItemDto {
+    const json = readObject(raw, path)
+    return new ApprovalInboxItemDto(
+      readString(json, 'id', `${path}.id`),
+      readString(json, 'action', `${path}.action`),
+      readString(json, 'status', `${path}.status`),
+      readString(json, 'requesterUserId', `${path}.requesterUserId`),
+      readOptionalString(json, 'decidedByUserId', `${path}.decidedByUserId`),
+      readOptionalString(json, 'executedRecordId', `${path}.executedRecordId`),
+      readOptionalString(json, 'autoReason', `${path}.autoReason`),
+      readDate(json, 'createdAt', `${path}.createdAt`),
+      readOptionalDate(json, 'decidedAt', `${path}.decidedAt`),
+      readDate(json, 'expiresAt', `${path}.expiresAt`),
+      readApprovalSummary(json.summary, `${path}.summary`)
+    )
+  }
+}
+
+/**
+ * `summary` 的宽松读取：`null` / 未知 `kind` 返回 `null`，**不抛**。
+ *
+ * 为什么：服务端把「payload 读不懂」定义成 `summary: null`（合法响应），
+ * 未知 `kind` 是「服务端比客户端新」的正常情况 —— 这两种都不该让整页失败：
+ * 客户端仍然能列出来、能拒绝，只是不能批准。
+ * 已知 `kind` 的字段缺失 / 类型不对**仍然**抛 malformed（契约漂移必须响）。
+ */
+export function readApprovalSummary(
+  raw: unknown,
+  path: string
+): ApprovalSummaryDto | null {
+  if (raw === undefined || raw === null) return null
+  const json = readObject(raw, path)
+  const kind = readString(json, 'kind', `${path}.kind`)
+  switch (kind) {
+    case 'redeem':
+      return {
+        kind,
+        wishId: readString(json, 'wishId', `${path}.wishId`),
+        title: readString(json, 'title', `${path}.title`),
+        cost: readInt(json, 'cost', `${path}.cost`)
+      }
+    case 'bonus':
+      return {
+        kind,
+        amount: readInt(json, 'amount', `${path}.amount`),
+        reason: readString(json, 'reason', `${path}.reason`),
+        ruleId: readOptionalString(json, 'ruleId', `${path}.ruleId`),
+        habitId: readOptionalString(json, 'habitId', `${path}.habitId`),
+        basisTitle: readOptionalString(
+          json,
+          'basisTitle',
+          `${path}.basisTitle`
+        )
+      }
+    case 'add_wish':
+      return {
+        kind,
+        title: readString(json, 'title', `${path}.title`),
+        cost: readInt(json, 'cost', `${path}.cost`),
+        emoji: readString(json, 'emoji', `${path}.emoji`)
+      }
+    default:
+      return null
+  }
+}
+
+/**
+ * `GET /approvals` 的一页。
+ *
+ * 与 [RecordsPageDto] 同一纪律：`hasMore` 与 `nextCursor` 必须自洽，
+ * 否则客户端要么提前停、要么对着 null 死循环。
+ */
+export class ApprovalsPageDto {
+  constructor(
+    readonly items: ApprovalInboxItemDto[],
+    readonly hasMore: boolean,
+    readonly nextCursor: string | null
+  ) {}
+
+  static fromJson(raw: unknown): ApprovalsPageDto {
+    const json = readObject(raw, '$')
+    const items = readList(json, 'items', 'items').map((item, index) =>
+      ApprovalInboxItemDto.fromJson(item, `items[${index}]`)
+    )
+    const hasMore = readBool(json, 'hasMore', 'hasMore')
+    const nextCursor = readOptionalString(json, 'nextCursor', 'nextCursor')
+
+    if (hasMore && (nextCursor === null || nextCursor === '')) {
+      throw ReadApiException.malformed(
+        'nextCursor',
+        'hasMore=true 但没有游标，客户端无法取下一页'
+      )
+    }
+    if (!hasMore && nextCursor !== null) {
+      throw ReadApiException.malformed('nextCursor', 'hasMore=false 却给了游标')
+    }
+
+    return new ApprovalsPageDto(items, hasMore, nextCursor)
+  }
+}
+
+/**
+ * `GET /trash` 的一行（W5-F）。
+ *
+ * 服务端只下发**事实**（`deletedAt`）；`expired` / 「还能恢复几天」由
+ * `isTrashExpired` / `trashRetentionText` 现算。线格式里再塞一个 `expiresAt`
+ * 就等于多一份 90 天常量 —— 界面与接口迟早给出两个互相矛盾的答案。
+ */
+export class TrashItemDto {
+  constructor(
+    /** 线值：`point_rule` / `wish` / `habit`（由 `mapTrash` 严格校验） */
+    readonly kind: string,
+    readonly id: string,
+    readonly title: string,
+    /** ISO-8601 解析后的 epoch 毫秒。 */
+    readonly deletedAt: number
+  ) {}
+
+  static fromJson(raw: unknown, path: string): TrashItemDto {
+    const json = readObject(raw, path)
+    return new TrashItemDto(
+      readString(json, 'kind', `${path}.kind`),
+      readString(json, 'id', `${path}.id`),
+      readString(json, 'title', `${path}.title`),
+      // 后端下发 ISO-8601 串；`readDate` 严格解析（不是「猜 now」）。
+      readDate(json, 'deletedAt', `${path}.deletedAt`)
+    )
+  }
+}
+
+/**
+ * `GET /trash` 的响应体。
+ *
+ * 不分页：回收站是低频、小集合（用户主动删的东西不会多到需要游标）。
+ */
+export class TrashListDto {
+  constructor(readonly items: TrashItemDto[]) {}
+
+  static fromJson(raw: unknown): TrashListDto {
+    const json = readObject(raw, '$')
+    return new TrashListDto(
+      readList(json, 'items', 'items').map((item, index) =>
+        TrashItemDto.fromJson(item, `items[${index}]`)
+      )
+    )
+  }
+}
+
+// ───────────────────────────── 家庭成员（W5-H） ─────────────────────────────
+
+/**
+ * `GET /members` 的一行。
+ *
+ * 线格式**只下发事实**：`role` / `status` / `isSelf`，没有
+ * `canChangeRole` / `canRemove` 之类的结论 —— 谁能对谁做什么由服务端屏障二
+ * 判定；客户端按「我是家长 ⇒ 显示入口」渲染，被拒绝时再按 403 的 `code`
+ * 解释原因（`25-w5h-handoff.md` §2.6）。
+ *
+ * `role` / `status` 故意保留**线值字符串**：枚举校验集中在
+ * `mapMember`（不认识的值显式抛错），DTO 层不替界面猜。
+ */
+export class MemberDto {
+  constructor(
+    readonly memberId: string,
+    readonly userId: string,
+    readonly displayName: string | null,
+    /** 线值：`guardian` / `child` / `viewer`（由 `mapMember` 严格转换） */
+    readonly role: string,
+    /** 线值：`active` / `removed` */
+    readonly status: string,
+    readonly joinedAt: number,
+    readonly removedAt: number | null,
+    /** 服务端算的「这一行是不是我」—— 客户端不知道自己的 userId。 */
+    readonly isSelf: boolean
+  ) {}
+
+  static fromJson(raw: unknown, path = '$'): MemberDto {
+    const json = readObject(raw, path)
+    return new MemberDto(
+      readString(json, 'memberId', `${path}.memberId`),
+      readString(json, 'userId', `${path}.userId`),
+      readOptionalString(json, 'displayName', `${path}.displayName`),
+      readString(json, 'role', `${path}.role`),
+      readString(json, 'status', `${path}.status`),
+      readDate(json, 'joinedAt', `${path}.joinedAt`),
+      readOptionalDate(json, 'removedAt', `${path}.removedAt`),
+      readBool(json, 'isSelf', `${path}.isSelf`)
+    )
+  }
+}
+
+/**
+ * `GET /members` 的响应体。
+ *
+ * 不分页、也不含 `removed`：单孩子量小，被移出的人只能在审计里看到
+ * （`25-w5h-handoff.md` §5）。
+ */
+export class MemberListDto {
+  constructor(readonly items: MemberDto[]) {}
+
+  static fromJson(raw: unknown): MemberListDto {
+    const json = readObject(raw, '$')
+    return new MemberListDto(
+      readList(json, 'items', 'items').map((item, index) =>
+        MemberDto.fromJson(item, `items[${index}]`)
+      )
+    )
+  }
+}
+
+/**
+ * `GET /invites` 的一行 / `POST /invites` 的回包（W5-I）。
+ *
+ * 与成员 DTO 同样只下发**事实**：`usedCount` / `maxUses` / `expiresAt` /
+ * `revoked`，没有 `expired` / `usable` 这类结论字段 —— 「还能不能用」由
+ * `inviteStatusOf` 在渲染时现算（弹窗开着跨过有效期时，缓存的布尔值会说谎）。
+ *
+ * `role` 故意保留**线值字符串**：枚举校验集中在 `mapInvite`
+ * （`viewer` 显式抛错），DTO 层不替界面猜。
+ */
+export class InviteDto {
+  constructor(
+    readonly id: string,
+    readonly code: string,
+    /** 线值：`child` / `guardian`（由 `mapInvite` 严格转换） */
+    readonly role: string,
+    readonly maxUses: number,
+    readonly usedCount: number,
+    readonly expiresAt: number,
+    readonly revoked: boolean,
+    readonly createdAt: number
+  ) {}
+
+  static fromJson(raw: unknown, path = '$'): InviteDto {
+    const json = readObject(raw, path)
+    return new InviteDto(
+      readString(json, 'id', `${path}.id`),
+      readString(json, 'code', `${path}.code`),
+      readString(json, 'role', `${path}.role`),
+      readInt(json, 'maxUses', `${path}.maxUses`),
+      readInt(json, 'usedCount', `${path}.usedCount`),
+      readDate(json, 'expiresAt', `${path}.expiresAt`),
+      readBool(json, 'revoked', `${path}.revoked`),
+      readDate(json, 'createdAt', `${path}.createdAt`)
+    )
+  }
+}
+
+/**
+ * `GET /invites` 的响应体（`{ items: [...] }`）。
+ *
+ * 不分页：一个孩子的邀请码是小集合，且列表里给的是**凭据**本身，
+ * 翻页只会让「我刚才那个码在哪」更难找。
+ */
+export class InviteListDto {
+  constructor(readonly items: InviteDto[]) {}
+
+  static fromJson(raw: unknown): InviteListDto {
+    const json = readObject(raw, '$')
+    return new InviteListDto(
+      readList(json, 'items', 'items').map((item, index) =>
+        InviteDto.fromJson(item, `items[${index}]`)
+      )
+    )
+  }
+}
+
 // ───────────────────────────── 严格读取助手 ─────────────────────────────
 
 export function readObject(
