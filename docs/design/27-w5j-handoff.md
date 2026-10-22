@@ -218,6 +218,9 @@ TS `approvalWithdrawConfirmText()`）：
 
 - **没有推送 / 没有角标**：申请人要打开「我的申请」才知道状态变了；家长批准后
   孩子端不会收到任何通知。
+  > ✅ **部分结清（W5-K，2026-10-23）**：`PUSH_PORT` + `NotificationsService` 已接通，
+  > `decide()` 会在账本提交后调用它；但默认适配器是 no-op（`provider_not_configured`），
+  > **真实渠道与客户端仍未接**，见 [`28-w5k-handoff.md`](./28-w5k-handoff.md) §5。
 - **没有申请详情页**：列表只显示 `summary` 摘要；`withdrawn` 之后也看不到
   「谁在什么时候批过」。审计接口未对客户端开放。
 - **没有筛选 chip**：`GET /approvals/mine` 支持 `status`，但两端 UI 固定拉全部

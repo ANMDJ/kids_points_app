@@ -54,6 +54,12 @@ import {
 } from '../src/idempotency/idempotency.repository'
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
+import {
+  PUSH_PORT,
+  type PushMessage,
+  type PushPort,
+  type PushResult
+} from '../src/notifications/push.port'
 
 /**
  * 身份（W1-C，2026-10-15）：客户端**不再自报角色**。
@@ -362,6 +368,24 @@ function makeIdempotencyFake(): IdempotencyPort & {
   }
 }
 
+/**
+ * 推送替身（W5-K）：记录每次调用，可切换成「抛错」模式。
+ * ★ 它证明的是**审批路径真的调用了端口**，而不是 service 里躺着一个没人用的方法。
+ */
+function makePushFake(): PushPort & { messages: PushMessage[]; failWith: Error | null } {
+  const messages: PushMessage[] = []
+  const fake = {
+    messages,
+    failWith: null as Error | null,
+    async send(message: PushMessage): Promise<PushResult> {
+      messages.push(message)
+      if (fake.failWith !== null) throw fake.failWith
+      return { delivered: true, providerMessageId: 'pm-1' }
+    }
+  }
+  return fake
+}
+
 interface HttpResult {
   status: number
   body: Record<string, unknown>
@@ -401,7 +425,8 @@ async function send(
  */
 async function startApp(
   repository?: ApprovalsPort,
-  idempotency?: IdempotencyPort
+  idempotency?: IdempotencyPort,
+  push?: PushPort
 ): Promise<{ app: INestApplication; url: string }> {
   const builder = Test.createTestingModule({
     // ★ 显式 `hasDatabase: false`（W2-D 起 `ApprovalsModule` 会把世界转发给两个子模块）：
@@ -420,6 +445,10 @@ async function startApp(
   }
   if (idempotency !== undefined) {
     builder.overrideProvider(IDEMPOTENCY_REPOSITORY).useValue(idempotency)
+  }
+  if (push !== undefined) {
+    // ★ W5-K：推送替身。不传时走模块默认的 NoopPushAdapter（返回 not_configured）。
+    builder.overrideProvider(PUSH_PORT).useValue(push)
   }
   const moduleRef = await builder.compile()
   const app = moduleRef.createNestApplication()
@@ -1503,3 +1532,125 @@ describe('组 F：我的申请（GET /approvals/mine，W5-J）', () => {
     assert.equal(port.calls.length, 0)
   })
 })
+
+// ── 组 G：推送预留接口（W5-K）────────────────────────────────────────────────
+// ★ 断言的是「审批路径**真的**调用了端口」与「推送故障**不改写**审批结果」。
+//   默认适配器是 no-op，所以这里注入记录型替身；真实第三方仍未接入。
+describe('组 G：推送预留（审批结论 → 推送端口，W5-K）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+  let push!: ReturnType<typeof makePushFake>
+
+  before(async () => {
+    port = makeFakePort()
+    push = makePushFake()
+    ;({ app, url } = await startApp(port, undefined, push))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+    push.messages.length = 0
+    push.failWith = null
+  })
+
+  /** 孩子提一条 pending（`redeem` 对孩子是 REQUIRE_APPROVAL）。 */
+  async function pendingAsChild(): Promise<string> {
+    const created = await send(url, '/approvals', { body: { action: 'redeem' }, headers: CHILD })
+    assert.equal(created.status, 202, '前提变了：孩子的 redeem 不再需要审批？')
+    return String(created.body.id)
+  }
+
+  it('家长批准 ⇒ 推送恰好一次；收件人是申请人，状态与操作人来自真实判定', async () => {
+    const id = await pendingAsChild()
+
+    const r = await send(url, `/approvals/${id}/decide`, {
+      body: { decision: 'approved' },
+      headers: GUARDIAN
+    })
+
+    assert.equal(r.status, 200)
+    assert.equal(push.messages.length, 1, '批准后没有推送（或推了多次）—— 预留接口没接上')
+
+    const message = push.messages[0]
+    assert.equal(message.type, 'approval.status_changed')
+    assert.equal(message.approvalId, id)
+    assert.equal(message.childId, CHILD_ID)
+    assert.equal(message.recipientUserId, 'u-kid', '收件人不是申请人 —— 孩子永远收不到结果')
+    assert.equal(message.action, 'redeem')
+    assert.equal(message.status, 'approved')
+    assert.equal(message.decidedByUserId, 'u-dad')
+    assert.equal(Number.isNaN(Date.parse(message.occurredAt)), false, 'occurredAt 不是可解析的时间')
+  })
+
+  it('家长拒绝 ⇒ 推送 status=rejected（拒绝也要让孩子知道）', async () => {
+    const id = await pendingAsChild()
+
+    const r = await send(url, `/approvals/${id}/decide`, {
+      body: { decision: 'rejected' },
+      headers: GUARDIAN
+    })
+
+    assert.equal(r.status, 200)
+    assert.equal(push.messages.length, 1)
+    assert.equal(push.messages[0].status, 'rejected')
+    assert.equal(push.messages[0].decidedByUserId, 'u-dad')
+  })
+
+  it('推送适配器抛错 ⇒ 审批仍 200 approved（推送失败绝不回滚已成立的判定）', async () => {
+    push.failWith = new Error('APNs 证书过期')
+    const id = await pendingAsChild()
+
+    const r = await send(url, `/approvals/${id}/decide`, {
+      body: { decision: 'approved' },
+      headers: GUARDIAN
+    })
+
+    assert.equal(r.status, 200, '推送故障把一次已提交的批准变成了 5xx')
+    assert.equal(r.body.status, 'approved')
+    assert.equal(push.messages.length, 1, '适配器没被调用 —— 这条用例没测到故障路径')
+    assert.equal(port.calls.filter((c) => c.method === 'decide').length, 1)
+  })
+
+  it('重复 decide（409）不重复推送：双击「同意」只应通知一次', async () => {
+    const id = await pendingAsChild()
+    const first = await send(url, `/approvals/${id}/decide`, {
+      body: { decision: 'approved' },
+      headers: GUARDIAN
+    })
+    const second = await send(url, `/approvals/${id}/decide`, {
+      body: { decision: 'approved' },
+      headers: GUARDIAN
+    })
+
+    assert.equal(first.status, 200)
+    assert.equal(second.status, 409)
+    assert.equal(second.body.code, 'ALREADY_DECIDED')
+    assert.equal(push.messages.length, 1, '第二次 decide 也推了一条 —— 孩子会被重复打扰')
+  })
+
+  it('撤回不推送：申请人自己收回，不需要通知第二个人', async () => {
+    const id = await pendingAsChild()
+
+    const r = await send(url, `/approvals/${id}/withdraw`, { headers: CHILD })
+
+    assert.equal(r.status, 200)
+    assert.equal(r.body.status, 'withdrawn')
+    assert.equal(push.messages.length, 0, '撤回也推送了 —— 与 W5-J 的边界（撤回零副作用）不一致')
+  })
+
+  it('创建时显式自批（201）不推送：收件人就是批准人自己', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem', autoApprove: true },
+      headers: GUARDIAN
+    })
+
+    assert.equal(r.status, 201)
+    assert.equal(r.body.status, 'approved')
+    assert.equal(push.messages.length, 0, '自批给自己也推送 —— 纯噪音，且会掩盖「他人批准」这条主路径')
+  })
+})
+

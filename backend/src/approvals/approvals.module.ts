@@ -4,6 +4,7 @@ import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { IdempotencyModule } from '../idempotency/idempotency.module'
 import { MembershipModule } from '../membership/membership.module'
+import { NotificationsModule } from '../notifications/notifications.module'
 import { PermissionsModule } from '../permissions/permissions.module'
 import { hasDatabaseUrl } from '../prisma/database-enabled'
 import { PrismaModule } from '../prisma/prisma.module'
@@ -131,7 +132,10 @@ export class ApprovalsModule {
         PermissionsModule,
         // ★ W3-C：`Idempotency-Key` 的持久化端口也必须按同一个世界选实现
         //   （无库 ⇒ 501，带 key 的请求不会假装重放保护已生效）。
-        IdempotencyModule.register({ hasDatabase })
+        IdempotencyModule.register({ hasDatabase }),
+        // ★ W5-K：推送预留端口（默认 no-op）。它**不依赖库**，故静态导入即可；
+        //   与「在哪个世界」无关 —— 无论有没有库，都不能因为推送失败影响审批。
+        NotificationsModule
       ],
       controllers: [ApprovalsController],
       providers: [

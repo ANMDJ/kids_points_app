@@ -17,6 +17,7 @@ import {
   withdrawDenial
 } from '../contracts/approval-policy'
 import { resolveVerdict } from '../contracts/permission-matrix'
+import { NotificationsService } from '../notifications/notifications.service'
 import type { Actor } from '../permissions/actor'
 import { decodeApprovalCursor } from './approval.cursor'
 import { toInboxPage, type ApprovalInboxPageDto } from './approval-inbox.mapper'
@@ -71,7 +72,12 @@ export class ApprovalsService {
   // 显式 `@Inject`：**不依赖 `emitDecoratorMetadata`**。
   // 这既让 tsx / esbuild 这类不产出 metadata 的加载器不至于静默注入失败，
   // 也让令牌改名时编译期就能发现（字符串令牌写错是运行时才炸）。
-  constructor(@Inject(APPROVALS_REPOSITORY) private readonly port: ApprovalsPort) {}
+  constructor(
+    @Inject(APPROVALS_REPOSITORY) private readonly port: ApprovalsPort,
+    // ★ W5-K：推送入口。业务只认识 `NotificationsService`（它保证永不抛错），
+    //   不认识具体渠道 —— 换第三方适配器时本文件不需要改动。
+    @Inject(NotificationsService) private readonly notifications: NotificationsService
+  ) {}
 
   /**
    * `GET /approvals` —— 家长收件箱（W5-D）。
@@ -276,6 +282,23 @@ export class ApprovalsService {
     })
     this.assertTerminalWithoutExecution(decided)
     const selfApproved = isSelfApproved(decided)
+
+    // ★ W5-K：推送发生在 `port.decide()` **返回之后** —— 那时账本事务已提交。
+    //   绝不放进端口事务（`01` §4）：一次推送失败不能回滚已成立的批准。
+    //   `notifyApprovalStatusChanged()` 保证不抛错，因此这里的 200 不会被推送改写；
+    //   当前默认适配器是 no-op（`provider_not_configured`），属于「路径已通、渠道未接」。
+    //   ★ 创建时的显式自批（`createSelfApproved`）**不推**：收件人就是批准人自己。
+    await this.notifications.notifyApprovalStatusChanged({
+      type: 'approval.status_changed',
+      approvalId: decided.id,
+      childId: decided.childId,
+      recipientUserId: decided.requesterUserId,
+      action: decided.action,
+      status: dto.decision,
+      decidedByUserId: decided.decidedByUserId,
+      occurredAt: new Date().toISOString()
+    })
+
     return {
       statusCode: HttpStatus.OK,
       body: {
