@@ -11,7 +11,14 @@ import '../../widgets/sheet_frame.dart';
 import 'my_applications_sheet.dart';
 
 /// 打开「消息」面板（W5-L）—— 入口固定在「我的」页，与 Taro 侧同一处。
-Future<void> showNotificationSheet(BuildContext context) async {
+///
+/// [onOpenApprovals]：家长收到「新申请待确认」（W5-M）时，点「去审批」要把
+/// 底部 tab 切到「审批」页 —— 由 `HomeShell` 提供（它才持有 tab 下标）。
+/// 没提供时只关面板：宁可少一次跳转，也不要把家长送进「我的申请」。
+Future<void> showNotificationSheet(
+  BuildContext context, {
+  VoidCallback? onOpenApprovals,
+}) async {
   final AppStore store = AppScope.of(context);
   final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
   await showModalBottomSheet<void>(
@@ -19,7 +26,11 @@ Future<void> showNotificationSheet(BuildContext context) async {
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (BuildContext sheetContext) {
-      return NotificationSheet(store: store, messenger: messenger);
+      return NotificationSheet(
+        store: store,
+        messenger: messenger,
+        onOpenApprovals: onOpenApprovals,
+      );
     },
   );
 }
@@ -39,17 +50,24 @@ Future<void> showNotificationSheet(BuildContext context) async {
 /// ── 点开 = 标记已读，但不强制跳转 ─────────────────────────────────────────
 ///   点一条就打一次 `PATCH /notifications/:id/read`（失败经 SnackBar 原样上报，
 ///   界面不回滚成未读 —— 服务端回包才是权威值）。
-///   审批类消息多一个「查看申请」胶囊，跳到「我的申请」面板看结果；
+///   审批类消息多一个胶囊，但去向按 `type` 分（W5-M）：
+///     · `approval.approved` / `approval.rejected` ⇒「查看申请」→「我的申请」看结果；
+///     · `approval.submitted`（家长收到「有人提交了申请」）⇒「去审批」→ 关面板并切到
+///       「审批」页。把后者也送进「我的申请」等于让家长去翻自己**没提交过**的列表。
 ///   普通消息（没有 `approvalId`）只是读掉，不做无意义的跳转。
 class NotificationSheet extends StatefulWidget {
   const NotificationSheet({
     super.key,
     required this.store,
     required this.messenger,
+    this.onOpenApprovals,
   });
 
   final AppStore store;
   final ScaffoldMessengerState messenger;
+
+  /// 切到「审批」页（由 `HomeShell` 提供）；为空时「去审批」只关面板。
+  final VoidCallback? onOpenApprovals;
 
   @override
   State<NotificationSheet> createState() => _NotificationSheetState();
@@ -81,7 +99,7 @@ class _NotificationSheetState extends State<NotificationSheet> {
 
     return SheetFrame(
       title: unread > 0 ? '消息（$unread 条未读）' : '消息',
-      subtitle: '审批结果会在这里留一条；点一下即标记已读',
+      subtitle: '审批申请与结果会在这里留一条；点一下即标记已读',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -177,13 +195,28 @@ class _NotificationSheetState extends State<NotificationSheet> {
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: <Widget>[
                       SmallPill(
-                        label: busy ? '处理中…' : '查看申请',
+                        label: busy
+                            ? '处理中…'
+                            : item.isApprovalSubmitted
+                                ? '去审批'
+                                : '查看申请',
                         onTap: busy
                             ? null
                             : () async {
                                 await _markRead(item);
                                 if (!mounted) return;
-                                await showMyApplicationsSheet(context);
+                                if (!item.isApprovalSubmitted) {
+                                  await showMyApplicationsSheet(context);
+                                  return;
+                                }
+                                // 先关面板再切 tab：切完 tab 这块 context 已不在树上，
+                                // 再 pop 会对着一个已销毁的 Navigator 动手。
+                                final NavigatorState navigator =
+                                    Navigator.of(context);
+                                final VoidCallback? openApprovals =
+                                    widget.onOpenApprovals;
+                                navigator.pop();
+                                openApprovals?.call();
                               },
                       ),
                     ],

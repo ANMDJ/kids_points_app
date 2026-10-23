@@ -51,11 +51,12 @@ class _HomeShellState extends State<HomeShell> {
           Expanded(
             child: IndexedStack(
               index: _index,
-              children: const <Widget>[
-                HomeScreen(),
-                WishlistScreen(),
-                ApprovalsScreen(),
-                ProfileScreen(),
+              children: <Widget>[
+                const HomeScreen(),
+                const WishlistScreen(),
+                const ApprovalsScreen(),
+                // W5-M：通知里的「去审批」要把 tab 切到审批页 —— 下标只有这里知道。
+                ProfileScreen(onOpenApprovals: () => _select(2)),
               ],
             ),
           ),

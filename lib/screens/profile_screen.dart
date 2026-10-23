@@ -16,7 +16,11 @@ import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key});
+  const ProfileScreen({super.key, this.onOpenApprovals});
+
+  /// 切到「审批」tab：`HomeShell` 持有下标，只有在「我的」页能打开通知面板，
+  /// 「去审批」才需要一个把 tab 切过去的动作（W5-M）。
+  final VoidCallback? onOpenApprovals;
 
   @override
   Widget build(BuildContext context) {
@@ -175,11 +179,15 @@ class ProfileScreen extends StatelessWidget {
                   _MenuRow(
                     icon: Icons.notifications_none_rounded,
                     // W5-L：站内通知中心。审批出结果时服务端会给申请人写一条，
-                    // 未读数由 `unreadNotificationCount` 下发的整份计数决定。
+                    // W5-M 起有人提交申请时也会给家长写一条；未读数由
+                    // `unreadNotificationCount` 下发的整份计数决定。
                     color: AppColors.starYellow,
                     label: '消息',
                     badgeCount: unreadNotifications,
-                    onTap: () => showNotificationSheet(context),
+                    onTap: () => showNotificationSheet(
+                      context,
+                      onOpenApprovals: onOpenApprovals,
+                    ),
                   ),
                   const Divider(
                     height: 1,

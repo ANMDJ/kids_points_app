@@ -118,6 +118,27 @@ async function request(
   return { status: res.status, body }
 }
 
+/** 带 JSON body 的 POST（W5-M：真 HTTP 提交审批，看家长是否真的收到）。 */
+async function postJson(
+  path: string,
+  headers: Record<string, string>,
+  body: unknown
+): Promise<HttpResult> {
+  const res = await fetch(`${url}${path}`, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  const text = await res.text()
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>
+  } catch {
+    parsed = { raw: text }
+  }
+  return { status: res.status, body: parsed }
+}
+
 const get = (path: string, headers: Record<string, string>): Promise<HttpResult> =>
   request('GET', path, headers)
 const patch = (path: string, headers: Record<string, string>): Promise<HttpResult> =>
@@ -590,6 +611,101 @@ describe('组 D：append —— 站内通知真写进 `Notification` 表', () =>
     })
     assert.ok(row !== null, 'append 没有真的写进库')
     assert.equal(row.payload, null)
+  })
+})
+
+// ══ 组 E：W5-M 提交即通知家长（真库 × 真 HTTP）════════════════════════════════
+// ★ 本组要证明的是一条**跨模块**事实：审批 service 落库之后，通知层按**成员位**
+//   解析出家长，并真的往 `Notification` 表写了每人一条。单元测试能证明
+//   「给了家长列表就会写」，只有真库能证明「家长列表是从 ChildMember 查出来的」。
+describe('组 E：新申请待确认 —— 真的发给这个孩子的家长（W5-M）', () => {
+  /** 当前未读数：用列表端点现读，避免把前面组的计数硬编码进来。 */
+  async function unreadOf(headers: Record<string, string>): Promise<number> {
+    const res = await get('/notifications?limit=1', headers)
+    assert.equal(res.status, 200, `读未读数失败：${JSON.stringify(res.body)}`)
+    return Number(res.body.unreadCount)
+  }
+
+  it('端口口径：只回 active guardian（不含 child，也不含别的孩子）', async () => {
+    const port = app.get<NotificationsPort>(NOTIFICATIONS_REPOSITORY)
+
+    const main = await port.listActiveGuardianUserIds(ID.main)
+    assert.deepEqual([...main].sort(), [ID.dad, ID.mom], '家长集合不对 —— 孩子 / 路人被算进来了？')
+
+    const other = await port.listActiveGuardianUserIds(ID.other)
+    assert.deepEqual(other, [ID.dad], '跨孩子串了家长（爸爸在两个孩子都是 guardian）')
+  })
+
+  it('孩子提交 ⇒ 爸爸 / 妈妈各一条 approval.submitted，孩子自己一条都没有', async () => {
+    const beforeDad = await unreadOf(H.dad)
+    const beforeMom = await unreadOf(H.mom)
+    const beforeKid = await unreadOf(H.kid)
+
+    const created = await postJson('/approvals', H.kid, {
+      action: 'request_points_bonus',
+      amount: 10,
+      reason: '帮忙洗碗'
+    })
+    assert.equal(created.status, 202, `孩子提交没成功：${JSON.stringify(created.body)}`)
+    const approvalId = String(created.body.id)
+    assert.ok(approvalId.length > 0)
+
+    const rows = await prisma.notification.findMany({
+      where: { childId: ID.main, type: 'approval.submitted' },
+      orderBy: { recipientUserId: 'asc' }
+    })
+    assert.deepEqual(
+      rows.map((row) => row.recipientUserId),
+      [ID.dad, ID.mom],
+      '不是每位家长各一条 —— 少写等于有人永远看不到新申请'
+    )
+    for (const row of rows) {
+      assert.equal(row.readAt, null, '新通知不该是已读')
+      assert.equal(row.childId, ID.main)
+      assert.deepEqual(row.payload, {
+        approvalId,
+        action: 'request_points_bonus',
+        submittedByUserId: ID.kid
+      }, 'payload 多了金额 / 理由，或 approvalId 对不上')
+      assert.match(row.body, /收件箱/)
+    }
+    assert.equal(
+      rows.filter((row) => row.recipientUserId === ID.kid).length,
+      0,
+      '申请人收到了「待你确认」—— 纯噪音'
+    )
+
+    assert.equal(await unreadOf(H.dad), beforeDad + 1, '爸爸的红点没 +1')
+    assert.equal(await unreadOf(H.mom), beforeMom + 1, '妈妈的红点没 +1')
+    assert.equal(await unreadOf(H.kid), beforeKid, '孩子的未读数变了 —— 申请人也被通知了')
+  })
+
+  it('家长自己提交 ⇒ 只发给另一位家长，提交人的红点不动', async () => {
+    const beforeDad = await unreadOf(H.dad)
+    const beforeMom = await unreadOf(H.mom)
+
+    const created = await postJson('/approvals', H.dad, {
+      action: 'request_points_bonus',
+      amount: 5,
+      reason: '周末整理书架'
+    })
+    assert.equal(created.status, 202, `家长提交没成功：${JSON.stringify(created.body)}`)
+    const approvalId = String(created.body.id)
+
+    const all = await prisma.notification.findMany({
+      where: { childId: ID.main, type: 'approval.submitted' },
+      orderBy: { recipientUserId: 'asc' }
+    })
+    const rows = all.filter(
+      (row) => (row.payload as { approvalId?: unknown } | null)?.approvalId === approvalId
+    )
+    assert.deepEqual(
+      rows.map((row) => row.recipientUserId),
+      [ID.mom],
+      '要么发给了提交人自己，要么漏掉了另一位家长'
+    )
+    assert.equal(await unreadOf(H.dad), beforeDad, '提交人的红点 +1 了 —— 自己提醒自己')
+    assert.equal(await unreadOf(H.mom), beforeMom + 1, '另一位家长没有收到待确认')
   })
 })
 

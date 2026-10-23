@@ -213,6 +213,30 @@ export class ApprovalsService {
       case 'PENDING': {
         const row = await this.port.createPending(input)
         this.assertTerminalWithoutExecution(row)
+        /**
+         * ★ W5-M（2026-10-23）：**落库之后**才通知家长「有新申请待确认」。
+         *
+         * ── 位置就是保证 ──────────────────────────────────────────────────────
+         *   与 W5-K 的 `decide()` 同一条纪律（`01` §4 / `02` §9.23）：端口内部
+         *   是一个事务，走到这里审批行已经提交。通知层承诺**永不抛错**
+         *   （成员位读不到 / 站内写失败 / 推送失败都只记日志），所以 202 不会
+         *   因为「没人收到提醒」变成 5xx —— 申请本身是成立的。
+         *
+         * ── 为什么不自己查家长 ────────────────────────────────────────────────
+         *   收件人解析属于通知层（`listActiveGuardianUserIds`）；审批 service
+         *   只说「谁提交了什么」。这样 `ApprovalsModule` 不必知道成员位，
+         *   也不会在审批事务里多一次查询。
+         *
+         * ── 自批（`SELF_APPROVED`）不通知 ─────────────────────────────────────
+         *   那个分支没有第二个人需要确认，与 W5-K「自批不推」一致。
+         */
+        await this.notifications.notifyApprovalSubmitted({
+          approvalId: row.id,
+          childId: row.childId,
+          requesterUserId: row.requesterUserId,
+          action: row.action,
+          occurredAt: new Date().toISOString()
+        })
         return { statusCode: HttpStatus.ACCEPTED, body: toBody(row) }
       }
 

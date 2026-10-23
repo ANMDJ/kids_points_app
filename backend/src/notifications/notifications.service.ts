@@ -17,6 +17,7 @@ import {
   type NotificationsPort
 } from './notifications.repository'
 import type {
+  AppendNotificationInput,
   MarkNotificationReadResponse,
   NotificationDto,
   NotificationsListResponse
@@ -24,6 +25,9 @@ import type {
 import {
   PUSH_PORT,
   type ApprovalStatusChangedPush,
+  type ApprovalSubmittedEvent,
+  type ApprovalSubmittedPush,
+  type PushMessage,
   type PushPort,
   type PushResult
 } from './push.port'
@@ -72,8 +76,94 @@ export class NotificationsService {
    */
   async notifyApprovalStatusChanged(message: ApprovalStatusChangedPush): Promise<PushResult> {
     // ① 站内先写（失败只记日志，永不影响 ② / 调用点）。
-    await this.appendInApp(message)
+    await this.appendInApp({
+      childId: message.childId,
+      recipientUserId: message.recipientUserId,
+      ...approvalNotificationContent(message),
+      payload: {
+        approvalId: message.approvalId,
+        status: message.status,
+        action: message.action,
+        decidedByUserId: message.decidedByUserId
+      }
+    })
     // ② 第三方推送：与 W5-K 完全一致（含 1s 超时兜底）。
+    return this.pushSafely(message)
+  }
+
+  /**
+   * 「有新申请待确认」→ 通知这个孩子的**家长**（W5-M）。
+   *
+   * ── 收件人怎么来 ──────────────────────────────────────────────────────────
+   *   ① 只问端口要 `role = 'guardian' && status = 'active'` 的 userId；
+   *   ② **排除提交人**：孩子提交 ⇒ 家长全收；家长自己提交（需另一位确认）⇒
+   *      只发给其余家长。自己不需要被提醒自己刚提过的申请。
+   *
+   * ── 为什么这里不返回单个 `PushResult` ──────────────────────────────────────
+   *   收件人是一个**集合**，每人一条推送。返回数组让调用方（以及用例）能说清
+   *   「给几个人发了、各是什么结果」，而不是把 N 次结果压成一个布尔。
+   *   业务调用点仍然忽略返回值 —— 通知**永不**改写审批结果。
+   *
+   * ── 失败边界（与 `notifyApprovalStatusChanged` 相同）──────────────────────
+   *   成员位读不到（无库 501 / 连接池耗尽）⇒ 记 warn、返回空数组，**不抛错**。
+   *   站内写入与推送各自兜底；某一位家长失败不影响其他家长。
+   *   所以 `POST /approvals` 的 202 不因通知故障变成 5xx。
+   */
+  async notifyApprovalSubmitted(event: ApprovalSubmittedEvent): Promise<PushResult[]> {
+    let guardians: string[]
+    try {
+      guardians = await this.repository.listActiveGuardianUserIds(event.childId)
+    } catch (error) {
+      // 无库装配（501）也走这里：申请已经落库，只是没人收到提醒。
+      const detail = error instanceof Error ? error.message : String(error)
+      this.log.warn(
+        `家长列表读取失败但已忽略（approval=${event.approvalId}）：${detail}`
+      )
+      return []
+    }
+
+    // 去重 + 排除提交人 + 丢掉空 id（坏数据不该变成一条发给 `''` 的通知）。
+    const recipients = Array.from(new Set(guardians)).filter(
+      (userId) => userId !== event.requesterUserId && userId.trim() !== ''
+    )
+    if (recipients.length === 0) {
+      this.log.debug(
+        `没有其他家长可通知（approval=${event.approvalId}，requester=${event.requesterUserId}）`
+      )
+      return []
+    }
+
+    const content = approvalSubmittedContent(event.action)
+    return Promise.all(
+      recipients.map(async (recipientUserId): Promise<PushResult> => {
+        const message: ApprovalSubmittedPush = {
+          type: 'approval.submitted',
+          approvalId: event.approvalId,
+          childId: event.childId,
+          recipientUserId,
+          action: event.action,
+          submittedByUserId: event.requesterUserId,
+          occurredAt: event.occurredAt
+        }
+        // ① 站内（每人一条，收件人各不相同）。
+        await this.appendInApp({
+          childId: message.childId,
+          recipientUserId: message.recipientUserId,
+          ...content,
+          payload: {
+            approvalId: message.approvalId,
+            action: message.action,
+            submittedByUserId: message.submittedByUserId
+          }
+        })
+        // ② 推送：同一套超时 / 兜底。
+        return this.pushSafely(message)
+      })
+    )
+  }
+
+  /** 推送 + 日志 + 兜底；**永不抛错**。两人共用（结论 / 待确认）。 */
+  private async pushSafely(message: PushMessage): Promise<PushResult> {
     try {
       const result = await this.sendWithTimeout(message)
       if (result.delivered) {
@@ -95,7 +185,7 @@ export class NotificationsService {
   }
 
   /** 超时与真实调用赛跑；无论谁赢都清掉计时器（否则测试进程会多等 1s）。 */
-  private async sendWithTimeout(message: ApprovalStatusChangedPush): Promise<PushResult> {
+  private async sendWithTimeout(message: PushMessage): Promise<PushResult> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
@@ -202,28 +292,20 @@ export class NotificationsService {
    * ★ 为什么 `catch` 在这里而不是调用方：`notifyApprovalStatusChanged` 有一条
    *   「无论如何都要尝试推送」的义务 —— 站内失败不该把推送也一起跳过。
    *   反过来，推送失败也不会影响这条已经写好的站内通知。
+   *   两端「待确认」通知共用本方法：文案 / payload 由调用方组好，这里只负责写 + 兜底。
    */
-  private async appendInApp(message: ApprovalStatusChangedPush): Promise<void> {
-    const content = approvalNotificationContent(message)
+  private async appendInApp(input: AppendNotificationInput): Promise<void> {
     try {
-      await this.repository.append({
-        childId: message.childId,
-        recipientUserId: message.recipientUserId,
-        type: content.type,
-        title: content.title,
-        body: content.body,
-        payload: {
-          approvalId: message.approvalId,
-          status: message.status,
-          action: message.action,
-          decidedByUserId: message.decidedByUserId
-        }
-      })
-      this.log.debug(`站内通知已写入 approval=${message.approvalId}`)
+      await this.repository.append(input)
+      this.log.debug(
+        `站内通知已写入 approval=${String(input.payload?.approvalId ?? '')} recipient=${input.recipientUserId}`
+      )
     } catch (error) {
-      // 无库装配（501）也走这里：通知写不进去，但审批结论已经落库。
+      // 无库装配（501）也走这里：通知写不进去，但审批已经落库。
       const detail = error instanceof Error ? error.message : String(error)
-      this.log.warn(`站内通知写入失败但已忽略（approval=${message.approvalId}）：${detail}`)
+      this.log.warn(
+        `站内通知写入失败但已忽略（approval=${String(input.payload?.approvalId ?? '')}）：${detail}`
+      )
     }
   }
 
@@ -280,6 +362,26 @@ function approvalNotificationContent(message: ApprovalStatusChangedPush): {
     type: 'approval.rejected',
     title: `${label}未通过`,
     body: `家长没有同意这次${label}，积分没有变动。`
+  }
+}
+
+/**
+ * 「新申请待确认」的文案（W5-M）—— **发给家长**，与结论通知同一套纪律：
+ * 只放事实（申请类型 + 待确认），不放金额 / 心愿标题。
+ *
+ * ★ 文案不写「孩子提交了」：家长自己提交（需另一位家长确认）时同样走这条路径，
+ *   写死「孩子」会让另一位家长收到一句错话。收件人知道家里是谁在提。
+ */
+function approvalSubmittedContent(action: ActionType): {
+  type: string
+  title: string
+  body: string
+} {
+  const label = approvalLabel(action)
+  return {
+    type: 'approval.submitted',
+    title: `新的${label}待确认`,
+    body: `家里有新提交的${label}，打开收件箱即可同意或拒绝。`
   }
 }
 

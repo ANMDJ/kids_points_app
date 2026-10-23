@@ -55,7 +55,19 @@ import {
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 import {
+  NOTIFICATIONS_REPOSITORY,
+  type NotificationsPort
+} from '../src/notifications/notifications.repository'
+import type {
+  AppendNotificationInput,
+  ListNotificationsInput,
+  MarkNotificationReadResult,
+  NotificationPageRow
+} from '../src/notifications/notifications.types'
+import {
   PUSH_PORT,
+  isApprovalStatusChangedPush,
+  isApprovalSubmittedPush,
   type PushMessage,
   type PushPort,
   type PushResult
@@ -391,6 +403,48 @@ interface HttpResult {
   body: Record<string, unknown>
 }
 
+/**
+ * 站内通知替身（W5-M）：记录 `append` 的入参，并可切换「读成员位失败 / 写失败」。
+ * ★ 它证明的是「提交路径真的**解析家长**并写站内」，而不是服务里躺着一个没人调的方法。
+ */
+interface NotificationsFake extends NotificationsPort {
+  appended: AppendNotificationInput[]
+  guardianInputs: string[]
+  guardians: string[]
+  guardianError: Error | null
+  appendError: Error | null
+}
+
+function makeNotificationsFake(): NotificationsFake {
+  const fake: NotificationsFake = {
+    appended: [],
+    guardianInputs: [],
+    guardians: ['u-dad', 'u-mom'],
+    guardianError: null,
+    appendError: null,
+    async listForRecipient(_input: ListNotificationsInput): Promise<NotificationPageRow | null> {
+      return { rows: [], hasMore: false, unreadCount: 0 }
+    },
+    async markRead(_input: {
+      childId: string
+      recipientUserId: string
+      notificationId: string
+    }): Promise<MarkNotificationReadResult> {
+      return { kind: 'not_found' }
+    },
+    async append(input: AppendNotificationInput): Promise<void> {
+      if (fake.appendError !== null) throw fake.appendError
+      fake.appended.push(input)
+    },
+    async listActiveGuardianUserIds(childId: string): Promise<string[]> {
+      fake.guardianInputs.push(childId)
+      if (fake.guardianError !== null) throw fake.guardianError
+      return fake.guardians
+    }
+  }
+  return fake
+}
+
 /** 发一条真 HTTP 请求；响应体尽力按 JSON 解析（非 JSON 时回退成 `{ raw: text }`）。 */
 async function send(
   baseUrl: string,
@@ -426,7 +480,8 @@ async function send(
 async function startApp(
   repository?: ApprovalsPort,
   idempotency?: IdempotencyPort,
-  push?: PushPort
+  push?: PushPort,
+  notifications?: NotificationsPort
 ): Promise<{ app: INestApplication; url: string }> {
   const builder = Test.createTestingModule({
     // ★ 显式 `hasDatabase: false`（W2-D 起 `ApprovalsModule` 会把世界转发给两个子模块）：
@@ -449,6 +504,10 @@ async function startApp(
   if (push !== undefined) {
     // ★ W5-K：推送替身。不传时走模块默认的 NoopPushAdapter（返回 not_configured）。
     builder.overrideProvider(PUSH_PORT).useValue(push)
+  }
+  if (notifications !== undefined) {
+    // ★ W5-M：站内通知替身。不传时走无库的 501 实现（提交仍 202，只是没人收到提醒）。
+    builder.overrideProvider(NOTIFICATIONS_REPOSITORY).useValue(notifications)
   }
   const moduleRef = await builder.compile()
   const app = moduleRef.createNestApplication()
@@ -1536,6 +1595,10 @@ describe('组 F：我的申请（GET /approvals/mine，W5-J）', () => {
 // ── 组 G：推送预留接口（W5-K）────────────────────────────────────────────────
 // ★ 断言的是「审批路径**真的**调用了端口」与「推送故障**不改写**审批结果」。
 //   默认适配器是 no-op，所以这里注入记录型替身；真实第三方仍未接入。
+// ★ W5-M 起 `pendingAsChild()` 也会触发「待确认」通知，但本组显式
+//   `hasDatabase: false`（通知端口 = 501，被服务吞掉），所以不会往 `push.messages`
+//   里加东西。若把模块默认改成「有库」，下面这些「恰好一次 / 零次」会先红 ——
+//   那正是提醒你：提交路径的推送要单独断言（组 H），不能混进结论计数。
 describe('组 G：推送预留（审批结论 → 推送端口，W5-K）', () => {
   let app!: INestApplication
   let url = ''
@@ -1576,7 +1639,10 @@ describe('组 G：推送预留（审批结论 → 推送端口，W5-K）', () =>
     assert.equal(push.messages.length, 1, '批准后没有推送（或推了多次）—— 预留接口没接上')
 
     const message = push.messages[0]
-    assert.equal(message.type, 'approval.status_changed')
+    assert.ok(
+      isApprovalStatusChangedPush(message),
+      `推送类型不是 approval.status_changed：${String(message.type)}`
+    )
     assert.equal(message.approvalId, id)
     assert.equal(message.childId, CHILD_ID)
     assert.equal(message.recipientUserId, 'u-kid', '收件人不是申请人 —— 孩子永远收不到结果')
@@ -1596,8 +1662,13 @@ describe('组 G：推送预留（审批结论 → 推送端口，W5-K）', () =>
 
     assert.equal(r.status, 200)
     assert.equal(push.messages.length, 1)
-    assert.equal(push.messages[0].status, 'rejected')
-    assert.equal(push.messages[0].decidedByUserId, 'u-dad')
+    const rejected = push.messages[0]
+    assert.ok(
+      isApprovalStatusChangedPush(rejected),
+      `推送类型不是 approval.status_changed：${String(rejected.type)}`
+    )
+    assert.equal(rejected.status, 'rejected')
+    assert.equal(rejected.decidedByUserId, 'u-dad')
   })
 
   it('推送适配器抛错 ⇒ 审批仍 200 approved（推送失败绝不回滚已成立的判定）', async () => {
@@ -1651,6 +1722,109 @@ describe('组 G：推送预留（审批结论 → 推送端口，W5-K）', () =>
     assert.equal(r.status, 201)
     assert.equal(r.body.status, 'approved')
     assert.equal(push.messages.length, 0, '自批给自己也推送 —— 纯噪音，且会掩盖「他人批准」这条主路径')
+  })
+})
+
+// ── 组 H：提交即通知家长（W5-M）──────────────────────────────────────────────
+// ★ 与组 G 分开：这里断言的是**提交路径**，把通知端口换成记录型替身。
+//   守三件事：① 家长集合正确、② 提交人不在收件人里、③ 通知故障不改写 202。
+describe('组 H：新申请待确认（提交 → 家长站内 + 推送，W5-M）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+  let push!: ReturnType<typeof makePushFake>
+  let notifications!: ReturnType<typeof makeNotificationsFake>
+
+  before(async () => {
+    port = makeFakePort()
+    push = makePushFake()
+    notifications = makeNotificationsFake()
+    ;({ app, url } = await startApp(port, undefined, push, notifications))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+    push.messages.length = 0
+    push.failWith = null
+    notifications.appended.length = 0
+    notifications.guardianInputs.length = 0
+    notifications.guardians = ['u-dad', 'u-mom']
+    notifications.guardianError = null
+    notifications.appendError = null
+  })
+
+  it('孩子提交 ⇒ 202；每位家长一条 approval.submitted，收件人里没有申请人', async () => {
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem' },
+      headers: CHILD
+    })
+
+    assert.equal(r.status, 202)
+    assert.deepEqual(notifications.guardianInputs, [CHILD_ID], '没有按孩子的成员位解析家长')
+    assert.equal(notifications.appended.length, 2, '家长各一条站内通知 —— 少写等于有人永远看不到')
+    assert.deepEqual(
+      notifications.appended.map((row) => row.recipientUserId).sort(),
+      ['u-dad', 'u-mom'],
+      '收件人不是这个孩子的家长（或把申请人也拉进来了）'
+    )
+    const row = notifications.appended[0]
+    assert.equal(row.type, 'approval.submitted')
+    assert.equal(row.childId, CHILD_ID)
+    assert.equal(
+      (row.payload as { approvalId?: unknown }).approvalId,
+      r.body.id,
+      'payload 里的 approvalId 与实际审批行不一致 —— 点开通知会找不到那条申请'
+    )
+    assert.equal((row.payload as { amount?: unknown }).amount, undefined, '金额进了通知（第三方通道会保留内容）')
+
+    assert.equal(push.messages.length, 2)
+    assert.ok(push.messages.every(isApprovalSubmittedPush), '提交路径的推送类型不是 approval.submitted')
+  })
+
+  it('家长自己提交（另一位确认）⇒ 只发给其余家长，不回发给本人', async () => {
+    // `redeem` 对 guardian 是 REQUIRE_APPROVAL（矩阵判据，不写名单）：家长提交也要另一位确认。
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem' },
+      headers: GUARDIAN
+    })
+
+    assert.equal(r.status, 202, '前提变了：guardian 的 redeem 不再需要审批？')
+    assert.deepEqual(
+      notifications.appended.map((row) => row.recipientUserId),
+      ['u-mom'],
+      '提交人收到了「待你确认」—— 纯噪音'
+    )
+    assert.equal(push.messages.length, 1)
+  })
+
+  it('读成员位失败 ⇒ 仍然 202（申请已落库，不能因为没人可通知就回滚）', async () => {
+    notifications.guardianError = new Error('连接池耗尽')
+
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem' },
+      headers: CHILD
+    })
+
+    assert.equal(r.status, 202)
+    assert.equal(r.body.status, 'pending')
+    assert.equal(notifications.appended.length, 0)
+    assert.equal(push.messages.length, 0)
+  })
+
+  it('站内写入失败 ⇒ 仍然 202，且推送照发（两条通道互不牵连）', async () => {
+    notifications.appendError = new Error('连接池耗尽')
+
+    const r = await send(url, '/approvals', {
+      body: { action: 'redeem' },
+      headers: CHILD
+    })
+
+    assert.equal(r.status, 202)
+    assert.equal(notifications.appended.length, 0)
+    assert.equal(push.messages.length, 2, '站内失败把推送也跳过了')
   })
 })
 

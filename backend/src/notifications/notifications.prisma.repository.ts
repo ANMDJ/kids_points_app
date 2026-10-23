@@ -161,4 +161,22 @@ export class PrismaNotificationsRepository implements NotificationsPort {
       }
     })
   }
+
+  /**
+   * 这个孩子的 active 家长（W5-M）—— **只**读成员位，不碰审批 / 账本。
+   *
+   * 两个条件都进 `where`（不在内存里筛）：
+   *   · `role = 'guardian'`：child / viewer 不该收到「待确认」；
+   *   · `status = 'active'`：被移出的家长不能再收到家里的新申请（他打开 App
+   *     也只会得到 `MEMBER_REMOVED`）。
+   * 排序只为让推送顺序确定（同一家庭通常 1–2 位，成本可忽略）。
+   */
+  async listActiveGuardianUserIds(childId: string): Promise<string[]> {
+    const rows = await this.prisma.childMember.findMany({
+      where: { childId, role: 'guardian', status: 'active' },
+      orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+      select: { userId: true }
+    })
+    return rows.map((row) => row.userId)
+  }
 }

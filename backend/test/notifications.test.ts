@@ -33,14 +33,16 @@ import type {
 } from '../src/notifications/notifications.types'
 import {
   PUSH_PORT,
+  isApprovalSubmittedPush,
   type ApprovalStatusChangedPush,
+  type ApprovalSubmittedEvent,
   type PushMessage,
   type PushPort,
   type PushResult
 } from '../src/notifications/push.port'
 
 /** 一条形状完整的消息；用例只按需覆盖字段。 */
-function makeMessage(overrides: Partial<ApprovalStatusChangedPush> = {}): PushMessage {
+function makeMessage(overrides: Partial<ApprovalStatusChangedPush> = {}): ApprovalStatusChangedPush {
   return {
     type: 'approval.status_changed',
     approvalId: 'ap-1',
@@ -75,6 +77,10 @@ interface RepositoryBehaviour {
   appendError?: Error
   page?: NotificationPageRow | null
   markReadResult?: MarkNotificationReadResult
+  /** 这个孩子的 active 家长（W5-M）；默认空数组 = 家里没有可通知的人。 */
+  guardians?: string[]
+  /** 读成员位失败（无库 501 / 连接池耗尽），用来证明「不通知也不影响审批」。 */
+  guardianError?: Error
 }
 
 function makeRepositoryFake(
@@ -83,14 +89,17 @@ function makeRepositoryFake(
   appended: AppendNotificationInput[]
   listInputs: ListNotificationsInput[]
   markReadInputs: MarkReadInput[]
+  guardianInputs: string[]
 } {
   const appended: AppendNotificationInput[] = []
   const listInputs: ListNotificationsInput[] = []
   const markReadInputs: MarkReadInput[] = []
+  const guardianInputs: string[] = []
   return {
     appended,
     listInputs,
     markReadInputs,
+    guardianInputs,
     async listForRecipient(input: ListNotificationsInput): Promise<NotificationPageRow | null> {
       listInputs.push(input)
       return behaviour.page ?? null
@@ -102,6 +111,11 @@ function makeRepositoryFake(
     async append(input: AppendNotificationInput): Promise<void> {
       if (behaviour.appendError !== undefined) throw behaviour.appendError
       appended.push(input)
+    },
+    async listActiveGuardianUserIds(childId: string): Promise<string[]> {
+      guardianInputs.push(childId)
+      if (behaviour.guardianError !== undefined) throw behaviour.guardianError
+      return behaviour.guardians ?? []
     }
   }
 }
@@ -392,5 +406,147 @@ describe('站内通知（W5-L）：标记已读', () => {
     )
 
     assert.deepEqual(error, { status: 404, code: 'NOTIFICATION_NOT_FOUND' })
+  })
+})
+
+/**
+ * W5-M（2026-10-23）：孩子提交申请后通知家长。
+ *
+ * 这一组守的不是「文案漂亮」，而是三件容易悄悄坏掉的事：
+ *   ① 收件人是**家长集合**，且**排除提交人**（家长自己提交时不能只发给他自己）；
+ *   ② 通知读不到成员位 / 某一位写失败，都**不能**让已经落库的申请变成 5xx；
+ *   ③ 站内与推送**每位家长各一条**，不是「只发给第一个人」。
+ */
+describe('站内通知（W5-M）：新申请待确认发给家长', () => {
+  function makeSubmitted(overrides: Partial<ApprovalSubmittedEvent> = {}): ApprovalSubmittedEvent {
+    return {
+      approvalId: 'ap-2',
+      childId: 'child-1',
+      requesterUserId: 'u-kid',
+      action: 'request_points_bonus',
+      occurredAt: '2026-10-23T03:00:00.000Z',
+      ...overrides
+    }
+  }
+
+  it('孩子提交 ⇒ 每位家长各一条站内 + 一条推送，提交人不在收件人里', async () => {
+    const push = makePushFake()
+    const repository = makeRepositoryFake({ guardians: ['u-dad', 'u-mom', 'u-dad'] })
+    const service = new NotificationsService(push, repository)
+
+    const results = await service.notifyApprovalSubmitted(makeSubmitted())
+
+    assert.deepEqual(repository.guardianInputs, ['child-1'], '没有按孩子查成员位')
+    assert.equal(repository.appended.length, 2, '家长人数与站内通知条数不一致（或没有去重）')
+    assert.deepEqual(
+      repository.appended.map((row) => row.recipientUserId).sort(),
+      ['u-dad', 'u-mom']
+    )
+    const row = repository.appended[0]
+    assert.equal(row.childId, 'child-1')
+    assert.equal(row.type, 'approval.submitted')
+    assert.equal(row.title, '新的加分申请待确认')
+    assert.match(row.body, /打开收件箱/)
+    // 只带跳转所需的 id：金额 / 理由一律不进通知（第三方通道会留内容）。
+    assert.deepEqual(row.payload, {
+      approvalId: 'ap-2',
+      action: 'request_points_bonus',
+      submittedByUserId: 'u-kid'
+    })
+    assert.equal(results.length, 2)
+    assert.ok(results.every((result) => result.delivered))
+
+    assert.equal(push.messages.length, 2)
+    const message = push.messages[0]
+    assert.ok(
+      isApprovalSubmittedPush(message),
+      `推送类型不是 approval.submitted：${String(message.type)}`
+    )
+    assert.equal(message.submittedByUserId, 'u-kid')
+    assert.equal(message.approvalId, 'ap-2')
+    assert.equal(message.occurredAt, '2026-10-23T03:00:00.000Z')
+  })
+
+  it('家长自己提交（需另一位确认）⇒ **不**发给本人，只发给其余家长', async () => {
+    const push = makePushFake()
+    const repository = makeRepositoryFake({ guardians: ['u-dad', 'u-mom'] })
+    const service = new NotificationsService(push, repository)
+
+    const results = await service.notifyApprovalSubmitted(
+      makeSubmitted({ requesterUserId: 'u-dad' })
+    )
+
+    assert.deepEqual(
+      repository.appended.map((row) => row.recipientUserId),
+      ['u-mom'],
+      '给提交人自己发了「待你确认」—— 这是纯噪音'
+    )
+    assert.equal(push.messages.length, 1)
+    assert.equal(results.length, 1)
+  })
+
+  it('只有提交人一位家长 ⇒ 零写入、零推送，返回空数组', async () => {
+    const push = makePushFake()
+    const repository = makeRepositoryFake({ guardians: ['u-dad', ''] })
+    const service = new NotificationsService(push, repository)
+
+    const results = await service.notifyApprovalSubmitted(
+      makeSubmitted({ requesterUserId: 'u-dad' })
+    )
+
+    assert.deepEqual(results, [])
+    assert.equal(repository.appended.length, 0)
+    assert.equal(push.messages.length, 0, '没有收件人却调用了推送')
+  })
+
+  it('成员位读取失败（无库 501 / 连接池耗尽）⇒ 返回 [] 且**不抛错**', async () => {
+    const push = makePushFake()
+    const repository = makeRepositoryFake({ guardianError: new Error('APPROVALS_REPOSITORY: 501') })
+    const service = new NotificationsService(push, repository)
+
+    const results = await service.notifyApprovalSubmitted(makeSubmitted())
+
+    assert.deepEqual(results, [], '读成员位失败必须降级成「没人收到」，而不是把申请打回')
+    assert.equal(repository.appended.length, 0)
+    assert.equal(push.messages.length, 0)
+  })
+
+  it('某位家长站内写失败 ⇒ 其他家长照常写 + 推送（一位失败不牵连另一位）', async () => {
+    const push = makePushFake()
+    const repository = makeRepositoryFake({ guardians: ['u-dad', 'u-mom'] })
+    // 只让第一位家长的 append 抛错：数组记录仍会保留第二位。
+    let calls = 0
+    const originalAppend = repository.append.bind(repository)
+    repository.append = async (input: AppendNotificationInput): Promise<void> => {
+      calls += 1
+      if (calls === 1) throw new Error('连接池耗尽')
+      await originalAppend(input)
+    }
+    const service = new NotificationsService(push, repository)
+
+    const results = await service.notifyApprovalSubmitted(makeSubmitted())
+
+    assert.equal(repository.appended.length, 1, '第一位失败把第二位也跳过了')
+    assert.equal(push.messages.length, 2, '站内写失败不该跳过推送')
+    assert.equal(results.length, 2)
+    assert.ok(results.every((result) => result.delivered))
+  })
+
+  it('推送抛错 ⇒ 结果为 provider_error，**不向调用方抛出**', async () => {
+    const push = makePushFake({ failWith: new Error('APNs 证书过期') })
+    const repository = makeRepositoryFake({ guardians: ['u-dad'] })
+    const service = new NotificationsService(push, repository)
+
+    const results = await service.notifyApprovalSubmitted(makeSubmitted())
+
+    assert.equal(results.length, 1)
+    assert.equal(results[0].delivered, false)
+    assert.equal(results[0].delivered === false ? results[0].reason : null, 'provider_error')
+    assert.match(
+      results[0].delivered === false ? String(results[0].detail) : '',
+      /APNs 证书过期/
+    )
+    // 推送失败不影响站内通知：家长打开 App 仍能看到。
+    assert.equal(repository.appended.length, 1)
   })
 })

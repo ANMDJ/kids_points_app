@@ -70,6 +70,25 @@ void main() {
       });
 
 
+  group('NotificationDto：审批类消息该去哪里（W5-M）', () {
+    test('approval.submitted 是「等你处理」，结论是「看结果」，未知类型不冒充审批', () {
+      final NotificationDto submitted = NotificationDto.fromJson(
+          notificationJson(type: 'approval.submitted'), 'item');
+      final NotificationDto approved = NotificationDto.fromJson(
+          notificationJson(type: 'approval.approved'), 'item');
+      final NotificationDto other = NotificationDto.fromJson(
+          notificationJson(id: 'n-9', type: 'system.announcement'), 'item');
+
+      // 三者都带同一个 `approvalId` —— 只靠 payload 分不出该去哪个页面。
+      expect(submitted.approvalId, 'ap-1');
+      expect(approved.approvalId, 'ap-1');
+      expect(submitted.isApprovalSubmitted, isTrue);
+      expect(approved.isApprovalSubmitted, isFalse,
+          reason: '结论点进去要去「我的申请」看结果，不是「审批」页');
+      expect(other.isApprovalSubmitted, isFalse);
+    });
+  });
+
   group('AppStore：消息列表（W5-L）', () {
     test('第一页 20 条起步、未读数用服务端值；加载更多带游标并按 id 去重', () async {
       final _NotificationsTransport transport = _NotificationsTransport(

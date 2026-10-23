@@ -34,7 +34,7 @@
 | [`25-w5h-handoff.md`](./25-w5h-handoff.md) | **阶段 W5-H 交接单**（成员管理）：`/members` 三条路由（`view_members` 孩子 **ALLOW** / `change_member_role` / `remove_member` 孩子 DENY）、**最后一位家长保护靠 `SELECT … ORDER BY id FOR UPDATE` 锁住该孩子全部成员位**（先查后写与单条条件 `UPDATE` 在 READ COMMITTED 下都能双双通过）、降级与**同事务收回 `DeviceSession.activeRole`** ＋ 读路径 `clampRoleToMembership()`（矩阵角色 = min(会话, 成员位)）、两条写路由**禁止作用于自己**（`CANNOT_MODIFY_SELF`）、`PATCH` 同角色 / `DELETE` 重复调用都是**构造幂等**（不写第二条审计、`removedAt` 不变）、移出**不删会话**（否则 `MEMBER_REMOVED` 退化成 401）、线格式只给 `role`/`status`/`isSelf` 不给权限结论、审计快照只含 `role`/`status`、`viewer` 不可作为目标角色、真库 **3 家长环形降级 ⇒ 恰好 2 成功 / 1×409**、**新增测试守卫 ④**（文件级 `✔` ⇒ 红，专治 `describe` 被关进 hook 的 D12 式假绿；已在 `test:canfail` C/C2 常设证伪） | ✅ W5-H 已收口（服务端；**双端 UI 未建**） |
 | [`26-w5i-handoff.md`](./26-w5i-handoff.md) | **阶段 W5-I 交接单**（双端邀请码界面）：**先拉成员再拉邀请码**（`invite_member` 仅 guardian ALLOW，用 403 探测角色会把权限画成故障）、状态**渲染时现算**且优先级 `revoked > exhausted > expired`（先答库里的既成事实，再答依赖时钟的判断）、生成表单是**封闭选项**（1/3/5 人 · 1/7/30 天；服务端 1..10 / 1..30）、`POST /invites` **不带**幂等键而吊销是构造幂等、回包 `role`/`maxUses`/`id` **回显校验**、复制**裸码**（展示才分组）、已吊销行不再画吊销按钮、空态**三分**（没拉到 / 加载中 / 真的没有）、预览模式**不编假码**、live 无写客户端**拒绝而不本地假写**、生成 409 与吊销 404 重拉而吊销成功只改本行、Flutter **+8** / 小程序 **19** 条用例、**`accept` 仍无客户端（等 L2 登录）** | ✅ W5-I 已收口（**双端 UI 已建**；`accept` 与成员管理 UI 未建） |
 | [`27-w5j-handoff.md`](./27-w5j-handoff.md) | **阶段 W5-J 交接单**（「我的申请」＋撤回）：申请人**没有读路径**才是真缺口（收件箱对孩子 403）、新端点 `GET /approvals/mine` ＋ 新动作 `view_own_approvals`（双 ALLOW，**不复用** `review_approvals`）、收口写死 `childId + requesterUserId = 会话 actor`（query 里没有这个字段）、`POST /:id/withdraw` **无请求体**、`summary === null` **也必须能撤回**（否则坏行永久卡住）、撤回**不刷首页**且收件箱**仅在已加载时**刷新（孩子请求 `/approvals` 必然 403）、回包 `status !== withdrawn` 算**契约漂移**、两端列表状态**不共用**（游标 / 错误互不污染）、空态区分「没拉到 / 还在加载 / 真的没有」、Flutter **127** / 小程序 **14** 条用例、真库本轮未复跑 | ✅ W5-J 已收口（**双端 UI 已建**；推送 / 详情页 / 成员管理 UI 未建） |
-| [`28-w5k-handoff.md`](./28-w5k-handoff.md) | **阶段 W5-K 交接单**（审批结论推送端口）：业务只认识 `NotificationsService.notifyApprovalStatusChanged()`（**1s 超时 + 永不抛错**），渠道只认识 `PUSH_PORT`；默认 `NoopPushAdapter` **如实**返回 `provider_not_configured`（**不假成功**）；调用点在 `decide()` **端口返回之后**（账本已提交，`01` §4 / `02` §9.23），推送故障**不改写 200**；只推 `approved` / `rejected`，收件人恒为 `requesterUserId`，**自批 / 撤回 / 过期不推**；消息**不带金额 / 标题**（第三方通道会保留内容）；重复 decide 409 不重复推送；**没有真实渠道 / 设备 token 上报**（站内通知中心已在 W5-L 补上，见 §5.2），接入清单见 §5.1；backend **+12**（565/565）、**无迁移** | ✅ W5-K 已收口（**仅后端端口**；渠道 / 客户端未接） |
+| [`28-w5k-handoff.md`](./28-w5k-handoff.md) | **阶段 W5-K 交接单**（审批结论推送端口）：业务只认识 `NotificationsService.notifyApprovalStatusChanged()`（**1s 超时 + 永不抛错**），渠道只认识 `PUSH_PORT`；默认 `NoopPushAdapter` **如实**返回 `provider_not_configured`（**不假成功**）；调用点在 `decide()` **端口返回之后**（账本已提交，`01` §4 / `02` §9.23），推送故障**不改写 200**；只推 `approved` / `rejected`，收件人恒为 `requesterUserId`，**自批 / 撤回 / 过期不推**；消息**不带金额 / 标题**（第三方通道会保留内容）；重复 decide 409 不重复推送；**没有真实渠道 / 设备 token 上报**（站内通知中心已在 W5-L 补上，见 §5.2），接入清单见 §5.1；backend **+12**（565/565）、**无迁移**；§5.2 = W5-L 站内通知中心、§5.3 = W5-M 提交即通知家长 | ✅ W5-K 已收口（**仅后端端口**；渠道 / 客户端未接） |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **29 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-21 矩阵同步至 29 动作） |
 
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
@@ -1325,6 +1325,22 @@
 小程序 `tsc --noEmit` → 0；**无迁移**。交接单：[`28-w5k-handoff.md`](./28-w5k-handoff.md)。
 （W5-L 补齐站内通知后：`npm test` → **576/576**、`npm run test:db` → **189/189**、
 `flutter test` → **199/199**，明细见 §5.2。）
+
+**W5-M（2026-10-23）提交即通知家长 —— 家长不再靠轮询。**
+`POST /approvals` 落成 `pending` 之后（事务外），`NotificationsService.notifyApprovalSubmitted()`
+用 `listActiveGuardianUserIds(childId)`（`ChildMember{ role:'guardian', status:'active' }`）
+展开收件人，**排除提交人**，每人一条站内 `approval.submitted` + 一条推送（W5-K 端口）。
+站内先写、推送后发，任一步失败只记日志，接口仍 **202**；自批 / 自动通过不发
+（那时没有「等你确认」）。`payload` 只有 `{ approvalId, action, submittedByUserId }`，
+不带金额 / 标题 / 理由。客户端把 `approval.submitted` 的胶囊改成**「去审批」**
+（Flutter 关面板后由 `HomeShell` 切审批 tab；小程序 `switchTab(2,3)`），
+`approved` / `rejected` 仍走「查看申请」→「我的申请」——两者都带 `approvalId`，
+只凭 payload 分不出该去哪。证据：`notifications.test.ts` 6 条 +
+`approvals-http.test.ts` 组 H + 真库 `notifications-db.dbtest.ts` 组 E（+3）+ Flutter +1；
+真跑：`npm test` → **586/586**、`test:db` → **192/192**、`flutter test` → **200/200**、
+`flutter analyze` / 小程序 `tsc --noEmit` → 0。边界：没有 outbox、推送仍是 no-op、
+非 active 家长位收不到、删除 / 撤回 / 过期不补发。明细见
+[`28-w5k-handoff.md`](./28-w5k-handoff.md) §5.3。
 
 
 ### 文档缺陷修正记录

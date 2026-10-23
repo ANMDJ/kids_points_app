@@ -195,6 +195,38 @@ W5-K 把「审批结果 → 通知」这一段做成**渠道无关的端口**，
 没有「已读全部」；没有按类型过滤 / 偏好 / 免打扰；**仍然需要用户打开 App 才看得到** ——
 所以它是推送的补充，不是替代。§5.1 的六步一件都没被这一步替代。
 
+### 5.3 新申请待确认时通知家长（W5-M）
+
+W5-L 只解决「审批**结论**怎么回到申请人手里」；家长那一侧仍然要自己轮询收件箱。
+W5-M 补上另一半：**有人提交、且结果落在 `pending` 时，给这个孩子的每位在场家长
+各写一条站内通知 + 推一条推送**。
+
+- 触发点：`ApprovalsService.createRequest()` 的 `pending` 分支，**在事务提交之后**调用
+  `NotificationsService.notifyApprovalSubmitted()`。自动通过（`autoApprove` / 策略直接 `approved`）
+  与自批**不发** —— 那时没有「等你确认」这件事。
+- 收件人：`NotificationsPort.listActiveGuardianUserIds(childId)`
+  （`ChildMember{ role: 'guardian', status: 'active' }`，按 `id` 排序保证可复跑），
+  **排除提交人自己**：家长提交时只提醒另一位家长，孩子提交时两位家长都收到。
+  家长集合的解析在通知层，`ApprovalsModule` 不需要认识 `ChildMember`。
+- 消息：站内 `type = 'approval.submitted'`；`payload` **只有
+  `{ approvalId, action, submittedByUserId }`** —— 没有金额 / 心愿标题 / 理由，
+  与 W5-K 同一口径（第三方通道会保留内容）。正文只说「去收件箱看看」。
+- 纪律：先写站内、再推送，两步都在审批事务之外；查家长 / 写通知 / 推送任何一步失败
+  **只记日志**，`POST /approvals` 仍是 202 —— 「通知没发出去」不能把一次已成立的申请变成 5xx。
+- 客户端：`type === 'approval.submitted'` 的胶囊是**「去审批」**（Flutter 关面板后由
+  `HomeShell` 切到审批 tab；小程序 `switchTab(2, 3)`），而 `approved` / `rejected` 仍是
+  「查看申请」→「我的申请」。两者都带 `approvalId`，只靠 payload 分不出该去哪。
+- 证据：`backend/test/notifications.test.ts`（6 条：收件人展开 / 排除提交人 / 单点失败不抛）、
+  `backend/test/approvals-http.test.ts` 组 H（`POST /approvals` 仍 202 且每人一条）；
+  `backend/test-db/notifications-db.dbtest.ts` 组 E（真库 × 真 HTTP：成员位解析、
+  孩子提交 ⇒ 两位家长、家长提交 ⇒ 只另一位、提交人红点不动）；Flutter `notifications_test.dart`
+  新增 `isApprovalSubmitted` 一条。本轮复跑：`npm test` → **586/586**（W5-L 576，+10）、
+  `npm run test:db` → **192/192**（+3）、`flutter test` → **200/200**（+1）、
+  `flutter analyze` / `tsc --noEmit` → 0。
+- 边界：`status != 'active'` 的家长位**收不到**（按定义就不该提醒）；没有 outbox，
+  通知丢失不可补；推送仍是 `NoopPushAdapter`，所以「202」不等于「家长手机响了」；
+  删除 / 撤回 / 过期都不会补发「已处理」给其他家长。
+
 本轮复跑（W5-L 收口时）：`typecheck` / `typecheck:tests` → 0；`npm test` → **576/576**（31 文件，
 W5-K 的 565 之上 **+11** 条通知用例）；`npm run test:db` → **189/189**（12 文件，含
 `notifications-db.dbtest.ts`）；`flutter analyze` → 0、`flutter test` → **199/199**；

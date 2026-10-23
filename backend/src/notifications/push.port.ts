@@ -39,8 +39,67 @@ export interface ApprovalStatusChangedPush {
   readonly occurredAt: string
 }
 
-/** 目前只有审批结论一种推送；保留联合类型，后续通知类型在此扩展。 */
-export type PushMessage = ApprovalStatusChangedPush
+/**
+ * 「有新申请待确认」的推送消息（W5-M，2026-10-23）。
+ *
+ * ── 为什么收件人是**家长列表**而不是单个 id ────────────────────────────────
+ *   审批的收件人取决于「谁提的」：孩子提交 ⇒ 这个孩子的每一位 active 家长；
+ *   家长自己提交（需另一位家长确认）⇒ **除他以外**的家长。
+ *   所以 `ApprovalSubmittedPush` 仍然是**单收件人**形状（渠道层只认一个人），
+ *   由 `NotificationsService` 解析成员位后**每人一条**。
+ *
+ * ── 与 `ApprovalStatusChangedPush` 的对称性 ───────────────────────────────
+ *   两者都只在 `childId` 内、只带跳转所需的 id；都不带金额 / 标题 / 理由。
+ *   区别只有一个：`recipientUserId` 的**来源**（申请人 vs 家长集合）。
+ */
+export interface ApprovalSubmittedPush {
+  readonly type: 'approval.submitted'
+  readonly approvalId: string
+  readonly childId: string
+  /** 收件人：一位 active 家长（`ChildMember.role = 'guardian'`）。 */
+  readonly recipientUserId: string
+  readonly action: ActionType
+  /** 提交人（`ApprovalRequest.requesterUserId`）；与收件人**必然不同**。 */
+  readonly submittedByUserId: string
+  /** 提交时刻（ISO 8601）。审批行没有 `createdAt` 的端口读数，故取通知层时刻。 */
+  readonly occurredAt: string
+}
+
+/**
+ * `ApprovalsService.createRequest()` 交给通知层的**事件**（W5-M）。
+ *
+ * ★ 这里没有 `recipientUserId`：谁该收到「待确认」是**家庭结构**的事实
+ *   （成员位），不是审批行上的字段。让审批 service 自己查成员位会在
+ *   `ApprovalsModule` 里再复制一份「谁是家长」的查询；交给通知层则只有一处。
+ */
+export interface ApprovalSubmittedEvent {
+  readonly approvalId: string
+  readonly childId: string
+  /** 提交人：**排除**在收件人之外（自己不需要被提醒自己提过）。 */
+  readonly requesterUserId: string
+  readonly action: ActionType
+  readonly occurredAt: string
+}
+
+/** 审批相关的两种推送；后续通知类型在此扩展。 */
+export type PushMessage = ApprovalStatusChangedPush | ApprovalSubmittedPush
+
+/**
+ * 判别式守卫：渠道适配器拿到 `PushMessage` 时必须先分清是哪一种，
+ * 否则会在另一种消息上读不存在的字段（TS 会拦住，但运行时日志里只有 `undefined`）。
+ * 用例里也用它代替 `as`：`as` 会把「类型写错」变成一条永远绿的行。
+ */
+export function isApprovalStatusChangedPush(
+  message: PushMessage
+): message is ApprovalStatusChangedPush {
+  return message.type === 'approval.status_changed'
+}
+
+export function isApprovalSubmittedPush(
+  message: PushMessage
+): message is ApprovalSubmittedPush {
+  return message.type === 'approval.submitted'
+}
 
 export type PushFailureReason =
   /** 没有配置任何第三方渠道（当前默认实现的唯一返回）。 */

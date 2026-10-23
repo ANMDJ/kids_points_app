@@ -39,6 +39,19 @@ export function isNotificationUnread(item: NotificationItem): boolean {
 }
 
 /**
+ * 「有人提交了申请，等你处理」的提醒（`approval.submitted`，W5-M）。
+ *
+ * 与审批**结论**（`approval.approved` / `approval.rejected`）区分开：两者都带
+ * `approvalId`，但一个要去「审批」页答复，一个去「我的申请」看结果 ——
+ * 只看 payload 分不出来，必须看 `type`。
+ */
+export function isApprovalSubmittedNotification(
+  item: NotificationItem
+): boolean {
+  return item.type === 'approval.submitted'
+}
+
+/**
  * 从 `payload` 里取 `approvalId`（宽松读取）。
  *
  * payload 为 null / 数组 / 标量、或 `approvalId` 不是非空字符串 ⇒ null。

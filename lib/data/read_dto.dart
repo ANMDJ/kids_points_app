@@ -526,6 +526,12 @@ class NotificationDto {
   /// 未读 = 服务端没给 `readAt`。**只**从这一个字段推导。
   bool get isUnread => readAt == null;
 
+  /// 这是「有人提交了申请，等你处理」的提醒（W5-M），而不是审批结论。
+  ///
+  /// 两者都带 `approvalId`，但点进去要去的是**不同的地方**：结论去「我的申请」
+  /// 看结果，待确认要去「审批」页给答复。只靠 `payload` 分不出来，必须看 `type`。
+  bool get isApprovalSubmitted => type == 'approval.submitted';
+
   /// 点开这条通知要打开的审批 id；不是审批类 / payload 里没有 ⇒ null。
   String? get approvalId {
     final Object? value = payload?['approvalId'];

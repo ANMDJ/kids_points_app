@@ -287,6 +287,9 @@ export default function Profile() {
             visible={notificationSheet.visible}
             onClose={notificationSheet.hide}
             onOpenApplications={() => myApplicationsSheet.show()}
+            /* W5-M：新申请待确认 ⇒「去审批」。审批收件箱是 tab 页而不是弹窗，
+               只能整页切过去（与底部导航同一套 `switchTab`）。 */
+            onOpenApprovals={() => switchTab(2, 3)}
           />
         ) : null}
         {/* W5-J：我的申请弹窗（打开时才拉 `GET /approvals/mine`） */}

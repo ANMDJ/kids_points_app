@@ -5,6 +5,7 @@ import SheetFrame from '../components/SheetFrame'
 import { useStore } from '../data/store'
 import {
   formatNotificationTime,
+  isApprovalSubmittedNotification,
   isNotificationUnread
 } from '../data/notification'
 import type { NotificationItem } from '../data/notification'
@@ -20,6 +21,11 @@ export interface NotificationsSheetProps {
    * 包含块 —— 嵌套的子弹窗会按 panel 尺寸定位并被内容区裁掉。
    */
   onOpenApplications: () => void
+  /**
+   * 切到「审批」tab（W5-M）：家长收到「有人提交了申请」时，要去的是收件箱
+   * 而不是自己**没提交过**的「我的申请」。由页面提供 —— 只有页面持有 tab 下标。
+   */
+  onOpenApprovals: () => void
 }
 
 /**
@@ -37,9 +43,10 @@ export interface NotificationsSheetProps {
  * ── 点开 = 标记已读，但不强制跳转 ─────────────────────────────────────────
  *   点一条就打一次 `PATCH /notifications/:id/read`（失败原样提示，
  *   界面不回滚成未读 —— 服务端回包才是权威值）。
- *   审批类消息多一个「查看申请」胶囊，交给页面的 `onOpenApplications`
- *   打开「我的申请」面板；普通消息（没有 `approvalId`）只是读掉，
- *   不做无意义的跳转。
+ *   审批类消息多一个胶囊，去向按 `type` 分（W5-M）：
+ *     · `approval.approved` / `approval.rejected` ⇒「查看申请」→「我的申请」看结果；
+ *     · `approval.submitted` ⇒「去审批」→ 切到「审批」页给答复。
+ *   普通消息（没有 `approvalId`）只是读掉，不做无意义的跳转。
  *
  * 列表与分页状态放在 store（`notifications` / `notificationsHasMore`）：
  * 未读角标与面板读的是同一份 `unreadCount`，本地再存一份就会两处不一致。
@@ -47,7 +54,8 @@ export interface NotificationsSheetProps {
 export default function NotificationsSheet({
   visible,
   onClose,
-  onOpenApplications
+  onOpenApplications,
+  onOpenApprovals
 }: NotificationsSheetProps) {
   const store = useStore()
   /** 有读请求（首次拉取 / 重试 / 加载更多）在途；写请求的忙碌状态由 store 表达。 */
@@ -111,7 +119,7 @@ export default function NotificationsSheet({
     <SheetFrame
       visible={visible}
       title={unread > 0 ? `消息（${unread} 条未读）` : '消息'}
-      subtitle='审批结果会在这里留一条；点一下即标记已读'
+      subtitle='审批申请与结果会在这里留一条；点一下即标记已读'
       onClose={onClose}
     >
       {store.notificationsError !== null ? (
@@ -151,6 +159,13 @@ export default function NotificationsSheet({
                 onOpenApplications()
               })()
             }}
+            onOpenSubmitted={() => {
+              // 同理：标记失败也照样切过去，否则家长会以为「点了没反应」。
+              void (async () => {
+                await markRead(item)
+                onOpenApprovals()
+              })()
+            }}
           />
         ))}
       </View>
@@ -172,7 +187,7 @@ export default function NotificationsSheet({
 }
 
 /**
- * 一行通知：未读圆点 + 标题 + 时间 + 正文；审批类多一个「查看申请」。
+ * 一行通知：未读圆点 + 标题 + 时间 + 正文；审批类多一个胶囊。
  *
  * 已读的行**不隐藏**（那不是「消息没了」），只是颜色变浅 ——
  * 用户回头找「上周那条被拒的原因」时还得看得见。
@@ -181,14 +196,17 @@ function NotificationRow({
   item,
   busy,
   onOpen,
-  onOpenApplication
+  onOpenApplication,
+  onOpenSubmitted
 }: {
   item: NotificationItem
   busy: boolean
   onOpen: () => void
   onOpenApplication: () => void
+  onOpenSubmitted: () => void
 }) {
   const unread = isNotificationUnread(item)
+  const submitted = isApprovalSubmittedNotification(item)
 
   return (
     <View
@@ -215,11 +233,15 @@ function NotificationRow({
               // 这一层在行内：不拦冒泡会顺带触发整行的标记已读。
               event.stopPropagation()
               if (busy) return
+              if (submitted) {
+                onOpenSubmitted()
+                return
+              }
               onOpenApplication()
             }}
           >
             <Text className='kp-notif__chip-text'>
-              {busy ? '处理中…' : '查看申请'}
+              {busy ? '处理中…' : submitted ? '去审批' : '查看申请'}
             </Text>
           </View>
         </View>
