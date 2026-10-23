@@ -96,6 +96,9 @@ class AppStore extends ChangeNotifier {
   /// 一页收件箱条数：比流水页小，因为每行要解析 payload 生成摘要。
   static const int _approvalsPageSize = 20;
 
+  /// 通知页大小（与后端 `GET /notifications` 的默认值一致）。
+  static const int _notificationsPageSize = 20;
+
   /// 后端允许的状态过滤词（`APPROVAL_STATUS_FILTERS` 同口径）。
   static const Set<String> approvalStatusFilters = <String>{
     'pending',
@@ -176,6 +179,35 @@ class AppStore extends ChangeNotifier {
 
   /// 是否正在生成邀请码（提交期间禁用「生成」按钮，避免连点产生一屏废码）。
   bool _creatingInvite = false;
+
+  // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
+  //
+  // 与成员 / 邀请码同策略：**打开通知面板时才拉**（`refreshNotifications`）。
+  // 通知是每个角色都有的低频数据，但把它塞进首页刷新会让每次下拉都多付
+  // 一次往返；红点另走 `refreshUnreadNotificationCount()`（只取 1 条）。
+  //
+  // 存的是**服务端事实**（`readAt` / `createdAt`），未读由
+  // `NotificationDto.isUnread` 现算 —— 缓存成布尔值会在标记已读后说谎。
+
+  final List<NotificationDto> _notifications = <NotificationDto>[];
+  ReadStatus _notificationsReadStatus = ReadStatus.idle;
+  ReadApiException? _notificationsError;
+
+  /// 通知列表自己的 epoch：重复打开面板 / 手动刷新时作废在途响应。
+  int _notificationsReadEpoch = 0;
+
+  /// 红点的 epoch：与列表分开，避免「只刷新红点」把列表的在途响应作废。
+  int _notificationBadgeEpoch = 0;
+
+  /// 下一页游标；null = 没有下一页。**原样**传回服务端，不许自己拼。
+  String? _notificationsCursor;
+  bool _notificationsHasMore = false;
+
+  /// 服务端下发的**整份**未读数（不是本页未读数）。
+  int _unreadNotificationCount = 0;
+
+  /// 正在标记已读的通知 id；非 null 时该行禁用（防双击）。
+  String? _busyNotificationId;
 
   /// 是否接入了后端（与「当前是否已加载成功」是两件事）。
   bool get isLiveMode => _readApi != null;
@@ -333,6 +365,38 @@ class AppStore extends ChangeNotifier {
   /// 要先 `refreshMembers()` —— 否则家长会看到一个空面板。
   bool get canManageInvites => canManageMembers;
 
+  // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
+
+  /// 通知列的**只读快照**（服务端顺序：新通知在前）。
+  List<NotificationDto> get notifications =>
+      List<NotificationDto>.unmodifiable(_notifications);
+
+  /// 通知列表加载状态（与首页 / 成员 / 邀请码状态分开）。
+  ReadStatus get notificationsReadStatus => _notificationsReadStatus;
+
+  /// 通知列表的加载错误（403 = 当前身份没有 `view_notifications`，
+  /// **不能**画成「还没有消息」）。
+  ReadApiException? get notificationsError => _notificationsError;
+
+  /// 未读通知总数 —— 红点用它。0 时不显示红点。
+  int get unreadNotificationCount => _unreadNotificationCount;
+
+  /// 是否还有下一页（面板滚到底时据此决定要不要继续拉）。
+  bool get notificationsHasMore => _notificationsHasMore;
+
+  /// 正在标记已读的通知 id；非 null 时该行应禁用。
+  String? get busyNotificationId => _busyNotificationId;
+
+  /// 通知写入口（标记已读）是否被只读拦截。
+  ///
+  /// 与 [isReadOnly] 分开：live 模式下这条已经接了后端，只有**没注入
+  /// 写客户端**时才拦。
+  bool get isNotificationWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下通知写操作的文案 —— 页面直接展示，不另编理由。
+  String get notificationReadOnlyWriteMessage =>
+      '只读模式：标记已读暂时写不进去（写客户端未就绪），这次没有保存到服务器。';
+
   ReadStatus get readStatus => _readStatus;
 
   ReadApiException? get readError => _readError;
@@ -459,6 +523,13 @@ class AppStore extends ChangeNotifier {
     _invitesError = null;
     _busyInviteId = null;
     _creatingInvite = false;
+    _notifications.clear();
+    _notificationsReadStatus = ReadStatus.idle;
+    _notificationsError = null;
+    _notificationsCursor = null;
+    _notificationsHasMore = false;
+    _unreadNotificationCount = 0;
+    _busyNotificationId = null;
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -2835,6 +2906,200 @@ class AppStore extends ChangeNotifier {
       _busyInviteId = null;
       _notify();
     }
+  }
+
+  // ========================================== 站内通知：服务端读写（W5-L）
+
+  /// 拉取通知第一页（`GET /notifications`）—— **打开通知面板时**调用。
+  ///
+  /// 预览模式没有真实的站内通知（行由服务端在审批出结果时写入）——
+  /// 直接进入 `ready` 空态：面板据此说「预览模式没有消息」，而不是发一个
+  /// 只会 401 的请求，再把 401 说成「网络错误」。
+  ///
+  /// 失败**不清空**上一次成功的结果：把列表清空会变成「消息都没了」，
+  /// 而实际可能只是断网；错误经 [notificationsError] 上报。
+  Future<void> refreshNotifications() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) {
+      _notifications.clear();
+      _notificationsReadStatus = ReadStatus.ready;
+      _notificationsError = null;
+      _notificationsCursor = null;
+      _notificationsHasMore = false;
+      _unreadNotificationCount = 0;
+      _notify();
+      return;
+    }
+    final int epoch = ++_notificationsReadEpoch;
+    _notificationsReadStatus = ReadStatus.loading;
+    _notificationsError = null;
+    _notify();
+    try {
+      final NotificationsPageDto dto = await api.fetchNotifications(
+        limit: _notificationsPageSize,
+      );
+      if (_disposed || api != _readApi || epoch != _notificationsReadEpoch) {
+        return;
+      }
+      // 列表刷新拿到的是整页 + 整份未读数：同时让在途的「红点单查」失效，
+      // 否则一个更早的红点响应可能把刚拉到的未读数盖回旧值。
+      _notificationBadgeEpoch++;
+      _notifications
+        ..clear()
+        ..addAll(dto.items);
+      _notificationsCursor = dto.nextCursor;
+      _notificationsHasMore = dto.hasMore;
+      _unreadNotificationCount = dto.unreadCount;
+      _notificationsReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _notificationsReadEpoch) {
+        return;
+      }
+      _notificationsError = error;
+      _notificationsReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _notificationsReadEpoch) {
+        return;
+      }
+      _notificationsError = ReadApiException.network(error);
+      _notificationsReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _notificationsReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 拉下一页（面板滚到底时调用）。没有下一页 / 上一页还在途时**直接返回**，
+  /// 不发一个游标为空的请求（那会被服务端判成第一页，把列表打乱）。
+  Future<void> loadMoreNotifications() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) return;
+    final String? cursor = _notificationsCursor;
+    if (!_notificationsHasMore || cursor == null || cursor.isEmpty) return;
+    if (_notificationsReadStatus == ReadStatus.loading) return;
+
+    // 不自增 epoch：这是同一个「列表会话」的下一页，不该作废第一页。
+    final int epoch = _notificationsReadEpoch;
+    _notificationsReadStatus = ReadStatus.loading;
+    _notificationsError = null;
+    _notify();
+    try {
+      final NotificationsPageDto dto = await api.fetchNotifications(
+        limit: _notificationsPageSize,
+        cursor: cursor,
+      );
+      if (_disposed || api != _readApi || epoch != _notificationsReadEpoch) {
+        return;
+      }
+      // 去重：两次请求之间若有新通知写入，键集分页可能让同一行出现在两页。
+      final Set<String> seen =
+          _notifications.map((NotificationDto item) => item.id).toSet();
+      for (final NotificationDto item in dto.items) {
+        if (seen.add(item.id)) _notifications.add(item);
+      }
+      _notificationsCursor = dto.nextCursor;
+      _notificationsHasMore = dto.hasMore;
+      _unreadNotificationCount = dto.unreadCount;
+      _notificationsReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _notificationsReadEpoch) {
+        return;
+      }
+      _notificationsError = error;
+      _notificationsReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _notificationsReadEpoch) {
+        return;
+      }
+      _notificationsError = ReadApiException.network(error);
+      _notificationsReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _notificationsReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 只刷新未读红点（`GET /notifications?limit=1`）—— 进「我的」页时调用。
+  ///
+  /// ★ 为什么单独一条：红点要出现在通知入口上，而列表只在面板打开时才需要。
+  ///   只用 `limit=1` 换 `unreadCount`，不覆盖列表现有内容。
+  ///
+  /// ★ 失败**保持上一次的值**，绝不把「取不到」画成「没有未读」——
+  ///   红点消失比红点迟到更糟（用户会以为已经看完了）。
+  Future<void> refreshUnreadNotificationCount() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) return;
+    final int epoch = ++_notificationBadgeEpoch;
+    try {
+      final NotificationsPageDto dto = await api.fetchNotifications(limit: 1);
+      if (_disposed || api != _readApi || epoch != _notificationBadgeEpoch) {
+        return;
+      }
+      _unreadNotificationCount = dto.unreadCount;
+      _notify();
+    } catch (_) {
+      // 红点是提示性信息：静默失败即可（面板打开时还有一次完整列表可重试）。
+    }
+  }
+
+  /// 标记一条通知已读（`PATCH /notifications/:id/read`，W5-L）。成功返回 null。
+  ///
+  /// 只把**这一行**改成本地已读，并把未读数减一 —— 不重拉整页：
+  /// 重拉会让「刚点开的那条」在列表里跳位置，用户会以为点错了行。
+  /// `readAt` 用**服务端**回包（已读再调时是第一次的时间）。
+  ///
+  /// 404 = 这条通知已经不在（服务端清过 / 不是发给我的）：刷新列表，
+  /// 让界面与服务端一致，而不是留一条点不动的行。
+  Future<String?> markNotificationRead(NotificationDto notification) async {
+    if (!isLiveMode) return '预览模式没有真实的站内通知，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return notificationReadOnlyWriteMessage;
+    if (!notification.isUnread) return null;
+    if (_busyNotificationId != null) return '上一条通知正在标记，请稍候…';
+
+    _busyNotificationId = notification.id;
+    _notify();
+    try {
+      final NotificationReadDto written =
+          await api.markNotificationRead(notification.id);
+      if (_disposed) return null;
+      if (written.id != notification.id) {
+        // API 层已验过；这里再守一次，避免「标记了别人那条」被当成功。
+        await refreshNotifications();
+        return '服务端返回的通知与这次操作不一致，请刷新消息列表确认。';
+      }
+      _applyNotificationRead(written);
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.notFound) {
+        await refreshNotifications();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '标记已读的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _busyNotificationId = null;
+      _notify();
+    }
+  }
+
+  /// 把服务端的已读结果写到本地那一行，并同步未读数。
+  void _applyNotificationRead(NotificationReadDto dto) {
+    for (int index = 0; index < _notifications.length; index++) {
+      if (_notifications[index].id != dto.id) continue;
+      final bool wasUnread = _notifications[index].isUnread;
+      _notifications[index] = _notifications[index].markedRead(dto.readAt);
+      if (wasUnread && _unreadNotificationCount > 0) {
+        _unreadNotificationCount--;
+      }
+      return;
+    }
+    // 这一行不在本地列表里（例如只刷新过红点）：不凭空造行，未读数也不猜 ——
+    // 交给下一次 `refreshNotifications()`（它带整份 unreadCount）。
   }
 
   // =================================================== 规则编辑（修 C10）

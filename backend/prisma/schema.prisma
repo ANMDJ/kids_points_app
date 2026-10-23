@@ -164,6 +164,9 @@ enum ActionType {
   review_approvals
   withdraw_request
   view_own_approvals
+  /// 站内通知（W5-L）：收件人按会话 userId 收口。
+  view_notifications
+  read_notifications
   view_members
   change_member_role
   invite_member

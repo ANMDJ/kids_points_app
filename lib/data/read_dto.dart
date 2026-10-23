@@ -466,6 +466,165 @@ class ApprovalsPageDto {
   final bool hasMore;
   final String? nextCursor;
 }
+// ───────────────────────────── 通知中心（W5-L） ─────────────────────────────
+
+/// `GET /notifications` 的一行（W5-L）。
+///
+/// ── 为什么只有 `readAt`、没有 `isUnread` ──────────────────────────────────
+///   未读是**派生值**（`readAt == null`）。服务端再下发一个布尔就等于存了
+///   两份事实，迟早出现「红点说未读、行却是灰的」。两端各算一次更安全
+///   （与后端 `notifications.types.ts` 的取舍一致）。
+///
+/// ── 为什么 `payload` 允许为 null ───────────────────────────────────────────
+///   它是服务端的裸 `Json` 列，可能被历史数据写成 `null` / 数组 / 标量。
+///   客户端只用它取「点进去要跳到哪个 id」，读不懂就**原样展示标题与正文**、
+///   不提供跳转 —— 这比让整页 500 好，也比假装能跳转诚实。
+class NotificationDto {
+  NotificationDto({
+    required this.id,
+    required this.type,
+    required this.title,
+    required this.body,
+    required this.payload,
+    required this.readAt,
+    required this.createdAt,
+  });
+
+  factory NotificationDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    final String id = readString(json, 'id', '$path.id');
+    if (id.trim().isEmpty) {
+      throw ReadApiException.malformed('$path.id', detail: '通知 id 为空');
+    }
+    return NotificationDto(
+      id: id,
+      type: readString(json, 'type', '$path.type'),
+      title: readString(json, 'title', '$path.title'),
+      body: readString(json, 'body', '$path.body'),
+      payload: _readPayload(json['payload']),
+      readAt: readOptionalDate(json, 'readAt', '$path.readAt'),
+      createdAt: readDate(json, 'createdAt', '$path.createdAt'),
+    );
+  }
+
+  final String id;
+
+  /// 类型标识（`approval.approved` / `approval.rejected` …）。
+  /// **不要**用 `switch` 的 `default` 拒绝未知类型：服务端加新类型时，
+  /// 老客户端仍应把这条列出来（标题 / 正文本来就可读）。
+  final String type;
+  final String title;
+  final String body;
+
+  /// 回到对应页面所需的 id（目前只有 `approvalId`）；读不懂就是 null。
+  final Map<String, Object?>? payload;
+
+  /// 未读 ⇒ null；已读 ⇒ 具体时间。界面据此渲染红点 / 灰化。
+  final DateTime? readAt;
+  final DateTime createdAt;
+
+  /// 未读 = 服务端没给 `readAt`。**只**从这一个字段推导。
+  bool get isUnread => readAt == null;
+
+  /// 点开这条通知要打开的审批 id；不是审批类 / payload 里没有 ⇒ null。
+  String? get approvalId {
+    final Object? value = payload?['approvalId'];
+    if (value is String && value.trim().isNotEmpty) return value;
+    return null;
+  }
+
+  /// 本地乐观更新用：把「已读」这件事写到内存里（服务端回包才是权威值）。
+  NotificationDto markedRead(DateTime at) => NotificationDto(
+        id: id,
+        type: type,
+        title: title,
+        body: body,
+        payload: payload,
+        readAt: readAt ?? at,
+        createdAt: createdAt,
+      );
+
+  /// payload 的宽松读取：对象 ⇒ 只读副本；其它（null / 数组 / 标量）⇒ null。
+  static Map<String, Object?>? _readPayload(Object? raw) {
+    if (raw is Map<String, Object?>) {
+      return Map<String, Object?>.unmodifiable(raw);
+    }
+    if (raw is Map) {
+      return Map<String, Object?>.unmodifiable(
+        raw.map(
+          (Object? key, Object? value) =>
+              MapEntry<String, Object?>(key.toString(), value),
+        ),
+      );
+    }
+    return null;
+  }
+}
+
+/// `GET /notifications` 的一页。
+///
+/// 与 [ApprovalsPageDto] 同一纪律：`hasMore` 与 `nextCursor` 必须自洽。
+/// 多出来的 [unreadCount] 是**整份未读数**（不是本页），由服务端与列表
+/// 同一次查询算出 —— 客户端拿它画红点，不要自己对 `items` 求和。
+class NotificationsPageDto {
+  NotificationsPageDto({
+    required this.items,
+    required this.hasMore,
+    required this.nextCursor,
+    required this.unreadCount,
+  });
+
+  factory NotificationsPageDto.fromJson(Object? raw) {
+    final Map<String, Object?> json = readObject(raw, r'$');
+    final List<NotificationDto> items =
+        readList(json, 'items', 'items').asMap().entries.map(
+              (MapEntry<int, Object?> entry) => NotificationDto.fromJson(
+                entry.value,
+                'items[${entry.key}]',
+              ),
+            ).toList(growable: false);
+    final bool hasMore = readBool(json, 'hasMore', 'hasMore');
+    final String? nextCursor =
+        readOptionalString(json, 'nextCursor', 'nextCursor');
+    final int unreadCount = readInt(json, 'unreadCount', 'unreadCount');
+
+    if (hasMore && (nextCursor == null || nextCursor.isEmpty)) {
+      throw ReadApiException.malformed(
+        'nextCursor',
+        detail: 'hasMore=true 但没有游标，客户端无法取下一页',
+      );
+    }
+    if (!hasMore && nextCursor != null) {
+      throw ReadApiException.malformed(
+        'nextCursor',
+        detail: 'hasMore=false 却给了游标',
+      );
+    }
+    if (unreadCount < 0) {
+      // 负数只可能是契约漂移；画成 0 会把「红点没了」说成正常。
+      throw ReadApiException.malformed(
+        'unreadCount',
+        detail: '未读数不能为负：$unreadCount',
+      );
+    }
+
+    return NotificationsPageDto(
+      items: items,
+      hasMore: hasMore,
+      nextCursor: nextCursor,
+      unreadCount: unreadCount,
+    );
+  }
+
+  final List<NotificationDto> items;
+  final bool hasMore;
+  final String? nextCursor;
+
+  /// **整份**未读数（不是本页未读数）。
+  final int unreadCount;
+}
+
+
 
 
 

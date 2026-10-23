@@ -264,3 +264,34 @@ class InviteRevokeDto {
   final bool revoked;
 }
 
+/// `PATCH /notifications/:id/read` 的回包（W5-L）。
+///
+/// 只有 `{id, readAt}` 两个字段：
+///   · `id` 必须等于请求的 id —— 指向别的通知说明会话串号 / 后端 bug，
+///     把「已读」写到另一条上是会让人错过消息的错；
+///   · `readAt` 是**服务端**的时间（已读再调时是**第一次**的时间），
+///     客户端不要用 `DateTime.now()` 覆盖它。
+class NotificationReadDto {
+  NotificationReadDto({required this.id, required this.readAt});
+
+  factory NotificationReadDto.fromJson(
+    Object? raw,
+    String path, {
+    required String expectedNotificationId,
+  }) {
+    final Map<String, Object?> json = readObject(raw, path);
+    final String id = readString(json, 'id', '$path.id');
+    final DateTime readAt = readDate(json, 'readAt', '$path.readAt');
+    if (id != expectedNotificationId) {
+      throw WriteApiException.malformed(
+        '$path.id',
+        detail: '回包 id=$id 与请求 $expectedNotificationId 不一致',
+      );
+    }
+    return NotificationReadDto(id: id, readAt: readAt);
+  }
+
+  final String id;
+  final DateTime readAt;
+}
+

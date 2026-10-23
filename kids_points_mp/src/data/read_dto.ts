@@ -349,6 +349,98 @@ export class ApprovalsPageDto {
   }
 }
 
+// ───────────────────────────── 站内通知（W5-L） ─────────────────────────────
+
+/**
+ * `GET /notifications` 的一行。
+ *
+ * `payload` 刻意**宽松**读取：它是「回到对应页面」的不透明夹带（目前只有
+ * `approvalId`），将来后端加别的键时，老客户端应当照常把这条列出来 ——
+ * 标题 / 正文本来就自解释。读不懂就存 null，由 `notificationApprovalId`
+ * 决定「有没有可跳转的目标」。
+ *
+ * `type` 也**不**枚举：服务端加新类型时不能整页失败（见 `mapNotification`）。
+ */
+export class NotificationDto {
+  constructor(
+    readonly id: string,
+    readonly type: string,
+    readonly title: string,
+    readonly body: string,
+    readonly payload: unknown,
+    /** 未读 ⇒ null；已读 ⇒ 具体时间。界面据此画红点 / 灰化。 */
+    readonly readAt: number | null,
+    readonly createdAt: number
+  ) {}
+
+  /** 未读 = 服务端没给 `readAt`。**只**从这一个字段推导。 */
+  get isUnread(): boolean {
+    return this.readAt === null
+  }
+
+  static fromJson(raw: unknown, path = '$'): NotificationDto {
+    const json = readObject(raw, path)
+    const id = readString(json, 'id', `${path}.id`)
+    if (id.trim() === '') {
+      throw ReadApiException.malformed(`${path}.id`, '通知 id 不能为空')
+    }
+    return new NotificationDto(
+      id,
+      readString(json, 'type', `${path}.type`),
+      readString(json, 'title', `${path}.title`),
+      readString(json, 'body', `${path}.body`),
+      json.payload,
+      readOptionalDate(json, 'readAt', `${path}.readAt`),
+      readDate(json, 'createdAt', `${path}.createdAt`)
+    )
+  }
+}
+
+/**
+ * `GET /notifications` 的一页。
+ *
+ * 与 [ApprovalsPageDto] 同一纪律：`hasMore` 与 `nextCursor` 必须自洽。
+ * 多出来的 `unreadCount` 是**整份**未读数（不是本页）—— 红点用它，
+ * 客户端不要自己对 `items` 求和（本页之外的未读会被漏掉）。
+ */
+export class NotificationsPageDto {
+  constructor(
+    readonly items: NotificationDto[],
+    readonly hasMore: boolean,
+    readonly nextCursor: string | null,
+    readonly unreadCount: number
+  ) {}
+
+  static fromJson(raw: unknown): NotificationsPageDto {
+    const json = readObject(raw, '$')
+    const items = readList(json, 'items', 'items').map((item, index) =>
+      NotificationDto.fromJson(item, `items[${index}]`)
+    )
+    const hasMore = readBool(json, 'hasMore', 'hasMore')
+    const nextCursor = readOptionalString(json, 'nextCursor', 'nextCursor')
+    const unreadCount = readInt(json, 'unreadCount', 'unreadCount')
+
+    if (hasMore && (nextCursor === null || nextCursor === '')) {
+      throw ReadApiException.malformed(
+        'nextCursor',
+        'hasMore=true 但没有游标，客户端无法取下一页'
+      )
+    }
+    if (!hasMore && nextCursor !== null) {
+      throw ReadApiException.malformed('nextCursor', 'hasMore=false 却给了游标')
+    }
+    if (unreadCount < 0) {
+      // 负数只可能是契约漂移；画成 0 会把「红点没了」说成正常。
+      throw ReadApiException.malformed(
+        'unreadCount',
+        `未读数不能为负：${unreadCount}`
+      )
+    }
+
+    return new NotificationsPageDto(items, hasMore, nextCursor, unreadCount)
+  }
+}
+
 /**
  * `GET /trash` 的一行（W5-F）。
  *

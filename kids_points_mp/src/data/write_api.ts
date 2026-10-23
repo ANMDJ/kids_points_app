@@ -14,6 +14,7 @@ import {
   ChildProfileDto,
   InviteRevokeDto,
   MemberRemoveDto,
+  NotificationReadDto,
   TrashTargetDto,
   WrittenRecordDto
 } from './write_dto'
@@ -305,6 +306,17 @@ export interface WriteApi {
    * 理解成「这次真的改了一行」，也不要拿它去覆盖别的字段。
    */
   revokeInvite(inviteId: string): Promise<InviteRevokeDto>
+
+  /**
+   * 标记一条站内通知已读（`PATCH /notifications/:id/read`，W5-L）。
+   *
+   * 幂等：已读的再标记仍是 200，`readAt` 保持**第一次**的时间。
+   * 404 `NOTIFICATION_NOT_FOUND` = 不存在**或**不是发给我的（同一句话，
+   * 不泄露别人那条的 id）—— 调用方据此刷新列表，而不是无限重试。
+   *
+   * 没有请求体：id 全在路径里，目标明确，不需要幂等键。
+   */
+  markNotificationRead(notificationId: string): Promise<NotificationReadDto>
 }
 
 /** `POST /records/check-in` 与 `POST /records/:id/reverse` 的客户端。 */
@@ -777,6 +789,18 @@ export class WriteApiClient implements WriteApi {
     )
   }
 
+  async markNotificationRead(
+    notificationId: string
+  ): Promise<NotificationReadDto> {
+    const id = this.requireId(notificationId, 'notificationId')
+    return this.send(
+      'PATCH',
+      `/notifications/${encodeURIComponent(id)}/read`,
+      null,
+      (raw) => this.parseNotificationRead(raw, id)
+    )
+  }
+
   private requireId(value: string, name: string): string {
     const id = value.trim()
     if (id === '') throw new Error(`${name} 不能为空`)
@@ -881,6 +905,20 @@ export class WriteApiClient implements WriteApi {
   ): InviteRevokeDto {
     try {
       return InviteRevokeDto.fromJson(raw, '$', expectedInviteId)
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseNotificationRead(
+    raw: unknown,
+    expectedNotificationId: string
+  ): NotificationReadDto {
+    try {
+      return NotificationReadDto.fromJson(raw, '$', expectedNotificationId)
     } catch (error) {
       if (error instanceof ReadApiException) {
         throw WriteApiException.malformed('$', error.detail ?? undefined)

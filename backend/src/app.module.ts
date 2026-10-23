@@ -87,7 +87,12 @@ import { WishesModule } from './wishes/wishes.module'
     //   （真查 DeviceSession，身份/角色由库给出）；没有 ⇒ 501（无库时连 PrismaService 都不建）。
     DeviceSessionModule.register(),
     AuditModule,
-    NotificationsModule,
+    // ★ W5-L（2026-10-23）：站内通知中心 `GET /notifications` /
+    //   `PATCH /notifications/:id/read`。有库 ⇒ PrismaNotificationsRepository；
+    //   无库 ⇒ 501（不返回空列表冒充「你没有通知」，也不假装标记成功）。
+    //   ⚠ 这里与 `ApprovalsModule` 内部的导入**必须**推断出同一个 hasDatabase
+    //   （两者都走 `hasDatabaseUrl()`，且 main.ts 第一行已加载 dotenv）。
+    NotificationsModule.register(),
     // ★ W3-C：动态模块 —— 有库 ⇒ PrismaIdempotencyRepository（唯一约束兜底），
     //   无库 ⇒ 501（只在请求真的带 `Idempotency-Key` 时触发）。
     IdempotencyModule.register()

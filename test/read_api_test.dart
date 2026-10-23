@@ -151,6 +151,148 @@ void main() {
       expect(() => client.fetchRecords(limit: 0), throwsArgumentError);
       expect(() => client.fetchRecords(limit: 201), throwsArgumentError);
     });
+  });
+
+  group('通知 DTO / ReadApiClient.fetchNotifications（W5-L）', () {
+    Map<String, Object?> notificationJson({
+      String id = 'n-1',
+      String type = 'approval.approved',
+      String title = '申请通过了',
+      String body = '「去动物园」已经通过',
+      Object? payload = const <String, Object?>{'approvalId': 'ap-1'},
+      String? readAt,
+      String createdAt = '2026-10-23T02:00:00.000Z',
+    }) =>
+        <String, Object?>{
+          'id': id,
+          'type': type,
+          'title': title,
+          'body': body,
+          'payload': payload,
+          'readAt': readAt,
+          'createdAt': createdAt,
+        };
+
+    String notificationsPageJson({
+      List<Map<String, Object?>> items = const <Map<String, Object?>>[],
+      bool hasMore = false,
+      String? nextCursor,
+      int unreadCount = 0,
+    }) =>
+        jsonEncode(<String, Object?>{
+          'items': items,
+          'hasMore': hasMore,
+          'nextCursor': nextCursor,
+          'unreadCount': unreadCount,
+        });
+
+    test('GET /notifications：limit 必带、cursor 原样回传、带两个身份头', () async {
+      final List<Uri> calls = <Uri>[];
+      final _FakeTransport transport = _FakeTransport((Uri uri) async {
+        calls.add(uri);
+        return ReadHttpResponse(
+          statusCode: 200,
+          body: notificationsPageJson(),
+        );
+      });
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      await client.fetchNotifications();
+      await client.fetchNotifications(limit: 5, cursor: 'CUR/1+2=');
+
+      expect(calls[0].path, '/api/notifications');
+      expect(calls[0].queryParameters['limit'], '20');
+      expect(calls[0].queryParameters.containsKey('cursor'), isFalse);
+      expect(calls[1].queryParameters['limit'], '5');
+      expect(calls[1].queryParameters['cursor'], 'CUR/1+2=');
+      // 收件人恒为会话本人：请求里没有「看谁的」这种参数。
+      expect(calls[1].queryParameters.containsKey('recipientUserId'), isFalse);
+      expect(transport.headers[0][kDeviceIdHeader], 'device-1');
+      expect(transport.headers[0][kChildIdHeader], 'child-1');
+    });
+
+    test('limit 越界在发请求前就拒绝（与后端 1–100 同口径）', () async {
+      final _FakeTransport transport = _FakeTransport(
+        (Uri uri) async => ReadHttpResponse(statusCode: 200, body: '{}'),
+      );
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      expect(() => client.fetchNotifications(limit: 0), throwsArgumentError);
+      expect(() => client.fetchNotifications(limit: 101), throwsArgumentError);
+      expect(transport.headers, isEmpty);
+    });
+
+    test('未读只由 readAt==null 推导；读不懂的 payload 不影响这行被列出', () async {
+      final _FakeTransport transport = _FakeTransport(
+        (Uri uri) async => ReadHttpResponse(
+          statusCode: 200,
+          body: notificationsPageJson(
+            unreadCount: 1,
+            items: <Map<String, Object?>>[
+              notificationJson(),
+              notificationJson(
+                id: 'n-2',
+                type: 'approval.rejected',
+                readAt: '2026-10-23T03:00:00.000Z',
+                // 服务端加新字段 / 结构变化时不能把整行吞掉。
+                payload: 'not-an-object',
+              ),
+              // 未知 type 也要列出来（老客户端不认类型，但标题正文可读）。
+              notificationJson(id: 'n-3', type: 'system.announcement'),
+            ],
+          ),
+        ),
+      );
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      final NotificationsPageDto page = await client.fetchNotifications();
+
+      expect(page.unreadCount, 1);
+      expect(page.items.map((NotificationDto item) => item.id),
+          <String>['n-1', 'n-2', 'n-3']);
+      expect(page.items[0].isUnread, isTrue);
+      expect(page.items[0].approvalId, 'ap-1');
+      expect(page.items[1].isUnread, isFalse);
+      expect(page.items[1].readAt, DateTime.utc(2026, 10, 23, 3));
+      expect(page.items[1].payload, isNull);
+      expect(page.items[1].approvalId, isNull);
+      expect(page.items[0].createdAt.isUtc, isTrue);
+    });
+
+    test('hasMore 无游标 / 未读数为负 ⇒ malformed（不猜成 0 / 空页）', () {
+      expect(
+        () => NotificationsPageDto.fromJson(<String, Object?>{
+          'items': <Object?>[],
+          'hasMore': true,
+          'nextCursor': null,
+          'unreadCount': 0,
+        }),
+        throwsA(isA<ReadApiException>().having(
+          (ReadApiException e) => e.kind,
+          'kind',
+          ReadFailureKind.malformed,
+        )),
+      );
+      expect(
+        () => NotificationsPageDto.fromJson(<String, Object?>{
+          'items': <Object?>[],
+          'hasMore': false,
+          'nextCursor': null,
+          'unreadCount': -1,
+        }),
+        throwsA(isA<ReadApiException>().having(
+          (ReadApiException e) => e.userMessage,
+          'userMessage',
+          contains('unreadCount'),
+        )),
+      );
+    });
+  });
+
+
   group('ReadApiClient.fetchTrash / mapTrash：回收站（W5-F）', () {
     String trashJson(List<Map<String, Object?>> items) =>
         jsonEncode(<String, Object?>{'items': items});
@@ -267,9 +409,6 @@ void main() {
         throwsA(isA<ReadApiException>()),
       );
     });
-  });
-
-
   });
 
   group('AppStore：keyset 加载更多', () {

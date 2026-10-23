@@ -255,6 +255,30 @@ class ReadApiClient {
 
     return ApprovalsPageDto.fromJson(await _get(path, query));
   }
+  /// `GET /notifications`：**我自己的**站内通知（W5-L）。
+  ///
+  /// 收件人恒为会话本人 —— 请求里没有 `recipientUserId`，客户端也**没有**
+  /// 参数可以指定「看谁的」（后端按 `kpActor.userId` 收口）。
+  ///
+  /// 第一页传 `cursor: null`，之后把 [NotificationsPageDto.nextCursor]
+  /// 原样带回；`unreadCount` 是**整份**未读数（不是本页），红点用它。
+  ///
+  /// `limit` 上限 100 与后端 `ListNotificationsQueryDto` 同口径：越界在本地
+  /// 就抛 `ArgumentError`，不浪费一次必然 400 的往返。
+  Future<NotificationsPageDto> fetchNotifications({
+    int limit = 20,
+    String? cursor,
+  }) async {
+    if (limit < 1 || limit > 100) {
+      throw ArgumentError.value(limit, 'limit', '必须在 1–100 之间（后端 DTO 同口径）');
+    }
+    final Map<String, String> query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+
+    return NotificationsPageDto.fromJson(await _get('/notifications', query));
+  }
+
+
 
   Future<Object?> _get(String path, [Map<String, String>? query]) async {
     final String? configError = config.validationError;

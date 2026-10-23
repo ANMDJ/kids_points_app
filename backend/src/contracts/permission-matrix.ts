@@ -80,6 +80,15 @@ export const PERMISSION_MATRIX = {
   // 这个按 `requesterUserId = 本人`，那个按 `childId` 全量。
   view_own_approvals: { guardian: 'ALLOW', child: 'ALLOW' },
 
+  /* ── 通知（W5-L）───────────────────────────────────────── */
+  // 站内通知：**只有收件人自己那条**（按会话 `userId` 收口），两个孩子都放行 ——
+  // 藏起来只会让「审批被拒了」永远没人知道。注意它**不是** `review_approvals`：
+  // 这里看不到别人家 / 别人的通知，也不是审批收件箱。
+  view_notifications: { guardian: 'ALLOW', child: 'ALLOW' },
+  // 标记已读：只改 `readAt` 一列，不改账本 / 审批状态 ⇒ 两个角色都可。
+  // 服务端不接受「替别人读」：`recipientUserId` 来自会话，不是请求体。
+  read_notifications: { guardian: 'ALLOW', child: 'ALLOW' },
+
   /* ── 成员与设置 ───────────────────────────────────────── */
   // 成员管理（W5-H）：**看得到成员**对孩子开放（"家里有谁"不是敏感数据，
   // 藏起来只会让界面出现一个匿名家长）；**改角色 / 移出**只给家长 ——
@@ -98,7 +107,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 31 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 33 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**

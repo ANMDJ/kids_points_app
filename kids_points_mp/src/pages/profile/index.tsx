@@ -1,5 +1,5 @@
 import { Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
+import Taro, { useDidShow } from '@tarojs/taro'
 
 import AppBottomNav from '../../components/AppBottomNav'
 import AppCard from '../../components/AppCard'
@@ -10,8 +10,10 @@ import ReadStatusBanner from '../../components/ReadStatusBanner'
 import InviteSheet from '../../sheets/InviteSheet'
 import MemberSheet from '../../sheets/MemberSheet'
 import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
+import NotificationsSheet from '../../sheets/NotificationsSheet'
 import TrashSheet from '../../sheets/TrashSheet'
 import { ALLOW_DEMO_RESET, useStore } from '../../data/store'
+import { notificationBadgeText } from '../../data/notification'
 import { withAlpha } from '../../utils/color'
 import { pushPage, switchTab } from '../../utils/nav'
 import { prompt, toast } from '../../utils/toast'
@@ -66,6 +68,17 @@ export default function Profile() {
   const inviteSheet = useSheet()
   // W5-J：我的申请。与家长收件箱分开 —— 这里只看「我提交的」，动作是撤回。
   const myApplicationsSheet = useSheet()
+  // W5-L：站内通知中心。未读数由服务端下发的整份 `unreadCount` 决定；
+  // 只有进入「我的」页时才单独查一次（`limit=1`），不拖慢首页刷新。
+  const notificationSheet = useSheet()
+  const unreadNotifications = store.unreadNotificationCount
+  const badgeText = notificationBadgeText(unreadNotifications)
+
+  useDidShow(() => {
+    // 与 Flutter `home_shell` 切到「我的」tab 时同义：只换红点，不动列表。
+    // 预览模式 / 未配置后端时 store 内部直接返回（不发一次注定 401 的请求）。
+    void store.refreshUnreadNotificationCount()
+  })
 
   const handleRename = async () => {
     // 只读拦截交给 store（`submitRenameChild` 三种世界各自给结论），
@@ -180,6 +193,27 @@ export default function Profile() {
             <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
+              onClick={() => notificationSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#f6c64a', 34 / 255) }}
+              >
+                {/* 图标名集合是跨端契约（三份逐字相等），没有 bell；
+                    `stories` 是最贴近「消息 / 动态」的既有图案。 */}
+                <Icon name='stories' size={19} color='#f6c64a' />
+              </View>
+              <Text className='kp-profile__menu-label'>消息</Text>
+              {badgeText === '' ? null : (
+                <View className='kp-profile__badge'>
+                  <Text className='kp-profile__badge-text'>{badgeText}</Text>
+                </View>
+              )}
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
+            <View
+              className='kp-profile__menu'
               onClick={() => memberSheet.show()}
             >
               <View
@@ -243,6 +277,17 @@ export default function Profile() {
         {/* 修 C9：回收站弹窗（SheetFrame 本身就是覆盖层，挂在页面根节点内即可） */}
         {trashSheet.open ? (
           <TrashSheet visible={trashSheet.visible} onClose={trashSheet.hide} />
+        ) : null}
+        {/* W5-L：站内通知弹窗（打开时才拉 `GET /notifications`）。
+            ★ 顺序有意义：两个弹窗都是 `z-index: 900` 的 fixed 层，DOM 靠后的在上。
+              通知面板排在「我的申请」**之前**，从消息里「查看申请」打开申请面板时
+              才能盖住它；关掉申请面板就回到消息列表。 */}
+        {notificationSheet.open ? (
+          <NotificationsSheet
+            visible={notificationSheet.visible}
+            onClose={notificationSheet.hide}
+            onOpenApplications={() => myApplicationsSheet.show()}
+          />
         ) : null}
         {/* W5-J：我的申请弹窗（打开时才拉 `GET /approvals/mine`） */}
         {myApplicationsSheet.open ? (

@@ -653,3 +653,134 @@
   padding-bottom: f2r(4);
 }
 
+// ───────────────────────────────────────────── 站内通知（W5-L）
+// 行**不隐藏已读**，只用颜色区分：未读 = 深色 + 圆点，已读 = 次要色。
+.kp-notif__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.kp-notif__row {
+  margin-bottom: f2r(10);
+  padding: f2r(14) f2r(16);
+  border-radius: f2r(16);
+  background-color: $surface;
+}
+
+.kp-notif__row:active {
+  opacity: 0.9;
+}
+
+.kp-notif__head {
+  display: flex;
+  align-items: flex-start;
+}
+
+// 未读圆点：8x8，顶部对齐标题首行
+.kp-notif__dot {
+  flex-shrink: 0;
+  width: f2r(8);
+  height: f2r(8);
+  margin: f2r(6) f2r(8) 0 0;
+  border-radius: 50%;
+  background-color: $point-spend;
+}
+
+.kp-notif__title {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(14.5);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-notif__row.is-read .kp-notif__title {
+  font-weight: 600;
+  color: $text-secondary;
+}
+
+.kp-notif__time {
+  flex-shrink: 0;
+  margin-left: f2r(8);
+  font-size: f2r(11);
+  color: $text-hint;
+}
+
+.kp-notif__body {
+  display: block;
+  margin-top: f2r(4);
+  font-size: f2r(12.5);
+  line-height: 1.45;
+  color: $text-primary;
+}
+
+.kp-notif__row.is-read .kp-notif__body {
+  color: $text-secondary;
+}
+
+.kp-notif__foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: f2r(8);
+}
+
+.kp-notif__chip {
+  padding: f2r(7) f2r(14);
+  border-radius: f2r(999);
+  background-color: $primary-soft;
+}
+
+.kp-notif__chip:active {
+  opacity: 0.8;
+}
+
+.kp-notif__chip.is-disabled,
+.kp-notif__chip.is-disabled:active {
+  opacity: 0.5;
+}
+
+.kp-notif__chip-text {
+  font-size: f2r(12.5);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-notif__status-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: f2r(10);
+  padding: f2r(10) f2r(14);
+  border-radius: f2r(12);
+  background-color: $primary-soft;
+}
+
+.kp-notif__error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(12.5);
+  color: $point-spend;
+}
+
+.kp-notif__status-row .kp-notif__chip {
+  margin-left: f2r(8);
+  padding: f2r(6) f2r(12);
+}
+
+.kp-notif__empty {
+  padding: f2r(24) 0;
+  text-align: center;
+}
+
+.kp-notif__empty-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-notif__more {
+  display: flex;
+  justify-content: center;
+  margin-top: f2r(4);
+  padding-bottom: f2r(4);
+}
+
+

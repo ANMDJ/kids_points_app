@@ -11,6 +11,7 @@ import 'points_rule_screen.dart';
 import 'sheets/invite_sheet.dart';
 import 'sheets/member_sheet.dart';
 import 'sheets/my_applications_sheet.dart';
+import 'sheets/notifications_sheet.dart';
 import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
@@ -22,6 +23,8 @@ class ProfileScreen extends StatelessWidget {
     final AppStore store = AppScope.of(context);
     // 修 C9：回收站入口固定在“我的”页（两端同一处）—— 入口上直接显示待处理条数。
     final int trashCount = store.trashItems().length;
+    // W5-L：未读消息数（服务端下发的整份计数；0 时不画红点）。
+    final int unreadNotifications = store.unreadNotificationCount;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
     // live 模式下昵称已经接了写端点（`PATCH /child`，W5-E）、回收站也接了
@@ -162,6 +165,21 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.primaryDeep,
                     label: '我的申请',
                     onTap: () => showMyApplicationsSheet(context),
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.notifications_none_rounded,
+                    // W5-L：站内通知中心。审批出结果时服务端会给申请人写一条，
+                    // 未读数由 `unreadNotificationCount` 下发的整份计数决定。
+                    color: AppColors.starYellow,
+                    label: '消息',
+                    badgeCount: unreadNotifications,
+                    onTap: () => showNotificationSheet(context),
                   ),
                   const Divider(
                     height: 1,
@@ -358,12 +376,17 @@ class _MenuRow extends StatelessWidget {
     required this.color,
     required this.label,
     required this.onTap,
+    this.badgeCount = 0,
   });
 
   final IconData icon;
   final Color color;
   final String label;
   final VoidCallback onTap;
+
+  /// 未读角标数量（W5-L）；0 表示不画。**只**用它表达「有多少条没读」，
+  /// 不要另存一个布尔值 —— 两个字段迟早互相矛盾。
+  final int badgeCount;
 
   @override
   Widget build(BuildContext context) {
@@ -384,13 +407,44 @@ class _MenuRow extends StatelessWidget {
             ),
             const SizedBox(width: 14),
             Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
+              child: Row(
+                children: <Widget>[
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                  if (badgeCount > 0) ...<Widget>[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      constraints: const BoxConstraints(minWidth: 18),
+                      decoration: BoxDecoration(
+                        color: AppColors.pointSpend,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        // 99+ 之后不再精确报数：入口只需要说「有一堆没读」。
+                        badgeCount > 99 ? '99+' : '$badgeCount',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          height: 1.3,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             const Icon(

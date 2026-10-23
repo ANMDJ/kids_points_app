@@ -25,9 +25,24 @@ import {
 const VERDICTS: Verdict[] = ['ALLOW', 'REQUIRE_APPROVAL', 'DENY']
 const ROLES: Role[] = ['guardian', 'child']
 
-test('规模与唯一性：32 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
-  assert.equal(ALL_ACTIONS.length, 32)
-  assert.equal(new Set(ALL_ACTIONS).size, 32, '动作键有重复')
+test('规模与唯一性：34 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
+  assert.equal(ALL_ACTIONS.length, 34)
+  assert.equal(new Set(ALL_ACTIONS).size, 34, '动作键有重复')
+})
+
+test('W5-L 站内通知：两侧都能看自己的、也能标已读；viewer 仍 fail-closed', () => {
+  // 通知的收件人是**会话 userId**（不是 childId 全量、也不是别人的通知）。
+  // 藏起来只会让「审批被拒了」永远没人知道 —— 这与 `view_members` 同一判断：
+  // 数据里有别人家的东西才需要收口，通知里没有。
+  assert.equal(resolveVerdict('view_notifications', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('view_notifications', 'child'), 'ALLOW')
+  assert.equal(resolveVerdict('read_notifications', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('read_notifications', 'child'), 'ALLOW')
+  // viewer 没有列 ⇒ fail-closed（与其他动作同一条规则，不因为「只是通知」开口子）。
+  assert.equal(resolveVerdict('view_notifications', 'viewer'), 'DENY')
+  assert.equal(resolveVerdict('read_notifications', 'viewer'), 'DENY')
+  // ★ 与审批收件箱**刻意分开**：孩子不能因为「能看通知」顺带拿到 `review_approvals`。
+  assert.equal(resolveVerdict('review_approvals', 'child'), 'DENY')
 })
 
 test('W5-J 我的申请：两个角色都能看自己提的；viewer 仍 fail-closed', () => {

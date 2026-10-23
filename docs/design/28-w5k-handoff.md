@@ -147,8 +147,9 @@ W5-K 把「审批结果 → 通知」这一段做成**渠道无关的端口**，
 - **没有设备 token 上报端点**：`DeviceToken` 表 W0 已建（`platform` / `token` / `active` /
   `lastSeenAt` / `revokedAt`），但**没有一条写入路径**；`no_device_token` 目前只是端口契约的一部分，
   没有任何适配器会返回它。
-- **没有站内通知**：`Notification` 表（`type/title/body/payload/readAt`）同样空转 —— 没有写入、
-  没有列表端点、没有未读红点。审批结果不会出现在任何「消息」页。
+- **没有站内通知的投递保证**：`Notification` 表在 W5-L 已开始写入（`decide()` 之后、事务外）并
+  有列表 / 已读端点与双端「消息」面板，但**没有 outbox**：进程在写完前崩溃 ⇒ 那一 tick 永久丢失，
+  且仍要用户打开 App 才看得到（见 §5.2）。
 - **没有可靠投递**：无 outbox / 队列 / 重试 / 去重 / 送达回执。进程在提交后崩溃 ⇒ 通知永久丢失。
 - **没有告警与指标**：`provider_error` 只写 error 日志；没有计数器、没有失败率看板。
 - **没有偏好 / 免打扰**：也不区分「家长批准」与「家长拒绝」的文案。
@@ -172,12 +173,32 @@ W5-K 把「审批结果 → 通知」这一段做成**渠道无关的端口**，
 6. **要可靠投递再加 outbox**：提交后写入 outbox（同事务写 outbox 是允许的，**发送**必须在事务外）
    + 后台扫描 + 去重键。当前实现明确是 best-effort，不要在它上面叠加「保证送达」的承诺。
 
-### 5.2 一个更省事的方向：先做站内通知
+### 5.2 站内通知（已落地：W5-L）
 
-`Notification` 表已存在且不依赖任何第三方凭据。审批提交后写一条站内通知
-（**仍然在账本事务之外**，`01` §4 对「通知」一视同仁），再补 `GET /notifications` +
-`PATCH /notifications/:id/read`，双端就能有「消息」页与红点。
-它的缺点是仍要用户打开 App —— 所以它是推送的补充，不是替代。
+`Notification` 表已不空转。`decide()` 推送端口返回之后**另写一条站内通知**
+（仍在账本事务之外，`01` §4 对「通知」一视同仁），收件人恒为 `requesterUserId`，
+`approved` / `rejected` 各一条；自批 / 撤回 / 过期不写。
+
+- 端点：`GET /notifications`（键集分页，`limit` 1–100，默认 20；回包带整份
+  `unreadCount` 与 `nextCursor`/`hasMore`）+ `PATCH /notifications/:id/read`
+  （无请求体，幂等：已读再调仍 200 并回第一次的 `readAt`）。
+  两条都在矩阵里（`view_notifications` / `read_notifications`，guardian 与 child 双 ALLOW）。
+- 收件人只来自会话：别人的 id 与不存在的 id 返回**同一句** 404
+  `NOTIFICATION_NOT_FOUND`，不泄露「存在但不属于你」。
+- 客户端：Flutter `notifications_sheet.dart` + `AppStore`（列表 / 红点两条 epoch）、
+  小程序 `sheets/NotificationsSheet.tsx` + `store.ts`；「我的」页入口带未读数角标
+  （`limit=1` 只换红点，不动列表；> 99 显示 `99+`）。
+- 证据：`backend/test-db/notifications-db.dbtest.ts`（真库 × HTTP：DI、顺序 / 分页 /
+  归属、幂等、404、追加写入）；双端 `notifications_test.dart` / 小程序 typecheck。
+
+**边界（仍未做，别把它读成推送）**：没有 outbox，进程在写完通知前崩溃 ⇒ 这条就没了；
+没有「已读全部」；没有按类型过滤 / 偏好 / 免打扰；**仍然需要用户打开 App 才看得到** ——
+所以它是推送的补充，不是替代。§5.1 的六步一件都没被这一步替代。
+
+本轮复跑（W5-L 收口时）：`typecheck` / `typecheck:tests` → 0；`npm test` → **576/576**（31 文件，
+W5-K 的 565 之上 **+11** 条通知用例）；`npm run test:db` → **189/189**（12 文件，含
+`notifications-db.dbtest.ts`）；`flutter analyze` → 0、`flutter test` → **199/199**；
+小程序 `tsc --noEmit` → 0、`npm run build:weapp` → 成功。
 
 ## 6. 复跑基线
 

@@ -16,6 +16,7 @@ import {
   mapInvites,
   mapMember,
   mapMembers,
+  mapNotificationsPage,
   mapRecord,
   mapRecordsPage,
   mapRule,
@@ -31,6 +32,8 @@ import type {
   WishDto
 } from './read_dto'
 import type { ApprovalFilter, ApprovalInboxItem, ApprovalsPage } from './approval'
+import type { NotificationItem } from './notification'
+import { isNotificationUnread } from './notification'
 import {
   approvalBlockedReason,
   approvalFilterQuery,
@@ -258,6 +261,40 @@ export class AppStore {
 
   /** 是否正在生成邀请码（表单按钮据此禁用并显示「生成中…」）。 */
   private creatingInviteValue = false
+
+  // ------------------------------------------- 站内通知（W5-L，服务端）
+  //
+  // 与审批收件箱同策略：**打开「消息」面板才拉整页**；「我的」页只多一条
+  // `limit=1` 的红点查询（`refreshUnreadNotificationCount`），不把整页列表
+  // 塞进每次首页刷新 —— 消息是低频页面。
+  //
+  // 未读只有一种事实源：行上的 `readAt === null`；数量用服务端下发的整份
+  // `unreadCount`，**不**对 `items` 求和（本页之外的未读会被漏掉，
+  // 红点就会在翻页时莫名变少）。
+
+  /** 一页消息条数（后端上限 100，20 是首屏够用的折中）。 */
+  private static readonly notificationsPageSize = 20
+
+  private notificationItems: NotificationItem[] = []
+  private notificationStatusValue: ReadStatus = 'idle'
+  private notificationErrorValue: ReadApiException | null = null
+  private hasMoreNotificationsValue = false
+  private nextNotificationCursorValue: string | null = null
+
+  /** 整份未读数（服务端下发）。红点用；0 不画。 */
+  private unreadNotificationCountValue = 0
+
+  /** 正在标记已读的通知 id；非 null 时该行禁用（防双击）。 */
+  private busyNotificationIdValue: string | null = null
+
+  /** 列表会话的 epoch：整页刷新作废在途响应（翻页**不**自增）。 */
+  private notificationEpoch = 0
+
+  /**
+   * 红点单查的 epoch：列表刷新 / 新一次红点查询都会 +1，
+   * 避免一个更早的红点响应把刚拉到的未读数盖回旧值。
+   */
+  private notificationBadgeEpoch = 0
 
   /**
    * 每次「整页刷新 / 切分类」都 +1；在途的旧响应据此丢弃（防串页）。
@@ -586,6 +623,56 @@ export class AppStore {
     return '只读模式：这个操作暂时写不进去（写客户端未就绪或尚未接后端），没有保存。'
   }
 
+  // ------------------------------------------------- 站内通知（W5-L）
+
+  /** 已加载的通知（服务端顺序：新通知在前）。 */
+  get notifications(): NotificationItem[] {
+    return this.notificationItems.slice()
+  }
+
+  /** 通知列表的加载状态（与首页 / 审批 / 回收站的状态分开）。 */
+  get notificationsStatus(): ReadStatus {
+    return this.notificationStatusValue
+  }
+
+  /**
+   * 通知列表的加载错误。403 ⇒ 当前身份没有 `view_notifications` ——
+   * 面板据此说「消息没能加载」，**不能**画成「还没有消息」。
+   */
+  get notificationsError(): ReadApiException | null {
+    return this.notificationErrorValue
+  }
+
+  /** 未读通知总数 —— 红点用它。0 时页面不画红点。 */
+  get unreadNotificationCount(): number {
+    return this.unreadNotificationCountValue
+  }
+
+  /** 是否还有下一页（「加载更多」据此显示）。 */
+  get notificationsHasMore(): boolean {
+    return this.hasMoreNotificationsValue
+  }
+
+  /** 正在标记已读的通知 id；非 null 时该行禁用。 */
+  get busyNotificationId(): string | null {
+    return this.busyNotificationIdValue
+  }
+
+  /**
+   * 标记已读是否被只读拦截。
+   *
+   * 与 [isReadOnly] 分开：live 模式下这条已经接了后端，只有**没注入
+   * 写客户端**时才拦。
+   */
+  get isNotificationWriteReadOnly(): boolean {
+    return this.isLiveMode && this.writeApi === null
+  }
+
+  /** 只读模式下通知写操作的文案 —— 页面直接展示，不另编理由。 */
+  get notificationReadOnlyWriteMessage(): string {
+    return '只读模式：标记已读暂时写不进去（写客户端未就绪），这次没有保存到服务器。'
+  }
+
   /**
    * 记录页要展示的流水：
    *   · 预览模式：对本地流水按分类过滤（原逻辑）；
@@ -647,6 +734,7 @@ export class AppStore {
     this.resetTrash()
     this.resetMembers()
     this.resetInvites()
+    this.resetNotifications()
   }
 
   /** 载入演示数据 —— 只由 [resetToSeed] 调用（开发环境 / 测试夹具）。 */
@@ -667,6 +755,7 @@ export class AppStore {
     this.resetTrash()
     this.resetMembers()
     this.resetInvites()
+    this.resetNotifications()
   }
 
   /**
@@ -1031,6 +1120,211 @@ export class AppStore {
       cursor: input.cursor ?? null
     })
     return mapApprovalsPage(dto)
+  }
+
+  // ------------------------------------------------ 站内通知（W5-L）
+
+  /**
+   * 拉取通知第一页（`GET /notifications`）—— **打开「消息」面板时**调用。
+   *
+   * 预览模式没有真实的站内通知（行由服务端在审批出结果时写入）——
+   * 直接进入 `ready` 空态：面板据此说「预览模式没有站内消息」，而不是发
+   * 一个只会 401 的请求，再把 401 说成「网络错误」。
+   *
+   * 失败**不清空**上一次成功的结果：把列表清空会变成「消息都没了」，
+   * 而实际可能只是断网；错误经 [notificationsError] 上报。
+   */
+  async refreshNotifications(): Promise<void> {
+    const api = this.readApi
+    if (api === null) {
+      this.notificationEpoch++
+      this.notificationBadgeEpoch++
+      this.notificationItems = []
+      this.notificationStatusValue = 'ready'
+      this.notificationErrorValue = null
+      this.nextNotificationCursorValue = null
+      this.hasMoreNotificationsValue = false
+      this.unreadNotificationCountValue = 0
+      this.persist()
+      return
+    }
+
+    const epoch = ++this.notificationEpoch
+    this.notificationStatusValue = 'loading'
+    this.notificationErrorValue = null
+    this.persist()
+
+    try {
+      const page = mapNotificationsPage(
+        await api.fetchNotifications({ limit: AppStore.notificationsPageSize })
+      )
+      if (epoch !== this.notificationEpoch) return
+
+      // 列表刷新拿到的是整页 + 整份未读数：同时让在途的红点单查失效，
+      // 否则一个更早的红点响应可能把刚拉到的未读数盖回旧值。
+      this.notificationBadgeEpoch++
+      this.notificationItems = page.items
+      this.nextNotificationCursorValue = page.nextCursor
+      this.hasMoreNotificationsValue = page.hasMore
+      this.unreadNotificationCountValue = page.unreadCount
+      this.notificationStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.notificationEpoch) return
+      this.notificationErrorValue = toReadApiException(error)
+      this.notificationStatusValue = 'error'
+    }
+    this.persist()
+  }
+
+  /**
+   * 拉下一页（面板点「加载更多」时调用）。
+   *
+   * 没有下一页 / 上一页还在途时**直接返回**，不发一个游标为空的请求
+   * （那会被服务端判成第一页，把列表打乱）。
+   */
+  async loadMoreNotifications(): Promise<void> {
+    const api = this.readApi
+    if (api === null) return
+    const cursor = this.nextNotificationCursorValue
+    if (!this.hasMoreNotificationsValue || cursor === null || cursor === '') return
+    if (this.notificationStatusValue === 'loading') return
+
+    // 不自增 epoch：这是同一个「列表会话」的下一页，不该作废第一页。
+    const epoch = this.notificationEpoch
+    this.notificationStatusValue = 'loadingMore'
+    this.notificationErrorValue = null
+    this.persist()
+
+    try {
+      const page = mapNotificationsPage(
+        await api.fetchNotifications({
+          limit: AppStore.notificationsPageSize,
+          cursor
+        })
+      )
+      if (epoch !== this.notificationEpoch) return
+
+      // 去重：两次请求之间若有新通知写入，键集分页可能让同一行出现在两页。
+      const known = new Set(this.notificationItems.map((item) => item.id))
+      page.items.forEach((item) => {
+        if (known.has(item.id)) return
+        known.add(item.id)
+        this.notificationItems.push(item)
+      })
+      this.nextNotificationCursorValue = page.nextCursor
+      this.hasMoreNotificationsValue = page.hasMore
+      this.unreadNotificationCountValue = page.unreadCount
+      this.notificationStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.notificationEpoch) return
+      this.notificationErrorValue = toReadApiException(error)
+      this.notificationStatusValue = 'error'
+    }
+    this.persist()
+  }
+
+  /**
+   * 只刷新未读红点（`GET /notifications?limit=1`）—— 进「我的」页时调用。
+   *
+   * ★ 为什么单独一条：红点要出现在「消息」入口上，而整页列表只在面板打开时
+   *   才需要。这里只用 `limit=1` 换 `unreadCount`，**不覆盖**列表现有内容。
+   *
+   * ★ 失败**保持上一次的值**，绝不把「取不到」画成「没有未读」——
+   *   红点消失比红点迟到更糟（用户会以为已经看完了）。
+   */
+  async refreshUnreadNotificationCount(): Promise<void> {
+    const api = this.readApi
+    if (api === null) return
+    const epoch = ++this.notificationBadgeEpoch
+    try {
+      const page = mapNotificationsPage(await api.fetchNotifications({ limit: 1 }))
+      if (epoch !== this.notificationBadgeEpoch) return
+      this.unreadNotificationCountValue = page.unreadCount
+      this.persist()
+    } catch {
+      // 红点是提示性信息：静默失败即可（面板打开时还有一次完整列表可重试）。
+    }
+  }
+
+  /**
+   * 标记一条通知已读（`PATCH /notifications/:id/read`）。成功返回 null。
+   *
+   * 只把**这一行**改成本地已读，并把未读数减一 —— 不重拉整页：
+   * 重拉会让「刚点开的那条」在列表里跳位置，用户会以为点错了行。
+   * `readAt` 用**服务端**回包（已读再调时是第一次的时间）。
+   *
+   * 404 = 这条通知已经不在（服务端清过 / 不是发给我的）：刷新列表，
+   * 让界面与服务端一致，而不是留一条点不动的行。
+   */
+  async markNotificationRead(notification: NotificationItem): Promise<string | null> {
+    if (!this.isLiveMode) return '预览模式没有真实的站内通知，这次没有提交。'
+    const api = this.writeApi
+    if (api === null) return this.notificationReadOnlyWriteMessage
+    if (!isNotificationUnread(notification)) return null
+    if (this.busyNotificationIdValue !== null) {
+      return '上一条通知正在标记，请稍候…'
+    }
+
+    this.busyNotificationIdValue = notification.id
+    this.persist()
+    try {
+      const written = await api.markNotificationRead(notification.id)
+      if (written.id !== notification.id) {
+        // API 层已验过；这里再守一次，避免「标记了别人那条」被当成功。
+        await this.refreshNotifications()
+        return '服务端返回的通知与这次操作不一致，请刷新消息列表确认。'
+      }
+      this.applyNotificationRead(written.id, written.readAt)
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 404：这一行已经不在了 —— 重拉让界面与服务端一致。
+        if (error.kind === 'notFound') await this.refreshNotifications()
+        return error.userMessage
+      }
+      return '标记已读的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.busyNotificationIdValue = null
+      this.persist()
+    }
+  }
+
+  /**
+   * 把服务端的已读结果写到本地那一行，并同步未读数。
+   *
+   * 这一行不在本地列表里（例如只刷新过红点）⇒ 不凭空造行、未读数也不猜：
+   * 交给下一次 `refreshNotifications()`（它带整份 `unreadCount`）。
+   */
+  private applyNotificationRead(id: string, readAt: number): void {
+    for (let index = 0; index < this.notificationItems.length; index++) {
+      const item = this.notificationItems[index]
+      if (item === undefined || item.id !== id) continue
+      const wasUnread = item.readAt === null
+      this.notificationItems[index] = { ...item, readAt }
+      if (wasUnread && this.unreadNotificationCountValue > 0) {
+        this.unreadNotificationCountValue--
+      }
+      return
+    }
+  }
+
+  /**
+   * 清空站内通知的本地状态（切账号 / 恢复正常数据 / 演示重置时调用）。
+   *
+   * 通知是**私密内容**（含审批结果）：不清的话，切到另一个孩子后打开消息
+   * 面板会先看到上一个账号的消息。两个 epoch 一起推走 —— 在途的列表 / 红点
+   * 响应回来时不能再往新会话里写旧值。
+   */
+  private resetNotifications(): void {
+    this.notificationEpoch++
+    this.notificationBadgeEpoch++
+    this.notificationItems = []
+    this.notificationStatusValue = 'idle'
+    this.notificationErrorValue = null
+    this.hasMoreNotificationsValue = false
+    this.nextNotificationCursorValue = null
+    this.unreadNotificationCountValue = 0
+    this.busyNotificationIdValue = null
   }
 
   /**

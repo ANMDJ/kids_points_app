@@ -71,10 +71,22 @@ class _HomeShellState extends State<HomeShell> {
   /// 切 tab。审批页**懒加载**：`IndexedStack` 会在启动时就 build 它，
   /// 若在 `initState` 里发请求，孩子设备一启动就会吃一个 403。
   /// 因此只在第一次真正切到审批页时拉第一页（失败后由页面自己的「重试」再发）。
+  ///
+  /// 「我的」页同样懒：它是 `IndexedStack` 里**总会** build 的，W5-L 的未读
+  /// 红点不能挂在它的 `initState` 上 —— 那等于启动就多发一次 `GET /notifications`。
+  /// 切过去时单独取一次未读数（`limit=1`），失败静默（红点只是提示）。
   void _select(int index) {
     setState(() => _index = index);
-    if (index != 2) return;
     final AppStore store = AppScope.of(context);
+    if (index == 3) {
+      if (!store.isLiveMode) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !store.isLiveMode) return;
+        unawaited(store.refreshUnreadNotificationCount());
+      });
+      return;
+    }
+    if (index != 2) return;
     if (!store.isLiveMode) return;
     if (store.approvalReadStatus != ReadStatus.idle) return;
     // 不能同步 notify（还在 build/setState 链上），推到下一帧。

@@ -2848,6 +2848,111 @@ void main() {
     });
   });
 
+  group('站内通知（W5-L）：PATCH /notifications/:id/read（无请求体）', () {
+    test('方法 / 路径 / 无请求体；回包 readAt 用服务端给的时间', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 200,
+            body: jsonEncode(<String, Object?>{
+              'id': 'n-1',
+              'readAt': '2026-10-23T04:05:06.000Z',
+            }),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final NotificationReadDto dto = await client.markNotificationRead(' n-1 ');
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'PATCH');
+      expect(call.uri.path, '/api/notifications/n-1/read');
+      // 无请求体：既不该编个 `{}`，也不该带 content-type。
+      expect(call.body, isEmpty);
+      expect(call.headers.containsKey('content-type'), isFalse);
+      expect(call.headers[kDeviceIdHeader], 'device-1');
+      expect(call.headers[kChildIdHeader], 'child-1');
+      expect(dto.id, 'n-1');
+      expect(dto.readAt, DateTime.utc(2026, 10, 23, 4, 5, 6));
+    });
+
+    test('id 为空 ⇒ ArgumentError，不发请求', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async =>
+            WriteHttpResponse(statusCode: 200, body: '{}'),
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      await expectLater(
+        client.markNotificationRead('   '),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(transport.calls, isEmpty);
+    });
+
+    test('回包 id 与请求不一致 / readAt 缺失 ⇒ malformed（不能把别人的已读当成功）',
+        () async {
+      Future<WriteApiException> failWith(Map<String, Object?> body) async {
+        final _FakeWriteTransport transport = _FakeWriteTransport(
+          (Uri uri, Map<String, String> headers, String payload) async =>
+              WriteHttpResponse(statusCode: 200, body: jsonEncode(body)),
+        );
+        final WriteApiClient client =
+            WriteApiClient(config: config, transport: transport);
+        try {
+          await client.markNotificationRead('n-1');
+          fail('必须抛出 WriteApiException');
+        } on WriteApiException catch (error) {
+          return error;
+        }
+      }
+
+      final WriteApiException otherRow = await failWith(<String, Object?>{
+        'id': 'n-2',
+        'readAt': '2026-10-23T04:05:06.000Z',
+      });
+      expect(otherRow.kind, WriteFailureKind.malformed);
+
+      final WriteApiException missingReadAt =
+          await failWith(<String, Object?>{'id': 'n-1'});
+      expect(missingReadAt.kind, WriteFailureKind.malformed);
+    });
+
+    test('他人 / 已被清理的 id 都是 404 NOTIFICATION_NOT_FOUND，且提示不点名「别人的」',
+        () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 404,
+            body: jsonEncode(<String, Object?>{
+              'statusCode': 404,
+              'code': 'NOTIFICATION_NOT_FOUND',
+              'message': 'Notification not found',
+            }),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      try {
+        await client.markNotificationRead('n-404');
+        fail('必须抛出 WriteApiException');
+      } on WriteApiException catch (error) {
+        expect(error.kind, WriteFailureKind.notFound);
+        // 服务端对「不是我的」与「已经没了」返回同一个 404：
+        // 提示也不能替它区分，否则等于泄露「这条存在但不是你的」。
+        expect(error.userMessage, contains('不存在'));
+        // 这行文案是全局通用的 404 提示（不区分资源），不替服务端区分
+        // 「不是你的」与「已经没了」—— 区分本身就是泄露。
+        expect(error.userMessage, isNot(contains('别人的')));
+      }
+    });
+  });
+
   // ============================================ W5-I：store 侧邀请码
   group('邀请码（W5-I）：拉取 / 生成 / 吊销', () {
     late _TrashScriptedTransport readTransport;
@@ -3224,6 +3329,19 @@ class _FakeWriteApi implements WriteApi {
   InviteDto? createInviteResult;
   InviteRevokeDto? revokeInviteResult;
   Object? inviteError;
+  // ── W5-L 站内通知 ──
+  int markNotificationReadCalls = 0;
+  String? lastNotificationId;
+  NotificationReadDto? markNotificationReadResult;
+  Object? notificationError;
+
+  @override
+  Future<NotificationReadDto> markNotificationRead(String notificationId) async {
+    markNotificationReadCalls += 1;
+    lastNotificationId = notificationId;
+    if (notificationError != null) throw notificationError!;
+    return markNotificationReadResult!;
+  }
 
   @override
   Future<InviteDto> createInvite({

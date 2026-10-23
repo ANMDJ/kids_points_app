@@ -158,6 +158,27 @@
   color: $text-secondary;
 }
 
+// W5-L：菜单行上的未读角标（数字 > 99 由 `notificationBadgeText` 收敛成 99+）
+.kp-profile__badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: f2r(20);
+  height: f2r(20);
+  margin-right: f2r(8);
+  padding: 0 f2r(6);
+  border-radius: f2r(999);
+  background-color: $point-spend;
+}
+
+.kp-profile__badge-text {
+  font-size: f2r(11);
+  font-weight: 700;
+  line-height: 1;
+  color: $surface;
+}
+
 // ListView padding bottom 28：导航栏之外再留一点
 .kp-profile__gap {
   height: f2r(28);

@@ -248,3 +248,35 @@ export class InviteRevokeDto {
     return new InviteRevokeDto(id, revoked)
   }
 }
+
+/**
+ * `PATCH /notifications/:id/read` 的 200 响应（W5-L）。
+ *
+ * 只有两个字段，两个都要**当真**：
+ *   · `id` 必须等于请求的那一条 —— 把「已读」写到别的消息上是会让人真错过
+ *     一条通知的错，宁可显式失败；
+ *   · `readAt` 是**服务端**记下的已读时间（重复标记时是第一次的时间），
+ *     本地照抄「现在」会让两次调用给出两个版本。
+ */
+export class NotificationReadDto {
+  constructor(
+    readonly id: string,
+    readonly readAt: number
+  ) {}
+
+  static fromJson(
+    raw: unknown,
+    path = '$',
+    expectedId?: string
+  ): NotificationReadDto {
+    const json = readObject(raw, path)
+    const id = readString(json, 'id', `${path}.id`)
+    if (expectedId !== undefined && id !== expectedId) {
+      throw ReadApiException.malformed(
+        `${path}.id`,
+        `回包 id=${id} 与请求 ${expectedId} 不一致`
+      )
+    }
+    return new NotificationReadDto(id, readDate(json, 'readAt', `${path}.readAt`))
+  }
+}

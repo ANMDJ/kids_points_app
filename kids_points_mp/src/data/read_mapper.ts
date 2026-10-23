@@ -7,6 +7,8 @@ import type {
   InviteListDto,
   MemberDto,
   MemberListDto,
+  NotificationDto,
+  NotificationsPageDto,
   RecordsPageDto,
   RecordDto,
   RuleDto,
@@ -17,6 +19,8 @@ import type {
 import { ReadApiException } from './read_api_errors'
 import type { IconName } from '../components/Icon/icons'
 import type { ApprovalInboxItem, ApprovalsPage } from './approval'
+import { notificationApprovalId } from './notification'
+import type { NotificationItem, NotificationsPage } from './notification'
 import type {
   FamilyMember,
   Habit,
@@ -408,4 +412,53 @@ export function mapInvite(dto: InviteDto, path = '$'): InviteCode {
 
 export function mapInvites(dto: InviteListDto): InviteCode[] {
   return dto.items.map((item, index) => mapInvite(item, `items[${index}]`))
+}
+
+// ============================================================ 站内通知（W5-L）
+
+/**
+ * `NotificationDto` → [NotificationItem]。
+ *
+ * 两条校验，都是「画出来会误导人」的边界：
+ *   · `id` 空 ⇒ 无法标记已读 / 无法做列表 key，整页显式失败；
+ *   · `title` / `body` 空 ⇒ 行会渲染成一块空白，用户以为加载坏了 ——
+ *     显式失败时至少还能给出「消息没能加载」和重试入口。
+ *
+ * `type` **不做**白名单：服务端加新类型时，老客户端仍应把这条列出来。
+ */
+export function mapNotification(
+  dto: NotificationDto,
+  path = '$'
+): NotificationItem {
+  if (dto.id.trim() === '') {
+    throw ReadApiException.malformed(`${path}.id`, '通知 id 不能为空')
+  }
+  if (dto.title.trim() === '') {
+    throw ReadApiException.malformed(`${path}.title`, '通知标题不能为空')
+  }
+  if (dto.body.trim() === '') {
+    throw ReadApiException.malformed(`${path}.body`, '通知正文不能为空')
+  }
+  return {
+    id: dto.id,
+    type: dto.type,
+    title: dto.title,
+    body: dto.body,
+    approvalId: notificationApprovalId(dto.payload),
+    readAt: dto.readAt,
+    createdAt: dto.createdAt
+  }
+}
+
+export function mapNotificationsPage(
+  dto: NotificationsPageDto
+): NotificationsPage {
+  return {
+    items: dto.items.map((item, index) =>
+      mapNotification(item, `items[${index}]`)
+    ),
+    hasMore: dto.hasMore,
+    nextCursor: dto.nextCursor,
+    unreadCount: dto.unreadCount
+  }
 }

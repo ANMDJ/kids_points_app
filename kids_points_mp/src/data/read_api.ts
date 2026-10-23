@@ -6,6 +6,7 @@ import {
   HomeDto,
   InviteListDto,
   MemberListDto,
+  NotificationsPageDto,
   RecordsPageDto,
   TrashListDto
 } from './read_dto'
@@ -259,6 +260,37 @@ export class ReadApiClient {
     return ApprovalsPageDto.fromJson(
       await this.get('/approvals/mine', approvalPageQuery(input))
     )
+  }
+
+  /**
+   * 站内通知（`GET /notifications`，W5-L）：**我自己的**消息。
+   *
+   * 收件人恒为会话本人 —— 请求里没有「看谁的」参数（后端按 `kpActor.userId`
+   * 收口；别人的 id 与不存在的 id 返回同一句 404）。因此界面不需要任何
+   * 角色判断：权限矩阵里 `view_notifications` 对两侧都 ALLOW。
+   *
+   * 第一页传 `cursor: null`，之后把 [NotificationsPageDto.nextCursor] 原样带回；
+   * `unreadCount` 是**整份**未读数（不是本页），红点用它。
+   *
+   * `limit` 上限 100 与后端 `ListNotificationsQueryDto` 同口径：越界在本地
+   * 就抛，不浪费一次必然 400 的往返。
+   */
+  async fetchNotifications(
+    input: { limit?: number; cursor?: string | null } = {}
+  ): Promise<NotificationsPageDto> {
+    const limit = input.limit ?? 20
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw ReadApiException.malformed(
+        'limit',
+        '必须在 1–100 之间（后端 DTO 同口径）'
+      )
+    }
+    const query: Record<string, string> = { limit: `${limit}` }
+    const cursor = input.cursor
+    if (cursor !== undefined && cursor !== null && cursor !== '') {
+      query.cursor = cursor
+    }
+    return NotificationsPageDto.fromJson(await this.get('/notifications', query))
   }
 
   /**

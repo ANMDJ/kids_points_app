@@ -288,6 +288,17 @@ abstract class WriteApi {
   /// 理解成「多吊销了一次」。
   Future<InviteRevokeDto> revokeInvite(String inviteId);
 
+  /// 标记一条通知已读（`PATCH /notifications/:id/read`，`read_notifications`，W5-L）。
+  ///
+  /// **没有 body**：要改的只有「读了」这一个事实，路径里已经有 id。
+  /// 服务端按会话收件人收口：别人的 / 不存在的 id 一律 404 `NOTIFICATION_NOT_FOUND`
+  /// （同一句话，不泄露别家 id）。
+  ///
+  /// 构造幂等：已读再调仍是 200，`readAt` 是**第一次**的时间 ——
+  /// 因此不需要幂等键，也不能用本地时间覆盖回包。
+  /// 回包 [NotificationReadDto.id] 必须等于请求的 id。
+  Future<NotificationReadDto> markNotificationRead(String notificationId);
+
   void close() {}
 }
 
@@ -787,6 +798,17 @@ class WriteApiClient implements WriteApi {
       decoded,
       (Object? raw, String path) =>
           InviteRevokeDto.fromJson(raw, path, expectedInviteId: id),
+    );
+  }
+
+  @override
+  Future<NotificationReadDto> markNotificationRead(String notificationId) async {
+    final String id = _requireId(notificationId, 'notificationId');
+    final Object? decoded = await _send('PATCH', '/notifications/$id/read', null);
+    return _parse(
+      decoded,
+      (Object? raw, String path) =>
+          NotificationReadDto.fromJson(raw, path, expectedNotificationId: id),
     );
   }
 
