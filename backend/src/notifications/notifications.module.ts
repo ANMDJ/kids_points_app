@@ -19,8 +19,13 @@ import {
   type NotificationsPort
 } from './notifications.repository'
 import { NotificationsService } from './notifications.service'
-import { PUSH_DELIVERY_PORT, PUSH_PORT, type PushPort } from './push.port'
-import { PushRetryAdapter } from './push-retry.adapter'
+import {
+  NOTIFICATIONS_OUTBOX,
+  NotImplementedNotificationsOutbox,
+  PrismaNotificationsOutbox,
+  type NotificationsOutboxPort
+} from './notifications.outbox'
+import { PUSH_DELIVERY_PORT, PUSH_PORT } from './push.port'
 import { PUSH_RETRY_CONFIG, readPushRetryConfig, type PushRetryConfig } from './push-retry.config'
 import { PushRetryMetrics } from './push-retry.metrics'
 import { PrismaPushRetryRepository } from './push-retry.prisma.repository'
@@ -39,25 +44,29 @@ import { createPushAdapter } from './webhook-push.adapter'
  * ── 两条通道，两种诚实 ────────────────────────────────────────────────────
  *   · **站内**（W5-L，2026-10-23）：`GET /notifications` / `PATCH /notifications/:id/read`。
  *     有库 ⇒ 真读 `Notification` 表；无库 ⇒ 501（不返回空列表冒充「你没有通知」）。
- *   · **推送**（W5-K → W6-A → W6-B，2026-10-24）：`PUSH_PORT`。配置了 `PUSH_WEBHOOK_URL`
+ *   · **推送**（W5-K → W6-A → W6-B）：`PUSH_PORT`。配置了 `PUSH_WEBHOOK_URL`
  *     ⇒ `WebhookPushAdapter`（读 `DeviceToken` 表、POST 到网关）；
  *     否则 ⇒ `NoopPushAdapter`，如实返回 `provider_not_configured`，**不假装送达**。
- *   · **重试**（W6-B）：`PUSH_PORT` = 原始适配器（`PUSH_DELIVERY_PORT`）+ `PushRetryAdapter`
- *     （失败即写 `PushRetryJob`）；`PushRetryWorker` 由 `main.ts` 启动，按退避重发，
- *     超过 TTL 标 `expired`、渠道故障用满次数标 `dead`。**无库 ⇒ 不套装饰器、不启动**。
+ *
+ * ── W6-C（2026-10-24）：请求路径不再发送 ──────────────────────────────────
+ *   审批提交/裁决的提醒**在审批事务内**写两行：`Notification`（站内）+ `PushRetryJob`
+ *   （待发）。请求路径**一次推送都不发**，`PushRetryWorker` 是唯一发送者。
+ *   这样「事务提交了、进程崩了、提醒没入队」的缝隙被关掉 —— 入队与审批同生共死。
+ *   外部推送仍在事务**之外**（worker 里），失败只影响重试次数，不回滚账本。
  *
  * ── ★ 本模块的唯一不可妥协点 ──────────────────────────────────────────────
- *   通知发送必须在账本事务**之外**。若把通知放进事务，一次推送失败会回滚一笔
+ *   通知发送必须在账本事务**之外**。若把外部推送放进事务，一次网关失败会回滚一笔
  *   已经成立的加分 —— 孩子明明完成了、账却没了（`01` §4 / 02 §9.23）。
  *   反过来，通知失败只意味着「晚一点知道」。
  *
  * ── 世界钉死（与 `MembersModule` 同一手法）───────────────────────────────
- *   有库 ⇒ `PrismaNotificationsRepository`；无库 ⇒ `NotImplemented` 三方法全 501。
- *   `hasDatabase` 由宿主（`app.module.ts` 或 `ApprovalsModule`）**传入**，本模块不
- *   自行推断两遍 —— 同一张图里只能有一个「在哪个世界」的答案。
+ *   有库 ⇒ `PrismaNotificationsRepository` / `PrismaNotificationsOutbox`；
+ *   无库 ⇒ `NotImplemented` 全 501。`hasDatabase` 由宿主（`app.module.ts` 或
+ *   `ApprovalsModule`）**传入**，本模块不自行推断两遍 —— 同一张图里只能有一个
+ *   「在哪个世界」的答案。
  *
  * ⚠ 不要在 controller 里直接注入 `PUSH_PORT` / `NOTIFICATIONS_REPOSITORY` ——
- *   业务只能经 `NotificationsService`，否则「失败不外抛 / 超时兜底」会被绕过。
+ *   读接口只能经 `NotificationsService`；写通知只能经审批事务里的 outbox。
  */
 export function resolveNotificationsRepositoryClass(
   hasDatabase: boolean
@@ -72,6 +81,19 @@ export function resolveNotificationsRepositoryClass(
  */
 export function resolvePushRetryRepositoryClass(hasDatabase: boolean): Type<PushRetryPort> {
   return hasDatabase ? PrismaPushRetryRepository : NotImplementedPushRetryRepository
+}
+
+/**
+ * 审批事务内 outbox 的实现选择（W6-C）。
+ *
+ * 有库 ⇒ 真写 `Notification` + `PushRetryJob`；无库 ⇒ 全 501。
+ * ★ 无库时审批写入路径本身也不存在（`ApprovalsModule` 选的是 501 端口），
+ *   这个 501 不会被正常请求触发；保留它是为了让「装配说真话」。
+ */
+export function resolveNotificationsOutboxClass(
+  hasDatabase: boolean
+): Type<NotificationsOutboxPort> {
+  return hasDatabase ? PrismaNotificationsOutbox : NotImplementedNotificationsOutbox
 }
 
 export interface NotificationsAssemblyOptions {
@@ -115,6 +137,11 @@ export class NotificationsModule {
         // 控制器上的 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块 exports 提供。
         DeviceSessionGuard,
         { provide: NOTIFICATIONS_REPOSITORY, useClass: resolveNotificationsRepositoryClass(hasDatabase) },
+        // ★ W6-C：审批事务内的 outbox（写 `Notification` + `PushRetryJob`）。
+        {
+          provide: NOTIFICATIONS_OUTBOX,
+          useClass: resolveNotificationsOutboxClass(hasDatabase)
+        },
         // ★ W6-B：重试队列的持久化端口（无库 ⇒ 501，`enqueue` 的 501 被适配器吞掉）。
         {
           provide: PUSH_RETRY_REPOSITORY,
@@ -132,24 +159,25 @@ export class NotificationsModule {
           useFactory: (tokens: DeviceTokensPort) => createPushAdapter(pushWebhook, tokens),
           inject: [DEVICE_TOKENS_REPOSITORY]
         },
-        // ★ W6-B：业务入口 = 原始适配器 + 「失败即入队」。无库时不套装饰器 ——
-        //   没有队列可写，套上只会让每一次推送失败都多一条「入队失败」的 warn。
+        // ★ W6-C：业务请求入口 = **原始适配器**。审批路径不再同步发送；
+        //   worker 用 `PUSH_DELIVERY_PORT`，两者是同一个实例 —— 用例里覆盖
+        //   `PUSH_PORT` 就能观察「请求路径有没有偷偷发」。
         {
           provide: PUSH_PORT,
-          useFactory: (
-            delivery: PushPort,
-            repository: PushRetryPort,
-            config: PushRetryConfig,
-            metrics: PushRetryMetrics
-          ): PushPort =>
-            hasDatabase ? new PushRetryAdapter(delivery, repository, config, metrics) : delivery,
-          inject: [PUSH_DELIVERY_PORT, PUSH_RETRY_REPOSITORY, PUSH_RETRY_CONFIG, PushRetryMetrics]
+          useExisting: PUSH_DELIVERY_PORT
         },
         // ★ W6-B：计时器**不**在这里启动 —— 只有 `main.ts` 调 `start()`
         //   （与 `ApprovalsExpiryService` 同一纪律：`npm test` 不留下 setInterval）。
         PushRetryWorker
       ],
-      exports: [NotificationsService, PUSH_PORT, PUSH_DELIVERY_PORT, PUSH_RETRY_CONFIG, PushRetryWorker]
+      exports: [
+        NotificationsService,
+        NOTIFICATIONS_OUTBOX,
+        PUSH_PORT,
+        PUSH_DELIVERY_PORT,
+        PUSH_RETRY_CONFIG,
+        PushRetryWorker
+      ]
     }
   }
 }

@@ -17,7 +17,6 @@ import {
   withdrawDenial
 } from '../contracts/approval-policy'
 import { resolveVerdict } from '../contracts/permission-matrix'
-import { NotificationsService } from '../notifications/notifications.service'
 import type { Actor } from '../permissions/actor'
 import { decodeApprovalCursor } from './approval.cursor'
 import { toInboxPage, type ApprovalInboxPageDto } from './approval-inbox.mapper'
@@ -66,18 +65,14 @@ function toBody(row: ApprovalRow): Record<string, unknown> {
  * ⚠️ 诚实标注（2026-10-18，W3-A / W3-B）：`ApprovalsPort` 在**有库时**是
  *   `PrismaApprovalsRepository`（同事务写流水/余额/审计）；**无库时**仍是显式 501。
  *   本文件只产出「应当是什么结果」与「谁有资格做」，**不做任何持久化**。
+ *   W6-C 起，提醒的 outbox 也在端口事务里 —— service 不再认识通知服务。
  */
 @Injectable()
 export class ApprovalsService {
   // 显式 `@Inject`：**不依赖 `emitDecoratorMetadata`**。
   // 这既让 tsx / esbuild 这类不产出 metadata 的加载器不至于静默注入失败，
   // 也让令牌改名时编译期就能发现（字符串令牌写错是运行时才炸）。
-  constructor(
-    @Inject(APPROVALS_REPOSITORY) private readonly port: ApprovalsPort,
-    // ★ W5-K：推送入口。业务只认识 `NotificationsService`（它保证永不抛错），
-    //   不认识具体渠道 —— 换第三方适配器时本文件不需要改动。
-    @Inject(NotificationsService) private readonly notifications: NotificationsService
-  ) {}
+  constructor(@Inject(APPROVALS_REPOSITORY) private readonly port: ApprovalsPort) {}
 
   /**
    * `GET /approvals` —— 家长收件箱（W5-D）。
@@ -214,29 +209,22 @@ export class ApprovalsService {
         const row = await this.port.createPending(input)
         this.assertTerminalWithoutExecution(row)
         /**
-         * ★ W5-M（2026-10-23）：**落库之后**才通知家长「有新申请待确认」。
+         * ★ W6-C（2026-10-24）：「有新申请待确认」的提醒已经**在端口事务里**
+         *   写成 `Notification` + `PushRetryJob`，这里**不再**调用通知服务。
          *
-         * ── 位置就是保证 ──────────────────────────────────────────────────────
-         *   与 W5-K 的 `decide()` 同一条纪律（`01` §4 / `02` §9.23）：端口内部
-         *   是一个事务，走到这里审批行已经提交。通知层承诺**永不抛错**
-         *   （成员位读不到 / 站内写失败 / 推送失败都只记日志），所以 202 不会
-         *   因为「没人收到提醒」变成 5xx —— 申请本身是成立的。
+         * ── 为什么搬进事务 ────────────────────────────────────────────────────
+         *   旧顺序是「端口提交 → 这里同步发一次 → 失败才入队」。进程若在
+         *   「提交」与「入队」之间退出，提醒会永久丢失（队列里连一行都没有）。
+         *   现在入队与审批同生共死：审批在 ⇒ 提醒必在。
          *
-         * ── 为什么不自己查家长 ────────────────────────────────────────────────
-         *   收件人解析属于通知层（`listActiveGuardianUserIds`）；审批 service
-         *   只说「谁提交了什么」。这样 `ApprovalsModule` 不必知道成员位，
-         *   也不会在审批事务里多一次查询。
+         * ── 为什么仍然是 202 ──────────────────────────────────────────────────
+         *   入队写入的是与审批**同一个本地库**，写不进去时审批本身也回滚；
+         *   能走到这里就说明两行都已在库里。外部推送仍由 worker 在事务外发送，
+         *   网关失败不会回滚申请（`01` §4 / `02` §9.23）。
          *
          * ── 自批（`SELF_APPROVED`）不通知 ─────────────────────────────────────
-         *   那个分支没有第二个人需要确认，与 W5-K「自批不推」一致。
+         *   那个分支走 `createSelfApproved`，没有第二个人需要确认。
          */
-        await this.notifications.notifyApprovalSubmitted({
-          approvalId: row.id,
-          childId: row.childId,
-          requesterUserId: row.requesterUserId,
-          action: row.action,
-          occurredAt: new Date().toISOString()
-        })
         return { statusCode: HttpStatus.ACCEPTED, body: toBody(row) }
       }
 
@@ -307,22 +295,11 @@ export class ApprovalsService {
     this.assertTerminalWithoutExecution(decided)
     const selfApproved = isSelfApproved(decided)
 
-    // ★ W5-K：推送发生在 `port.decide()` **返回之后** —— 那时账本事务已提交。
-    //   绝不放进端口事务（`01` §4）：一次推送失败不能回滚已成立的批准。
-    //   `notifyApprovalStatusChanged()` 保证不抛错，因此这里的 200 不会被推送改写；
-    //   当前默认适配器是 no-op（`provider_not_configured`），属于「路径已通、渠道未接」。
-    //   ★ 创建时的显式自批（`createSelfApproved`）**不推**：收件人就是批准人自己。
-    await this.notifications.notifyApprovalStatusChanged({
-      type: 'approval.status_changed',
-      approvalId: decided.id,
-      childId: decided.childId,
-      recipientUserId: decided.requesterUserId,
-      action: decided.action,
-      status: dto.decision,
-      decidedByUserId: decided.decidedByUserId,
-      occurredAt: new Date().toISOString()
-    })
-
+    // ★ W6-C：提醒已在 `port.decide()` 的**同一事务**里写成 outbox 两行
+    //   （`Notification` + `PushRetryJob`），这里不再发送。
+    //   `invalidated` / `expired` 不写结论通知 —— 那不是「家长决定」，
+    //   端口在那些分支返回前已经离开本行。
+    //   ★ 创建时的显式自批（`createSelfApproved`）也不写：收件人就是批准人自己。
     return {
       statusCode: HttpStatus.OK,
       body: {

@@ -40,14 +40,14 @@ export class PushRetryMetrics {
   private lastError: string | null = null
   private lastOutcomeAt: Date | null = null
 
-  /** 入队成功（新行）。 */
-  recordEnqueued(): void {
-    this.enqueued += 1
+  /** 入队成功（新行）。`count` 允许批量写入一次记多条。 */
+  recordEnqueued(count = 1): void {
+    this.enqueued += count
   }
 
   /** 入队撞上唯一约束 —— 正常（同一件事重放），单独计数以免看起来像故障。 */
-  recordDuplicate(): void {
-    this.duplicates += 1
+  recordDuplicate(count = 1): void {
+    this.duplicates += count
   }
 
   /** 入队本身失败（无库 / 连接池耗尽）：推送会因此**失去重试机会**，必须可见。 */

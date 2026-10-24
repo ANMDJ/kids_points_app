@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   InternalServerErrorException,
   NotFoundException
@@ -36,6 +37,10 @@ import {
   type PointRecordDraft
 } from '../ledger/ledger.gate'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  NOTIFICATIONS_OUTBOX,
+  type NotificationsOutboxPort
+} from '../notifications/notifications.outbox'
 import type {
   ApprovalListRow,
   ApprovalRow,
@@ -92,10 +97,19 @@ import type {
  *   ② **撤回**：`withdraw()` 只做 `pending → withdrawn`，**不写流水、不动余额**；
  *      判定与 service 共用 `withdrawDenial()`（角色 → 本人 → 状态），
  *      并在**行锁下**再验一次（读与写之间可能有人刚好批准）。
+ *
+ * ── W6-C（2026-10-24）：提醒的 outbox 与审批同事务 ─────────────────────────
+ *   `createPending` 在写完审批行与审计后，调用 `NOTIFICATIONS_OUTBOX` 写
+ *   `Notification` + `PushRetryJob`；`decide` 在 `approved` / `rejected` 的审计之后同样。
+ *   **不调用任何第三方**：外部推送由 worker 在事务外发送，网关失败不回滚账本。
+ *   ★ 事务回滚 = 审批与提醒一起消失，不会留下「批了但没人知道」的中间态。
  */
 @Injectable()
 export class PrismaApprovalsRepository implements ApprovalsPort {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(NOTIFICATIONS_OUTBOX) private readonly outbox: NotificationsOutboxPort
+  ) {}
 
   /** `02` §4.3：TTL 默认 72h（到期由扫描任务置 `expired`；本文件惰性判定）。 */
   static readonly TTL_MS = 72 * 60 * 60 * 1000
@@ -132,6 +146,17 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
         targetId: row.id,
         after: { status: 'pending', payload: jsonOf(payload) }
       })
+      // ★ W6-C：提醒与审批同生共死。只写本地两行，不发送。
+      await this.outbox.enqueueApprovalSubmitted(
+        tx,
+        {
+          approvalId: row.id,
+          childId: row.childId,
+          requesterUserId: row.requesterUserId,
+          action: input.action
+        },
+        now
+      )
       return toRow(row)
     })
   }
@@ -366,6 +391,18 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
           before: { status: 'pending' },
           after: { status: 'rejected', decidedByUserId: input.decidedByUserId }
         })
+        await this.outbox.enqueueApprovalStatusChanged(
+          tx,
+          {
+            approvalId: row.id,
+            childId: row.childId,
+            recipientUserId: row.requesterUserId,
+            action: row.actionType as ActionType,
+            status: 'rejected',
+            decidedByUserId: input.decidedByUserId
+          },
+          now
+        )
         return toRow(after)
       }
 
@@ -438,6 +475,18 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
         before: { status: 'pending' },
         after: { status: 'approved', executedRecordId: outcome.recordId }
       })
+      await this.outbox.enqueueApprovalStatusChanged(
+        tx,
+        {
+          approvalId: row.id,
+          childId: row.childId,
+          recipientUserId: row.requesterUserId,
+          action: row.actionType as ActionType,
+          status: 'approved',
+          decidedByUserId: input.decidedByUserId
+        },
+        now
+      )
       return toRow(after)
     })
   }

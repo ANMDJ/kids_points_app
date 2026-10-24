@@ -38,6 +38,7 @@
 | [`29-w6a-handoff.md`](./29-w6a-handoff.md) | **阶段 W6-A 交接单**（设备 token 上报 ＋ 真实 Webhook 推送）：新动作 `manage_device_tokens`（guardian / child **双 ALLOW**）＋ 迁移；`POST /device-tokens` / `POST /device-tokens/revoke`（身份只来自会话、**响应不回显 token**、注销走**请求体**没有 `/:token` 路由、`owned_by_other` ⇒ **409** / 不是我的 ⇒ **404**、同一用户 **LRU 上限 10**）；`PUSH_PORT` 改 `useFactory` 选绑定，`WebhookPushAdapter` **真的发 HTTP**（`{version,event,message,tokens}`、`x-kp-event`、可选 Bearer、800ms 超时、**410 只下线本次发送的 token**、5xx/401 不动 token），配置三态 `ok / disabled / invalid`（`invalid` 打 error）；核心模块**无 controller** 以免重复注册路由；三层证据 = 离线 32 ＋ HTTP 20 ＋ 真库 14（并发唯一约束 / LRU / 条件注销幂等 / `SetNull`）；`npm test` **638/638**、`test:db` **206/206**、矩阵 **35** 动作；**仍无厂商凭据 / 网关 / 客户端上报 / outbox** | ✅ W6-A 已收口（**仅服务端**；真机推送未验） |
 | [`30-w6b-handoff.md`](./30-w6b-handoff.md) | **阶段 W6-B 交接单**（推送失败重试队列 `PushRetryJob`）：新枚举 ＋ 新表（`dedupeKey` 唯一 / **无** User·Child 外键 / `expiresAt` 必填）＋ 迁移；`PUSH_PORT`（业务：发一次 + **失败即入队**）与 `PUSH_DELIVERY_PORT`（worker：只发一次）**两个令牌**，杜绝「重试再入队」的环；失败分两类 —— `provider_error` **消耗** `attempts`、按 30s→1m→2m→4m→8m→16m（封顶 30m）退避、用满 6 次 ⇒ `dead`；`no_device_token` / `provider_not_configured` **不消耗**次数、固定 5m 重试到 TTL ⇒ `expired`；`claimDue` = 单条 `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`（**真库抓到 `RETURNING` 行序未定义**，已在应用侧按 `nextAttemptAt` 重排），`sending` 超 `claimTimeout` 可回收（崩溃自愈，极端下**可能重复发一次**）；六个 `PUSH_RETRY_*` 旋钮（非法值夹取、开关拼错仍开启、`enabled=0` 打 warn）；连续 3 次失败打一条 warn（成功才重新武装）；证据 = 离线 **36** ＋ 真库 **14**（并发不重叠 / `sending` 回收 / 条件结算 / 唯一约束**不改写原行**），`npm test` **664/664**、`test:db` **220/220**、矩阵仍 **35** 动作；**这不是真 outbox**（请求路径仍同步发一次、入队在事务外）、仍无厂商凭据 / 网关 / 客户端上报 / retention / 外接告警 | ✅ W6-B 已收口（**仅服务端**；真机推送未验） |
 
+| [`31-w6c-handoff.md`](./31-w6c-handoff.md) | **阶段 W6-C 交接单**（审批通知的**真 outbox**）：`approval.submitted` / `approved` / `rejected` 的 `Notification` 与 `PushRetryJob` 在**审批的同一个数据库事务**里写入（`createPending` / `decide` 内），请求路径**一次推送都不发**、`PushRetryWorker` 成为唯一发送者；收件人解析（active guardian、排除提交人）与去重（先查 `dedupeKey`、`skipDuplicates` 兜竞态）都在 outbox；`PUSH_PORT` 不再套重试装饰器（`useExisting: PUSH_DELIVERY_PORT`），`NotificationsService` 收敛为**只读**；outbox 写失败 ⇒ 审批事务回滚（响亮失败，无库 501），外部推送失败仍只影响 `attempts` / `status`；证据 = 离线 8 ＋ HTTP 组 G/H ＋ 真库 3（同事务两行 / 真实监护人 / 注入抛错回滚审批），`npm test` **653/653**、`test:db` **223/223**、矩阵仍 **35** 动作；**仍无厂商凭据 / 网关 / 客户端 token 上报 / 对账 / retention** | ✅ W6-C 已收口（**仅服务端**；真机推送未验） |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **35 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-24 矩阵同步至 35 动作） |
 
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
@@ -1386,6 +1387,24 @@ PRD §7 已同步至 **35 动作**（v1.1）。
 「事务已提交、入队前崩溃」那条缝隙还在；没有厂商凭据 / 网关 / 客户端上报（线上表仍空），
 没有 retention、没有外接告警，**真机推送仍一次都没发生过**。明细见
 [`30-w6b-handoff.md`](./30-w6b-handoff.md) §5 / §6。
+
+
+**W6-C（2026-10-24）审批提醒改成真 outbox：入队与审批同生共死，请求路径一次推送都不发。**
+旧顺序是「审批事务提交 → 同步试发一次 → 失败才入队」，进程若在「提交」与「入队」之间退出，
+这条提醒**永久丢失**（队列里连一行都没有）。现在 `createPending` / `decide` 在**同一个事务**里
+写 `Notification` + `PushRetryJob` 两行，`PushRetryWorker` 成为唯一发送者。
+这不违反 `01` §4：进事务的只有同一个 Postgres 里的两行本地数据，**不调用任何第三方**；
+outbox 写失败 ⇒ 审批整体回滚（不会「批了但没人知道」），外部推送失败 ⇒ 只影响 `attempts` / `status`。
+收件人解析搬进 outbox：`approval.submitted` 发给这个孩子的 active guardian 并**排除提交人**，
+`status_changed` 固定发申请人；去重键先查后写、`skipDuplicates` 兜竞态（**极小窗口仍可能多一条站内通知**，
+当前没有对账任务）。`PUSH_PORT` 不再套「失败即入队」装饰器（`useExisting: PUSH_DELIVERY_PORT`），
+`NotificationsService` 收敛为只读（`list` / `markRead`），`ApprovalsService` 不再认识通知层。
+证据：离线 8 ＋ HTTP 组 G/H（请求路径零推送 / 零通知写入）＋ 真库 3（同事务两行 / 真实监护人解析 /
+注入抛错时审批回滚）；`npm test` → **653/653**、`npm run test:db` → **223/223**、矩阵仍 **35** 动作。
+**边界**：仍无 L3 凭据 / 网关 / 客户端 token 上报，队列里的行最终会因结构性失败在 TTL 后 `expired`，
+**真机推送一次都没发生过**；没有对账、没有 retention、没有外接告警。明细见
+[`31-w6c-handoff.md`](./31-w6c-handoff.md) §5。
+
 
 
 
