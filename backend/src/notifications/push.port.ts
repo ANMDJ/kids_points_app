@@ -8,9 +8,13 @@ import type { ActionType } from '../contracts/permission-matrix'
  *   接第三方时新增一个实现本端口的 adapter，在 `NotificationsModule` 里换绑即可，
  *   **审批 service / controller / 账本事务一行都不用改**。
  *
- * ⚠️ 诚实边界：本端口**当前默认是 no-op**（`NoopPushAdapter`），
- *   所以「有端口」不等于「能收到推送」—— 真正触达用户还需要
- *   ① 第三方 SDK 与凭据（L3）、② 设备 token 上报接口（`DeviceToken` 表已存在但无写入）。
+ * ⚠️ 诚实边界：本端口**默认是 no-op**（`NoopPushAdapter`），
+ *   所以「有端口」不等于「能收到推送」——
+ *   W6-A（2026-10-24）补上了其中的第 ② 项：设备 token 有了写入口
+ *   （`POST /device-tokens`）与真实适配器 `WebhookPushAdapter`（配置
+ *   `PUSH_WEBHOOK_URL` 后生效）。仍然缺的是第 ① 项：
+ *   **APNs / FCM / 微信订阅消息的凭据与签名**都没有，所以「配好网关」之前，
+ *   线上仍是一条 `provider_not_configured`。
  */
 export const PUSH_PORT = Symbol('PUSH_PORT')
 
@@ -124,7 +128,10 @@ export type PushResult =
  * 推送适配器契约。
  *
  * ★ 实现约束：
- *   ① `send` **必须快速返回**（真实渠道应入队 / 异步投递），不得在审批请求里同步等第三方；
+ *   ① `send` **必须快速返回**，不得在审批请求里同步等第三方做成「慢但成功」；
+ *      `WebhookPushAdapter`（W6-A）是**有界**的例外：单次 HTTP 调用上限 800ms，
+ *      且 `NotificationsService` 另有 1s 兜底。重试 / 出队**没有实现**
+ *      （需要 outbox + 幂等键），见 29 号交接单 §5；
  *   ② 任何失败都要么返回 `delivered: false`，要么抛错 —— 两者都会被
  *      `NotificationsService` 兜住并记日志（抛错不会传播到 HTTP 响应）；
  *   ③ 实现**不得**写业务表 / 账本（推送是事务之外的事，`01` §4）。

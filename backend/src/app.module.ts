@@ -3,6 +3,7 @@ import { ApprovalsModule } from './approvals/approvals.module'
 import { AuditModule } from './audit/audit.module'
 import { ChildrenModule } from './children/children.module'
 import { DeviceSessionModule } from './device-session/device-session.module'
+import { DeviceTokensHttpModule } from './device-tokens/device-tokens-http.module'
 import { HabitsModule } from './habits/habits.module'
 import { IdempotencyModule } from './idempotency/idempotency.module'
 import { InvitesModule } from './invites/invites.module'
@@ -32,6 +33,7 @@ import { WishesModule } from './wishes/wishes.module'
  * ├ 引导        onboarding       模板库 + 监护人同意
  * ├ 邀请码      invites          条件 UPDATE 原子占位（02 §8）
  * ├ 设备会话    device-session   服务端持有的 activeRole（02 §7）
+ * ├ 设备 token  device-tokens    推送目标（W6-A）；guardian/child 都能登记**自己的**
  * ├ 审计        audit            追加式，DB 层 REVOKE UPDATE/DELETE
  * ├ 通知        notifications    ★ 必须在账本事务**之外**（01 §4）
  * └ 幂等        idempotency      防重放重复扣分
@@ -93,6 +95,13 @@ import { WishesModule } from './wishes/wishes.module'
     //   ⚠ 这里与 `ApprovalsModule` 内部的导入**必须**推断出同一个 hasDatabase
     //   （两者都走 `hasDatabaseUrl()`，且 main.ts 第一行已加载 dotenv）。
     NotificationsModule.register(),
+    // ★ W6-A（2026-10-24）：设备推送 token 的登记 / 撤销
+    //   `POST /device-tokens` / `POST /device-tokens/revoke`。
+    //   有库 ⇒ PrismaDeviceTokensRepository；无库 ⇒ 501（不假装登记成功）。
+    //   ⚠ 这里挂的是 **Http** 层：controller 必须只声明一次，否则同一条路由被注册
+    //   多次（最后一个装配顺序生效）。核心 `DeviceTokensModule` 已被
+    //   `NotificationsModule` 导入 —— 那个没有 controller，可安全重复导入。
+    DeviceTokensHttpModule.register(),
     // ★ W3-C：动态模块 —— 有库 ⇒ PrismaIdempotencyRepository（唯一约束兜底），
     //   无库 ⇒ 501（只在请求真的带 `Idempotency-Key` 时触发）。
     IdempotencyModule.register()

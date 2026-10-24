@@ -14,6 +14,10 @@
  *      而 `tests N` 里那个文件的贡献是 1 —— 守卫 ② 的 `tests ≥ 文件数` 照样满足。
  *      ★ 夹具必须建在 `test/` **下面**（tsc 的 `include` 才编译它，且不点开头不然被 glob 跳过），
  *      跑完在 `finally` 里删掉：留在仓库里会让 `npm test` 永远红。
+ *   D. **守卫 ⑤（文档漂移）**：把 `honesty-probe.mjs` 指向一份故意漂移的夹具 PRD
+ *      （`scripts/__fixtures__/prd-drifted.fixture.md`）⇒ 必须**退出码非 0** 且**点名**那个
+ *      判定写错的动作。W6-A 的真实形状：PRD §7 停在「29 个动作」而代码已 35，
+ *      十几轮 CI 全绿 —— 因为没有一条检查看文档。
  *
  * 附注（不判定成败，只记录）：同一空目录交给 runner 本身时它返回什么 —— 供将来 Node 改行为时对照。
  *
@@ -33,8 +37,10 @@ const EXPECTED_CASES = ['夹具・必红①', '夹具・必红②']
 const NESTED_DIR = 'test/tmp-guard-probe'
 
 let failures = 0
+let checks = 0
 
 function report(name, ok, detail = '') {
+  checks += 1
   if (!ok) failures += 1
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `\n      ${detail}` : ''}`)
 }
@@ -136,5 +142,24 @@ report(
     ?.trim() ?? '（未点名）'
 )
 
-console.log(`\n${failures === 0 ? 'ALL PASS' : `FAILED ${failures} 项`}  （共 6 项检查）`)
+// ── D. 守卫 ⑤（文档漂移）：PRD §7 写错 ⇒ 诚实性探针必须红并点名（W6-A 的真实形状）
+// W6-A 发现 PRD §7 停在「29 个动作」而代码已 35 —— 一条测试都不会因此变红。
+// 这里把「文档漂移可被听见」证明一次：给探针一份故意漂移的夹具 PRD。
+const DRIFT_FIXTURE = 'scripts/__fixtures__/prd-drifted.fixture.md'
+const drifted = run(['scripts/honesty-probe.mjs'], { HONESTY_PRD_PATH: DRIFT_FIXTURE })
+report(
+  'D. 守卫 ⑤：PRD §7 与矩阵不一致 → honesty-probe 必须退出码非 0',
+  drifted.status !== 0,
+  `退出码=${drifted.status}`
+)
+report(
+  'D2. 且点名那个判定不一致的动作（不是红在别的理由上）',
+  drifted.output.includes('undo_check_in') && drifted.output.includes('判定不一致'),
+  drifted.output
+    .split('\n')
+    .find((l) => l.includes('判定不一致'))
+    ?.trim() ?? '（未点名）'
+)
+
+console.log(`\n${failures === 0 ? 'ALL PASS' : `FAILED ${failures} 项`}  （共 ${checks} 项检查）`)
 process.exitCode = failures === 0 ? 0 : 1

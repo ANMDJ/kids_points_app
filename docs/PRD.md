@@ -409,7 +409,7 @@ User（自然人）
 
 | 需求点 | 规则 |
 |---|---|
-| 权限 | Agent `action-dispatcher` **消费同一张** `PERMISSION_MATRIX`（`contracts/permission-matrix.json`，29 动作，由 TS 生成） |
+| 权限 | Agent `action-dispatcher` **消费同一张** `PERMISSION_MATRIX`（`contracts/permission-matrix.json`，35 动作，由 TS 生成） |
 | 防提权 | Agent 伪造 `plan.role=guardian` 而实际为 child → **`401`，整份 plan 作废** |
 | 落账 | 与 HTTP 路径共用同一账本内核与不变量校验 |
 | 技术 | Python 3.12 + FastAPI + LangGraph |
@@ -463,7 +463,7 @@ User（自然人）
 
 ---
 
-## 7. 权限矩阵（29 个动作 · 唯一事实源）
+## 7. 权限矩阵（35 个动作 · 唯一事实源）
 
 > **权威定义**：`backend/src/contracts/permission-matrix.ts`；生成产物 `contracts/permission-matrix.json`
 > 供 Python Agent 消费。**HTTP Guard 与 Agent 只能读这一份，不得各写一版。**
@@ -494,6 +494,12 @@ User（自然人）
 | `request_approval` | ALLOW | ALLOW | 审批 |
 | `review_approvals` | ALLOW | **DENY** | 审批 |
 | `withdraw_request` | ALLOW | ALLOW | 审批 |
+| `view_own_approvals` | ALLOW | ALLOW | 审批（W5-J：申请人读自己的申请，**不复用** `review_approvals`） |
+| `view_notifications` | ALLOW | ALLOW | 通知（W5-L：站内通知中心） |
+| `read_notifications` | ALLOW | ALLOW | 通知（W5-L：标记已读） |
+| `manage_device_tokens` | ALLOW | ALLOW | 推送（W6-A：上报 / 注销本机设备 token；孩子设备收不到推送才是缺陷） |
+| `view_members` | ALLOW | ALLOW | 成员（W5-H） |
+| `change_member_role` | ALLOW | **DENY** | 成员（W5-H） |
 | `invite_member` | ALLOW | **DENY** | 成员 |
 | `remove_member` | ALLOW | **DENY** | 成员 |
 | `switch_role_mode` | ALLOW | ALLOW | 成员 |
@@ -518,7 +524,7 @@ User（自然人）
 `MemberRole`（guardian/child/viewer）、`MemberStatus`、`UserStatus`、`RelationKind`、
 `ApprovalStatus`（5 终态）、`AutoReason`、`RuleDirection`（reward/penalty）、`RecordStatus`、
 `RecordCategory`、`RecordSource`（含 `child_self`）、`AgeBand`（4 学段）、`WishCoverStyle`、
-`ConsentStatus`、`DevicePlatform`、`ActionType`（29 动作）。
+`ConsentStatus`、`DevicePlatform`、`ActionType`（35 动作）。
 
 ### 8.2 表（18）
 
@@ -745,7 +751,7 @@ User（自然人）
 | 后端骨架 | ✅ 13 个模块（`approvals` / `device-session` / `membership` / `ledger` / `permissions` / `idempotency` 已有实体实现；其余仍为占位）＋ Prisma 7 adapter | `tsc --noEmit` / `nest build` EXIT=0 |
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
-| 跨语言契约 | ✅ `contracts/permission-matrix.json`（29 动作，由 TS 生成） | `contracts:emit` |
+| 跨语言契约 | ✅ `contracts/permission-matrix.json`（35 动作，由 TS 生成） | `contracts:emit` |
 | **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径 + 真库执行**：`approval-policy.ts`（含 W3-B 的 `withdrawDenial()`）＋ 真 HTTP `test/approvals-http.test.ts` ＋ 真库同事务 `test-db/approvals-execution-db.dbtest.ts`；W3-A / W3-B / W3-C 见 `design/README` | `npm test` → **14 个文件 / 261 条**；`npm run test:db` → **5 个文件 / 75 条**（均全绿） |
 | 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
 | 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **15 步全绿，`CI_EXIT=0`** |
@@ -848,6 +854,7 @@ npm run ci                                 # 期望 CI_EXIT=0（11 步，含 def
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-10-14 | 初版：整合 `design/01`–`11` 的事实，形成需求侧 PRD；含目标与指标、FR-01–FR-12、不变量 I1–I6、25 动作权限矩阵、18 表/14 枚举摘要、NFR、里程碑 W0–W9、阻塞项与风险、当前落地状态 |
+| v1.1 | 2026-10-24 | §7 权限矩阵同步至 **35 动作**：补上 W5-H / W5-J / W5-L / W6-A 期间新增却被漏记的 6 条（`view_members`、`change_member_role`、`view_own_approvals`、`view_notifications`、`read_notifications`、`manage_device_tokens`）。**并补上守卫 ⑤**（`honesty:probe` 检查 E ＋ `test:canfail` 检查 D）：文档表格与 `permission-matrix.ts` 逐行对账，故意漂移的夹具必须让闸门变红 —— 此前十几轮 CI 全绿，只因没有一条检查读过文档 |
 
 > **本文档的立场**：需求文档的价值不在于把话说满，而在于**每一条都能被验证或被证伪**。
 > 凡本文写"已完成"的，都能在 §16.3 的命令里复现；凡本文写"未落地"的，都不在代码里假装存在。

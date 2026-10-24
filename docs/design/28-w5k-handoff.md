@@ -144,9 +144,15 @@ W5-K 把「审批结果 → 通知」这一段做成**渠道无关的端口**，
 
 - **没有任何真实渠道**：`NoopPushAdapter` 永远返回 `provider_not_configured`；没有 APNs / FCM /
   微信订阅消息的 SDK、凭据、模板 ID。全仓库仍无推送依赖。
+  > ✅ **W6-A（2026-10-24）部分补上**：`PUSH_WEBHOOK_URL` 配好时 `PUSH_PORT` 绑到
+  > `WebhookPushAdapter`（真发 HTTP，**仍无厂商凭据**，网关要自己实现）；
+  > 没配就是今天这个 no-op，见 [`29-w6a-handoff.md`](./29-w6a-handoff.md)。
 - **没有设备 token 上报端点**：`DeviceToken` 表 W0 已建（`platform` / `token` / `active` /
   `lastSeenAt` / `revokedAt`），但**没有一条写入路径**；`no_device_token` 目前只是端口契约的一部分，
   没有任何适配器会返回它。
+  > ✅ **W6-A（2026-10-24）已补上**：`POST /device-tokens` / `POST /device-tokens/revoke`
+  > ＋ 真会发 HTTP 的 `WebhookPushAdapter`，见 [`29-w6a-handoff.md`](./29-w6a-handoff.md)。
+  > 仍缺的是**厂商凭据 / 网关实现 / 客户端上报** —— 线上表依然是空的。
 - **没有站内通知的投递保证**：`Notification` 表在 W5-L 已开始写入（`decide()` 之后、事务外）并
   有列表 / 已读端点与双端「消息」面板，但**没有 outbox**：进程在写完前崩溃 ⇒ 那一 tick 永久丢失，
   且仍要用户打开 App 才看得到（见 §5.2）。

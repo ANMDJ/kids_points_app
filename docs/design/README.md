@@ -35,7 +35,8 @@
 | [`26-w5i-handoff.md`](./26-w5i-handoff.md) | **阶段 W5-I 交接单**（双端邀请码界面）：**先拉成员再拉邀请码**（`invite_member` 仅 guardian ALLOW，用 403 探测角色会把权限画成故障）、状态**渲染时现算**且优先级 `revoked > exhausted > expired`（先答库里的既成事实，再答依赖时钟的判断）、生成表单是**封闭选项**（1/3/5 人 · 1/7/30 天；服务端 1..10 / 1..30）、`POST /invites` **不带**幂等键而吊销是构造幂等、回包 `role`/`maxUses`/`id` **回显校验**、复制**裸码**（展示才分组）、已吊销行不再画吊销按钮、空态**三分**（没拉到 / 加载中 / 真的没有）、预览模式**不编假码**、live 无写客户端**拒绝而不本地假写**、生成 409 与吊销 404 重拉而吊销成功只改本行、Flutter **+8** / 小程序 **19** 条用例、**`accept` 仍无客户端（等 L2 登录）** | ✅ W5-I 已收口（**双端 UI 已建**；`accept` 与成员管理 UI 未建） |
 | [`27-w5j-handoff.md`](./27-w5j-handoff.md) | **阶段 W5-J 交接单**（「我的申请」＋撤回）：申请人**没有读路径**才是真缺口（收件箱对孩子 403）、新端点 `GET /approvals/mine` ＋ 新动作 `view_own_approvals`（双 ALLOW，**不复用** `review_approvals`）、收口写死 `childId + requesterUserId = 会话 actor`（query 里没有这个字段）、`POST /:id/withdraw` **无请求体**、`summary === null` **也必须能撤回**（否则坏行永久卡住）、撤回**不刷首页**且收件箱**仅在已加载时**刷新（孩子请求 `/approvals` 必然 403）、回包 `status !== withdrawn` 算**契约漂移**、两端列表状态**不共用**（游标 / 错误互不污染）、空态区分「没拉到 / 还在加载 / 真的没有」、Flutter **127** / 小程序 **14** 条用例、真库本轮未复跑 | ✅ W5-J 已收口（**双端 UI 已建**；推送 / 详情页 / 成员管理 UI 未建） |
 | [`28-w5k-handoff.md`](./28-w5k-handoff.md) | **阶段 W5-K 交接单**（审批结论推送端口）：业务只认识 `NotificationsService.notifyApprovalStatusChanged()`（**1s 超时 + 永不抛错**），渠道只认识 `PUSH_PORT`；默认 `NoopPushAdapter` **如实**返回 `provider_not_configured`（**不假成功**）；调用点在 `decide()` **端口返回之后**（账本已提交，`01` §4 / `02` §9.23），推送故障**不改写 200**；只推 `approved` / `rejected`，收件人恒为 `requesterUserId`，**自批 / 撤回 / 过期不推**；消息**不带金额 / 标题**（第三方通道会保留内容）；重复 decide 409 不重复推送；**没有真实渠道 / 设备 token 上报**（站内通知中心已在 W5-L 补上，见 §5.2），接入清单见 §5.1；backend **+12**（565/565）、**无迁移**；§5.2 = W5-L 站内通知中心、§5.3 = W5-M 提交即通知家长 | ✅ W5-K 已收口（**仅后端端口**；渠道 / 客户端未接） |
-| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **29 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-21 矩阵同步至 29 动作） |
+| [`29-w6a-handoff.md`](./29-w6a-handoff.md) | **阶段 W6-A 交接单**（设备 token 上报 ＋ 真实 Webhook 推送）：新动作 `manage_device_tokens`（guardian / child **双 ALLOW**）＋ 迁移；`POST /device-tokens` / `POST /device-tokens/revoke`（身份只来自会话、**响应不回显 token**、注销走**请求体**没有 `/:token` 路由、`owned_by_other` ⇒ **409** / 不是我的 ⇒ **404**、同一用户 **LRU 上限 10**）；`PUSH_PORT` 改 `useFactory` 选绑定，`WebhookPushAdapter` **真的发 HTTP**（`{version,event,message,tokens}`、`x-kp-event`、可选 Bearer、800ms 超时、**410 只下线本次发送的 token**、5xx/401 不动 token），配置三态 `ok / disabled / invalid`（`invalid` 打 error）；核心模块**无 controller** 以免重复注册路由；三层证据 = 离线 32 ＋ HTTP 20 ＋ 真库 14（并发唯一约束 / LRU / 条件注销幂等 / `SetNull`）；`npm test` **638/638**、`test:db` **206/206**、矩阵 **35** 动作；**仍无厂商凭据 / 网关 / 客户端上报 / outbox** | ✅ W6-A 已收口（**仅服务端**；真机推送未验） |
+| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **35 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-24 矩阵同步至 35 动作） |
 
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
@@ -1343,7 +1344,29 @@
 [`28-w5k-handoff.md`](./28-w5k-handoff.md) §5.3。
 
 
-### 文档缺陷修正记录
+**W6-A（2026-10-24）`DeviceToken` 表不再空转：有了写入路径，`PUSH_PORT` 也第一次真的会发 HTTP。**
+两条新路由 `POST /device-tokens`（登记 / 刷新）与 `POST /device-tokens/revoke`（注销），
+身份**只来自会话**（userId / childId 都不在请求体里，多传一个键就 400），
+新动作 `manage_device_tokens` 对 guardian / child **双 ALLOW**（孩子的设备收不到推送才是缺陷）。
+`token` 被当成凭据：**响应不回显**、注销走请求体（没有 `/:token` 路由，路径段会进访问日志）、
+`GET /device-tokens/<token>` 就是 404。同一个 token 换账号注册 ⇒ **409**
+（共享平板换人登录不能劫持前一个账号的推送），注销别人的 ⇒ **404**（与站内通知同一口径，
+不给探测口），重复注销幂等靠**条件 `updateMany`**（并发两笔回同一个 `revokedAt`），
+单用户 active token **LRU 上限 10**（网关每次要收全部 token，不设上限就是放大器）。
+装配侧 `PUSH_PORT` 从 `useClass: NoopPushAdapter` 改成 `useFactory: createPushAdapter(...)`：
+`PUSH_WEBHOOK_URL` 合法 ⇒ `WebhookPushAdapter`（真 `POST`，`410` 时**只下线本次发送的 token**，
+5xx / 401 一个都不动），没配 ⇒ no-op（**默认世界不变**），配错 ⇒ no-op 但打 **error**。
+证据：离线 32 ＋ 真 HTTP 20 ＋ 真库 14；`npm test` → **638/638**、`npm run test:db` → **206/206**、
+矩阵 **35** 动作、`contracts:emit` 已重新生成。
+**顺手补上一个闸门**：PRD §7 的表格从 W5-H 起就停在 29 个动作（代码早已 35），而十几轮 CI 全绿 ——
+因为没有任何检查读过文档。现在 `honesty:probe` 多了检查 **E**（PRD §7 ↔ 矩阵逐行动作/判定对账），
+`test:canfail` 多了检查 **D**（拿一份故意写错的夹具 PRD，必须让探针变红并点名），
+PRD §7 已同步至 **35 动作**（v1.1）。
+**边界**：没有 APNs / FCM / 微信凭据，没有网关实现，没有客户端上报（线上表仍空），
+没有 outbox / 重试，**真机推送一次都没发生过**。明细见
+[`29-w6a-handoff.md`](./29-w6a-handoff.md) §5。
+
+
 
 **上一轮（自查发现）**
 

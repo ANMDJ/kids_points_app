@@ -15,6 +15,7 @@
  *   B. 注入必成功断言 → 退出码必须为 0（证明非 0 不是恒定的）
  *   C. D12 回归守卫：扫描测试运行器，汇总/退出码赋值**不得嵌套在回调内部**
  *   D. 契约漂移守卫：permission-matrix.ts 的 ActionType 与 schema.prisma 的 enum 必须一致
+ *   E. 文档漂移守卫：docs/PRD.md §7 的表格必须与矩阵**逐行动作 + 判定**一致
  *
  * 用法：node scripts/honesty-probe.mjs
  */
@@ -139,6 +140,57 @@ try {
       ok
         ? `两侧一致，共 ${tsActions.length} 个动作`
         : `TS=${tsActions.length} Prisma=${prActions.length}｜仅在 TS：${missingInPrisma}｜仅在 Prisma：${missingInTs}`
+    )
+  }
+  // ── E：文档漂移守卫（docs/PRD.md §7 ↔ 矩阵）─────────────────────
+  // 为什么需要它：PRD §7 从 2026-10-21 起一直写着「29 个动作」，而代码在 W5-H / W5-J /
+  // W5-L / W6-A 里各加了动作 —— 到 W6-A 时已是 35。这不是笔误：**没有任何测试会因为
+  // 文档漏写一个动作而变红**，于是它诚实地错了很多天。D 检查只对账 TS ↔ Prisma，
+  // 文档这一侧照样没人管；本检查把「PRD 表格」也纳入同一口径。
+  // HONESTY_PRD_PATH 用于**自测本检查项本身**（test:canfail 指向一份故意漂移的夹具）：
+  // 一个永远通过的检查等于没有检查。
+  const prdFile = process.env.HONESTY_PRD_PATH
+    ? resolve(process.env.HONESTY_PRD_PATH)
+    : join(REPO, 'docs', 'PRD.md')
+  if (!existsSync(prdFile) || !existsSync(matrixFile)) {
+    report('E. PRD §7 漂移守卫', false, `缺少 ${prdFile} 或 permission-matrix.ts`)
+  } else {
+    const tsSrc = readFileSync(matrixFile, 'utf8')
+    // `  action_name: { guardian: 'ALLOW', child: 'ALLOW' },`
+    const authority = new Map(
+      [...tsSrc.matchAll(/^\s{2}([a-z_]+):\s*\{\s*guardian:\s*'([A-Z_]+)',\s*child:\s*'([A-Z_]+)'/gm)].map(
+        (m) => [m[1], { guardian: m[2], child: m[3] }]
+      )
+    )
+    const prd = readFileSync(prdFile, 'utf8')
+    const heading = prd.match(/## 7\. 权限矩阵（(\d+) 个动作/)
+    const section = prd.split('## 7.')[1]?.split('**归一化规则**')[0] ?? ''
+    // `| \`action\` | ALLOW | **DENY** | 归类 |`（判定的星号是排版，不是语义）
+    const rows = [
+      ...section.matchAll(/^\| `([a-z_]+)` \| (?:\*\*)?([A-Z_]+)(?:\*\*)? \| (?:\*\*)?([A-Z_]+)/gm)
+    ].map((m) => ({ action: m[1], guardian: m[2], child: m[3] }))
+
+    const problems = []
+    if (!heading) problems.push('找不到小节标题「## 7. 权限矩阵（N 个动作」')
+    else if (Number(heading[1]) !== authority.size)
+      problems.push(`标题写 ${heading[1]} 个动作，矩阵实际 ${authority.size} 个`)
+    for (const row of rows) {
+      const truth = authority.get(row.action)
+      if (!truth) problems.push(`PRD 多出矩阵里没有的动作：${row.action}`)
+      else if (truth.guardian !== row.guardian || truth.child !== row.child)
+        problems.push(
+          `${row.action} 判定不一致：PRD=${row.guardian}/${row.child} 代码=${truth.guardian}/${truth.child}`
+        )
+    }
+    for (const action of authority.keys()) {
+      if (!rows.some((r) => r.action === action)) problems.push(`PRD 漏写动作：${action}`)
+    }
+    report(
+      'E. PRD §7 漂移守卫（表格 ↔ 权限矩阵逐行动作/判定）',
+      problems.length === 0,
+      problems.length === 0
+        ? `表格 ${rows.length} 行 == 矩阵 ${authority.size} 个动作，判定逐行一致`
+        : `\n    ${problems.join('\n    ')}`
     )
   }
 } finally {

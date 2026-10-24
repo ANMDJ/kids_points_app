@@ -137,7 +137,7 @@ enum DevicePlatform {
   android
 }
 
-/// 02 §2：ActionType —— 与 PERMISSION_MATRIX 的键**必须逐一对应**（25 个）。
+/// 02 §2：ActionType —— 与 PERMISSION_MATRIX 的键**必须逐一对应**（35 个）。
 /// 该矩阵同时被 HTTP Guard 与 Agent action-dispatcher 消费（02 §3 屏障二）。
 enum ActionType {
   view_child_points
@@ -167,6 +167,8 @@ enum ActionType {
   /// 站内通知（W5-L）：收件人按会话 userId 收口。
   view_notifications
   read_notifications
+  /// 设备推送（W6-A）：上报 / 注销**自己的** `DeviceToken`，会话 actor 收口。
+  manage_device_tokens
   view_members
   change_member_role
   invite_member

@@ -89,6 +89,16 @@ export const PERMISSION_MATRIX = {
   // 服务端不接受「替别人读」：`recipientUserId` 来自会话，不是请求体。
   read_notifications: { guardian: 'ALLOW', child: 'ALLOW' },
 
+  /* ── 设备推送（W6-A）────────────────────────────────────── */
+  // 上报 / 注销**自己的**设备推送 token：两个角色都 ALLOW —— 孩子的设备也要能收到
+  // 「审批通过了」，藏起来只会让推送永远送不到孩子手里。收口条件写死在**会话 actor**
+  // 上（请求体里没有 `userId`，也没有 `token` 的归属者），所以「改别人的 token」
+  // 这条路不存在：别人的 token 一律回答 404 `DEVICE_TOKEN_NOT_FOUND`。
+  // 与 `read_notifications` 刻意分开：那个只改 `Notification.readAt` 一列，
+  // 这个往 `DeviceToken` 里写一行（另一张表、另一类事实），合并会让「允许标已读」
+  // 顺带等于「允许把你的设备绑到我的账号上」。
+  manage_device_tokens: { guardian: 'ALLOW', child: 'ALLOW' },
+
   /* ── 成员与设置 ───────────────────────────────────────── */
   // 成员管理（W5-H）：**看得到成员**对孩子开放（"家里有谁"不是敏感数据，
   // 藏起来只会让界面出现一个匿名家长）；**改角色 / 移出**只给家长 ——
@@ -107,7 +117,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 33 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 35 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**
