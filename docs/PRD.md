@@ -397,6 +397,8 @@ User（自然人）
 |---|---|
 | 站内通知 | `Notification` 表；审批结果、被表扬等 |
 | 推送 | 微信订阅消息 / APNs / FCM（依赖 L3 凭据） |
+| **投递可观测（W6-D）** | 通知与推送任务**定时对账**：单边缺失 / 重复通知只**告警**，**不自动补发**（处置见 `design/32-w6d-handoff.md` §4）；队列状态分布随日志输出 |
+| **投递事实保留（W6-D）** | 终态才可删：`sent` / `expired` 7 天、`dead` 30 天（证据）；`pending` / `sending` **永不删** |
 | **事务边界（关键）** | 推送**不在**账本事务内：推送失败**不得回滚**已成立的加分（只"晚一点知道"） |
 
 **验收标准**：9.23 通知发送失败 → 账本已提交不受影响。
@@ -766,7 +768,7 @@ User（自然人）
 | **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` / `request_points_bonus` / `add_wish`；`autoReason` **五种全部可复现**；`expired` 有后台扫描（`ApprovalsExpiryService`）；`Idempotency-Key` 已接到 create / decide / withdraw（无库 501）。真库证据：`test-db/approvals-closing-db.dbtest.ts`（5 文件 / 75 条） | 审批状态机本身已收尾；W4 起是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点） |
 | **双端接 API** | ✅ **W4-C** 起双端只读接入；**W4-E** 起首页打卡 / 撤销真写；**W5-A** 起规则四条写入口真写（未配 env 仍为本地预览）；其余写入口仍本地 | 见 `design/` 的 W4 / W5-A 段；**"接了 API"≠"全部写入口都通了"** |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
-| **通知 / 推送** | ⚠️ **服务端链路已建，触达仍为 0**：W5-K 推送端口 ＋ W5-L 站内通知中心 ＋ W6-A 设备 token 上报 / 真 Webhook 适配器 ＋ W6-B 失败重试队列（`PushRetryJob`：指数退避 ＋ TTL ＋ `claimTimeout` 回收）＋ **W6-C 审批提醒真 outbox**（`Notification` + `PushRetryJob` 与审批**同事务**，请求路径零推送）；**仍无 L3 凭据 / 网关实现 / 客户端上报**，故线上 `DeviceToken` 与 `PushRetryJob` 都是空的，**真机推送一次都没发生过** | W6 剩余：厂商凭据 · 网关 · 客户端上报（明细见 `design/29-w6a-handoff.md` §5、`design/30-w6b-handoff.md` §6、`design/31-w6c-handoff.md` §8） |
+| **通知 / 推送** | ⚠️ **服务端链路已建，触达仍为 0**：W5-K 推送端口 ＋ W5-L 站内通知中心 ＋ W6-A 设备 token 上报 / 真 Webhook 适配器 ＋ W6-B 失败重试队列（`PushRetryJob`：指数退避 ＋ TTL ＋ `claimTimeout` 回收）＋ **W6-C 审批提醒真 outbox**（`Notification` + `PushRetryJob` 与审批**同事务**，请求路径零推送）＋ **W6-D 对账与保留清理**（对账**只读、只告警、绝不自动补发**：单边缺失 ＋ 重复通知；`sent`/`expired` 7 天、`dead` 30 天后分批删除，`pending`/`sending` 永不删）；**仍无 L3 凭据 / 网关实现 / 客户端上报**，故线上 `DeviceToken` 与 `PushRetryJob` 都是空的，**真机推送一次都没发生过** | W6 剩余：厂商凭据 · 网关 · 客户端上报（明细见 `design/29-w6a-handoff.md` §5、`design/30-w6b-handoff.md` §6、`design/31-w6c-handoff.md` §8、`design/32-w6d-handoff.md` §5） |
 | **Agent** | ❌ 待建 | W6 |
 | **前端两条流水线进 CI** | ⚠️ 未接入 CI 平台（第 1–2 步尚未进 `npm run ci`）；`run.js` 跑 `dist/` 产物，**必须现编**否则会用旧代码考满分 | 见 §16.3 |
 | **`persistence`** | ⚠️ 内存态；接持久化只需在 `AppStore._persist()` 写入 shared_preferences / sqflite，UI 无需改动 | 见 `lib/data/app_store.dart` 注释 |
@@ -855,6 +857,7 @@ npm run ci                                 # 期望 CI_EXIT=0（11 步，含 def
 |---|---|---|
 | v1.0 | 2026-10-14 | 初版：整合 `design/01`–`11` 的事实，形成需求侧 PRD；含目标与指标、FR-01–FR-12、不变量 I1–I6、25 动作权限矩阵、18 表/14 枚举摘要、NFR、里程碑 W0–W9、阻塞项与风险、当前落地状态 |
 | v1.1 | 2026-10-24 | §7 权限矩阵同步至 **35 动作**：补上 W5-H / W5-J / W5-L / W6-A 期间新增却被漏记的 6 条（`view_members`、`change_member_role`、`view_own_approvals`、`view_notifications`、`read_notifications`、`manage_device_tokens`）。**并补上守卫 ⑤**（`honesty:probe` 检查 E ＋ `test:canfail` 检查 D）：文档表格与 `permission-matrix.ts` 逐行对账，故意漂移的夹具必须让闸门变红 —— 此前十几轮 CI 全绿，只因没有一条检查读过文档 |
+| v1.2 | 2026-10-24 | **FR-09 补上 W6-D 的两条需求**：投递可观测（对账只告警、不自动补发）与投递事实保留（只删终态、三档保留期）；§15 通知 / 推送行同步。**仍无厂商凭据 / 网关 / 客户端上报，真机推送一次都没发生过** —— 本轮补的是「出了问题能看见、表不会无限长」，不是触达 |
 
 > **本文档的立场**：需求文档的价值不在于把话说满，而在于**每一条都能被验证或被证伪**。
 > 凡本文写"已完成"的，都能在 §16.3 的命令里复现；凡本文写"未落地"的，都不在代码里假装存在。

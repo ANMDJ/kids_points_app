@@ -20,6 +20,16 @@ import {
 } from './notifications.repository'
 import { NotificationsService } from './notifications.service'
 import {
+  NOTIFICATIONS_RECONCILE_CONFIG,
+  NOTIFICATIONS_RECONCILE_PORT,
+  NotImplementedNotificationsReconcile,
+  readNotificationsReconcileConfig,
+  type NotificationsReconcileConfig,
+  type NotificationsReconcilePort
+} from './notifications.reconcile'
+import { PrismaNotificationsReconcile } from './notifications.reconcile.prisma.repository'
+import { NotificationsReconcileWorker } from './notifications.reconcile.worker'
+import {
   NOTIFICATIONS_OUTBOX,
   NotImplementedNotificationsOutbox,
   PrismaNotificationsOutbox,
@@ -35,6 +45,16 @@ import {
   type PushRetryPort
 } from './push-retry.repository'
 import { PushRetryWorker } from './push-retry.worker'
+import {
+  PUSH_RETRY_RETENTION_CONFIG,
+  PUSH_RETRY_RETENTION_PORT,
+  NotImplementedPushRetryRetention,
+  readPushRetryRetentionConfig,
+  type PushRetryRetentionConfig,
+  type PushRetryRetentionPort
+} from './push-retry.retention'
+import { PrismaPushRetryRetention } from './push-retry.retention.prisma.repository'
+import { PushRetryRetentionWorker } from './push-retry.retention.worker'
 import { readWebhookPushConfig, type WebhookPushConfigResult } from './push-webhook.config'
 import { createPushAdapter } from './webhook-push.adapter'
 
@@ -96,6 +116,29 @@ export function resolveNotificationsOutboxClass(
   return hasDatabase ? PrismaNotificationsOutbox : NotImplementedNotificationsOutbox
 }
 
+/**
+ * 对账端口的实现选择（W6-D）。
+ *
+ * 有库 ⇒ 真扫两张表；无库 ⇒ 501（**不**返回全零快照 —— 全零会被 worker 读成
+ * 「一切正常」，而实际上一行都没查）。
+ */
+export function resolveNotificationsReconcileClass(
+  hasDatabase: boolean
+): Type<NotificationsReconcilePort> {
+  return hasDatabase ? PrismaNotificationsReconcile : NotImplementedNotificationsReconcile
+}
+
+/**
+ * 保留清理端口的实现选择（W6-D）。
+ *
+ * 有库 ⇒ 真删终态行；无库 ⇒ 501（**不**返回 0 —— 0 会被读成「删干净了」）。
+ */
+export function resolvePushRetryRetentionClass(
+  hasDatabase: boolean
+): Type<PushRetryRetentionPort> {
+  return hasDatabase ? PrismaPushRetryRetention : NotImplementedPushRetryRetention
+}
+
 export interface NotificationsAssemblyOptions {
   /** 省略 ⇒ 按环境推断（只有生产代码允许省略；用例必须显式钉死世界）。 */
   hasDatabase?: boolean
@@ -110,6 +153,10 @@ export interface NotificationsAssemblyOptions {
    * 用例必须显式传入，否则本机恰好导出了 `PUSH_RETRY_BATCH=500` 就会改变结论。
    */
   pushRetry?: PushRetryConfig
+  /** 对账配置（W6-D）。省略 ⇒ 读 `process.env`；用例必须显式传入。 */
+  reconcile?: NotificationsReconcileConfig
+  /** 保留清理配置（W6-D）。省略 ⇒ 读 `process.env`；用例必须显式传入。 */
+  retention?: PushRetryRetentionConfig
 }
 
 @Module({})
@@ -118,8 +165,12 @@ export class NotificationsModule {
     const hasDatabase = options.hasDatabase ?? hasDatabaseUrl()
     const pushWebhook = options.pushWebhook ?? readWebhookPushConfig(process.env)
     const pushRetry = options.pushRetry ?? readPushRetryConfig(process.env)
+    const reconcile = options.reconcile ?? readNotificationsReconcileConfig(process.env)
+    const retention = options.retention ?? readPushRetryRetentionConfig(process.env)
     logPushSelection(hasDatabase, pushWebhook)
     logPushRetrySelection(hasDatabase, pushRetry)
+    logReconcileSelection(hasDatabase, reconcile)
+    logRetentionSelection(hasDatabase, retention)
     return {
       module: NotificationsModule,
       imports: [
@@ -168,7 +219,14 @@ export class NotificationsModule {
         },
         // ★ W6-B：计时器**不**在这里启动 —— 只有 `main.ts` 调 `start()`
         //   （与 `ApprovalsExpiryService` 同一纪律：`npm test` 不留下 setInterval）。
-        PushRetryWorker
+        PushRetryWorker,
+        // ★ W6-D：对账（只读、只告警、不补发）与保留清理（只删终态行）。
+        { provide: NOTIFICATIONS_RECONCILE_PORT, useClass: resolveNotificationsReconcileClass(hasDatabase) },
+        { provide: NOTIFICATIONS_RECONCILE_CONFIG, useValue: reconcile },
+        NotificationsReconcileWorker,
+        { provide: PUSH_RETRY_RETENTION_PORT, useClass: resolvePushRetryRetentionClass(hasDatabase) },
+        { provide: PUSH_RETRY_RETENTION_CONFIG, useValue: retention },
+        PushRetryRetentionWorker
       ],
       exports: [
         NotificationsService,
@@ -176,7 +234,13 @@ export class NotificationsModule {
         PUSH_PORT,
         PUSH_DELIVERY_PORT,
         PUSH_RETRY_CONFIG,
-        PushRetryWorker
+        PushRetryWorker,
+        NOTIFICATIONS_RECONCILE_PORT,
+        NOTIFICATIONS_RECONCILE_CONFIG,
+        NotificationsReconcileWorker,
+        PUSH_RETRY_RETENTION_PORT,
+        PUSH_RETRY_RETENTION_CONFIG,
+        PushRetryRetentionWorker
       ]
     }
   }
@@ -233,6 +297,61 @@ function logPushRetrySelection(hasDatabase: boolean, config: PushRetryConfig): v
   Logger.log(
     `推送重试队列已装配（每 ${config.intervalMs}ms，批量 ${config.batchSize}，` +
       `TTL ${config.ttlMs}ms，渠道故障上限 ${config.maxAttempts} 次）`,
+    'NotificationsModule'
+  )
+}
+
+/**
+ * 对账的装配结论（W6-D）。
+ *
+ * ★ `enabled=false` 用 **warn**：关闭对账意味着「两表出现缺口不会再有人告诉你」。
+ *   这不是普通开关，是**观测能力的丧失**，必须留痕。
+ */
+function logReconcileSelection(hasDatabase: boolean, config: NotificationsReconcileConfig): void {
+  if (!config.enabled) {
+    Logger.warn(
+      'NOTIFICATIONS_RECONCILE_ENABLED=0 —— 通知/推送对账不启动（缺口不会告警）',
+      'NotificationsModule'
+    )
+    return
+  }
+  if (!hasDatabase) {
+    Logger.warn(
+      '通知对账已启用，但没有数据库连接 —— 端口为 501，worker 每轮都会记 error',
+      'NotificationsModule'
+    )
+    return
+  }
+  Logger.log(`通知/推送对账已装配（每 ${config.intervalMs}ms 一轮，只告警不补发）`, 'NotificationsModule')
+}
+
+/**
+ * 保留清理的装配结论（W6-D）。
+ *
+ * ★ `enabled=false` 用 **warn**：`PushRetryJob` 会随审批量一直长，
+ *   而这件事在运行期没有任何其它信号 —— 只有这条启动日志能解释「表为什么越来越大」。
+ */
+function logRetentionSelection(
+  hasDatabase: boolean,
+  config: PushRetryRetentionConfig
+): void {
+  if (!config.enabled) {
+    Logger.warn(
+      'PUSH_RETRY_RETENTION_ENABLED=0 —— 推送队列不清理（sent/expired/dead 会一直累积）',
+      'NotificationsModule'
+    )
+    return
+  }
+  if (!hasDatabase) {
+    Logger.warn(
+      '推送队列保留清理已启用，但没有数据库连接 —— 端口为 501，worker 每轮都会记 error',
+      'NotificationsModule'
+    )
+    return
+  }
+  Logger.log(
+    `推送队列保留清理已装配（每 ${config.intervalMs}ms；sent ${config.sentMs}ms / ` +
+      `expired ${config.expiredMs}ms / dead ${config.deadMs}ms，每批 ${config.batchSize} 行）`,
     'NotificationsModule'
   )
 }

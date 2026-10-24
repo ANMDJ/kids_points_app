@@ -9,6 +9,8 @@ import { AppModule } from './app.module'
 import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
 import { applyGlobalPipes, logBootstrap } from './app.setup'
 import { PushRetryWorker } from './notifications/push-retry.worker'
+import { NotificationsReconcileWorker } from './notifications/notifications.reconcile.worker'
+import { PushRetryRetentionWorker } from './notifications/push-retry.retention.worker'
 
 /**
  * 入口。
@@ -42,6 +44,11 @@ async function bootstrap(): Promise<void> {
   //   无库时 `PUSH_RETRY_REPOSITORY` 是 501 实现 —— 这里**不**再复写一遍开关条件，
   //   否则「模块装配说的」与「main 说的」会成为两处真相。
   app.get(PushRetryWorker).start()
+
+  // ★ W6-D：对账与保留清理。两者各自判断自己的开关；无库时端口是 501 实现
+  //   —— 与上面同一纪律：开关只在一个地方解释。
+  app.get(NotificationsReconcileWorker).start()
+  app.get(PushRetryRetentionWorker).start()
 }
 
 void bootstrap()

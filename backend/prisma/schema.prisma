@@ -790,6 +790,10 @@ model PushRetryJob {
   @@index([recipientUserId, createdAt])
   /// 过期清扫。
   @@index([expiresAt])
+  /// W6-D 保留清理：按 `status` 批量删「早于截止线」的行（`ORDER BY updatedAt`）。
+  /// 没有它，`DELETE` 只能靠 `status` 前缀索引取出该状态全部行再排序 ——
+  /// `sent` 会随审批量增长，正是最先变慢的那一档。
+  @@index([status, updatedAt])
 }
 
 /// 02 §4.4：幂等记录。防「双击同意」「网络重试」导致的重复扣分。

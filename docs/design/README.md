@@ -39,6 +39,8 @@
 | [`30-w6b-handoff.md`](./30-w6b-handoff.md) | **阶段 W6-B 交接单**（推送失败重试队列 `PushRetryJob`）：新枚举 ＋ 新表（`dedupeKey` 唯一 / **无** User·Child 外键 / `expiresAt` 必填）＋ 迁移；`PUSH_PORT`（业务：发一次 + **失败即入队**）与 `PUSH_DELIVERY_PORT`（worker：只发一次）**两个令牌**，杜绝「重试再入队」的环；失败分两类 —— `provider_error` **消耗** `attempts`、按 30s→1m→2m→4m→8m→16m（封顶 30m）退避、用满 6 次 ⇒ `dead`；`no_device_token` / `provider_not_configured` **不消耗**次数、固定 5m 重试到 TTL ⇒ `expired`；`claimDue` = 单条 `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`（**真库抓到 `RETURNING` 行序未定义**，已在应用侧按 `nextAttemptAt` 重排），`sending` 超 `claimTimeout` 可回收（崩溃自愈，极端下**可能重复发一次**）；六个 `PUSH_RETRY_*` 旋钮（非法值夹取、开关拼错仍开启、`enabled=0` 打 warn）；连续 3 次失败打一条 warn（成功才重新武装）；证据 = 离线 **36** ＋ 真库 **14**（并发不重叠 / `sending` 回收 / 条件结算 / 唯一约束**不改写原行**），`npm test` **664/664**、`test:db` **220/220**、矩阵仍 **35** 动作；**这不是真 outbox**（请求路径仍同步发一次、入队在事务外）、仍无厂商凭据 / 网关 / 客户端上报 / retention / 外接告警 | ✅ W6-B 已收口（**仅服务端**；真机推送未验） |
 
 | [`31-w6c-handoff.md`](./31-w6c-handoff.md) | **阶段 W6-C 交接单**（审批通知的**真 outbox**）：`approval.submitted` / `approved` / `rejected` 的 `Notification` 与 `PushRetryJob` 在**审批的同一个数据库事务**里写入（`createPending` / `decide` 内），请求路径**一次推送都不发**、`PushRetryWorker` 成为唯一发送者；收件人解析（active guardian、排除提交人）与去重（先查 `dedupeKey`、`skipDuplicates` 兜竞态）都在 outbox；`PUSH_PORT` 不再套重试装饰器（`useExisting: PUSH_DELIVERY_PORT`），`NotificationsService` 收敛为**只读**；outbox 写失败 ⇒ 审批事务回滚（响亮失败，无库 501），外部推送失败仍只影响 `attempts` / `status`；证据 = 离线 8 ＋ HTTP 组 G/H ＋ 真库 3（同事务两行 / 真实监护人 / 注入抛错回滚审批），`npm test` **653/653**、`test:db` **223/223**、矩阵仍 **35** 动作；**仍无厂商凭据 / 网关 / 客户端 token 上报 / 对账 / retention** | ✅ W6-C 已收口（**仅服务端**；真机推送未验） |
+| [`32-w6d-handoff.md`](./32-w6d-handoff.md) | **阶段 W6-D 交接单**（对账 ＋ 保留清理）：`NotificationsReconcileWorker` **只读、只告警、绝不自动补发**（端口只有一个 `snapshot(now)`），匹配键三层 —— `recipientUserId` ＋ `payload.approvalId` ＋ 事件语义（`submitted`⇔`submitted`；`approved`/`rejected`⇔`status_changed` 且 `payload.status` 相符），缺任一层都会让对账恒为 0 或把「批准通知 ↔ 拒绝任务」错配；额外一条**分组计数** `duplicateNotifications`（同「收件人+类型+approvalId」出现 n 次计 n−1）—— W6-C 唯一残留竞态（多一条站内通知、任务只有一条）在「配对存在性」看来完全健康；状态分布 `dead`/`expired`/`pending` **不算漂移**（没配网关时会把告警变成永远为真）；`PushRetryRetentionWorker` 只删 `sent`(7d)/`expired`(7d)/`dead`(30d)，`pending`/`sending` 永不删，时间字段 `updatedAt`（三终态统一的终结时刻），严格 `<` 截止线，分批 `DELETE … WHERE id IN (SELECT … ORDER BY updatedAt LIMIT n)`（`deleteMany` 无 limit）＋ 适配器运行期状态白名单，**部分失败一轮仍抛错**；两个无库实现都抛 **501**（不返回全零快照 / 0 条删除冒充「一切正常」）；新增 `@@index([status, updatedAt])` 迁移；证据 = 离线 **40** ＋ 真库 **17**（收件人隔离 / 状态错配 / 重复计数 / 真实删除范围 / 边界 1ms / `LIMIT` / 枚举强转 / `updatedAt` 口径），`npm test` **693/693**、`test:db` **240/240**、矩阵仍 **35** 动作；**仍无厂商凭据 / 网关 / 客户端 token 上报**（真机推送未验），无外部告警通道、无归档、无多实例锁 | ✅ W6-D 已收口（**仅服务端**；真机推送未验） |
+
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **35 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-24 矩阵同步至 35 动作） |
 
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
@@ -1404,6 +1406,29 @@ outbox 写失败 ⇒ 审批整体回滚（不会「批了但没人知道」）�
 **边界**：仍无 L3 凭据 / 网关 / 客户端 token 上报，队列里的行最终会因结构性失败在 TTL 后 `expired`，
 **真机推送一次都没发生过**；没有对账、没有 retention、没有外接告警。明细见
 [`31-w6c-handoff.md`](./31-w6c-handoff.md) §5。
+
+
+**W6-D（2026-10-24）W6 里「不需要厂商凭据」的最后两件事落地：对账会喊、队列表会瘦。**
+对账端口只有一个 `snapshot(now)` —— **没有写方法**，所以「机器自动补发」连 API 都不存在，
+这是刻意的：缺口可能是「通知写了、任务被删」，也可能是「通知是脏数据」，
+自动补发等于把一次数据异常变成一次手机弹窗（人工处置见 `32` §4 的 runbook）。
+匹配键是三层：`recipientUserId` ＋ `payload.approvalId` ＋ 事件语义
+（`submitted`⇔`submitted`；`approved`/`rejected`⇔`status_changed` 且 `payload.status` 必须相符）。
+**少了收件人条件，同一 approvalId 的两组行会互相作证，对账恒为 0** —— 真库 C1 专门守这一条。
+W6-C 承认过的那个极小竞态（并发下多一条站内通知、任务只有一条）在「配对存在性」看来
+是健康的，所以另有一条分组计数 `duplicateNotifications`（n 条计 n−1，分组键与去重键同构）。
+`dead` / `expired` / `pending` 只是状态分布，**不算漂移** —— 否则「没配网关」会让告警永远为真。
+保留清理只删三个终态：`sent` 7 天、`expired` 7 天、`dead` **30 天（它是证据）**，
+`pending` / `sending` 永不删；时间字段统一 `updatedAt`（三终态唯一的终结时刻），
+严格 `<` 边界（恰好等于截止线的行保留），分批 `DELETE … WHERE id IN (SELECT … LIMIT n)`
+（`deleteMany` 没有 limit），三个状态各自 try/catch 继续但**一轮只要有失败仍抛错**，
+适配器在发 SQL 前还会用运行期白名单再验一次状态（`pending` / `sending` 直接抛）。
+两个无库实现都是 501，**不**返回全零快照 / 0 条删除 —— 那会被读成「一切正常 / 清理完成」。
+证据：离线 **40** ＋ 真库 **17**（含真实 `LIMIT`、1ms 边界、`updatedAt` 口径、收件人隔离）；
+`npm test` → **693/693**、`npm run test:db` → **240/240**、矩阵仍 **35** 动作。
+**边界**：仍无 L3 凭据 / 网关 / 客户端 token 上报，**真机推送一次都没发生过**；
+告警只写日志、没有外部通道；保留清理无归档（删掉的 `dead` 就再也查不到）；
+对账无时间窗口也无分布式锁。明细见 [`32-w6d-handoff.md`](./32-w6d-handoff.md) §5。
 
 
 
