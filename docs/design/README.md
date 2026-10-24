@@ -36,6 +36,8 @@
 | [`27-w5j-handoff.md`](./27-w5j-handoff.md) | **阶段 W5-J 交接单**（「我的申请」＋撤回）：申请人**没有读路径**才是真缺口（收件箱对孩子 403）、新端点 `GET /approvals/mine` ＋ 新动作 `view_own_approvals`（双 ALLOW，**不复用** `review_approvals`）、收口写死 `childId + requesterUserId = 会话 actor`（query 里没有这个字段）、`POST /:id/withdraw` **无请求体**、`summary === null` **也必须能撤回**（否则坏行永久卡住）、撤回**不刷首页**且收件箱**仅在已加载时**刷新（孩子请求 `/approvals` 必然 403）、回包 `status !== withdrawn` 算**契约漂移**、两端列表状态**不共用**（游标 / 错误互不污染）、空态区分「没拉到 / 还在加载 / 真的没有」、Flutter **127** / 小程序 **14** 条用例、真库本轮未复跑 | ✅ W5-J 已收口（**双端 UI 已建**；推送 / 详情页 / 成员管理 UI 未建） |
 | [`28-w5k-handoff.md`](./28-w5k-handoff.md) | **阶段 W5-K 交接单**（审批结论推送端口）：业务只认识 `NotificationsService.notifyApprovalStatusChanged()`（**1s 超时 + 永不抛错**），渠道只认识 `PUSH_PORT`；默认 `NoopPushAdapter` **如实**返回 `provider_not_configured`（**不假成功**）；调用点在 `decide()` **端口返回之后**（账本已提交，`01` §4 / `02` §9.23），推送故障**不改写 200**；只推 `approved` / `rejected`，收件人恒为 `requesterUserId`，**自批 / 撤回 / 过期不推**；消息**不带金额 / 标题**（第三方通道会保留内容）；重复 decide 409 不重复推送；**没有真实渠道 / 设备 token 上报**（站内通知中心已在 W5-L 补上，见 §5.2），接入清单见 §5.1；backend **+12**（565/565）、**无迁移**；§5.2 = W5-L 站内通知中心、§5.3 = W5-M 提交即通知家长 | ✅ W5-K 已收口（**仅后端端口**；渠道 / 客户端未接） |
 | [`29-w6a-handoff.md`](./29-w6a-handoff.md) | **阶段 W6-A 交接单**（设备 token 上报 ＋ 真实 Webhook 推送）：新动作 `manage_device_tokens`（guardian / child **双 ALLOW**）＋ 迁移；`POST /device-tokens` / `POST /device-tokens/revoke`（身份只来自会话、**响应不回显 token**、注销走**请求体**没有 `/:token` 路由、`owned_by_other` ⇒ **409** / 不是我的 ⇒ **404**、同一用户 **LRU 上限 10**）；`PUSH_PORT` 改 `useFactory` 选绑定，`WebhookPushAdapter` **真的发 HTTP**（`{version,event,message,tokens}`、`x-kp-event`、可选 Bearer、800ms 超时、**410 只下线本次发送的 token**、5xx/401 不动 token），配置三态 `ok / disabled / invalid`（`invalid` 打 error）；核心模块**无 controller** 以免重复注册路由；三层证据 = 离线 32 ＋ HTTP 20 ＋ 真库 14（并发唯一约束 / LRU / 条件注销幂等 / `SetNull`）；`npm test` **638/638**、`test:db` **206/206**、矩阵 **35** 动作；**仍无厂商凭据 / 网关 / 客户端上报 / outbox** | ✅ W6-A 已收口（**仅服务端**；真机推送未验） |
+| [`30-w6b-handoff.md`](./30-w6b-handoff.md) | **阶段 W6-B 交接单**（推送失败重试队列 `PushRetryJob`）：新枚举 ＋ 新表（`dedupeKey` 唯一 / **无** User·Child 外键 / `expiresAt` 必填）＋ 迁移；`PUSH_PORT`（业务：发一次 + **失败即入队**）与 `PUSH_DELIVERY_PORT`（worker：只发一次）**两个令牌**，杜绝「重试再入队」的环；失败分两类 —— `provider_error` **消耗** `attempts`、按 30s→1m→2m→4m→8m→16m（封顶 30m）退避、用满 6 次 ⇒ `dead`；`no_device_token` / `provider_not_configured` **不消耗**次数、固定 5m 重试到 TTL ⇒ `expired`；`claimDue` = 单条 `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`（**真库抓到 `RETURNING` 行序未定义**，已在应用侧按 `nextAttemptAt` 重排），`sending` 超 `claimTimeout` 可回收（崩溃自愈，极端下**可能重复发一次**）；六个 `PUSH_RETRY_*` 旋钮（非法值夹取、开关拼错仍开启、`enabled=0` 打 warn）；连续 3 次失败打一条 warn（成功才重新武装）；证据 = 离线 **36** ＋ 真库 **14**（并发不重叠 / `sending` 回收 / 条件结算 / 唯一约束**不改写原行**），`npm test` **664/664**、`test:db` **220/220**、矩阵仍 **35** 动作；**这不是真 outbox**（请求路径仍同步发一次、入队在事务外）、仍无厂商凭据 / 网关 / 客户端上报 / retention / 外接告警 | ✅ W6-B 已收口（**仅服务端**；真机推送未验） |
+
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **35 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-24 矩阵同步至 35 动作） |
 
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
@@ -1365,6 +1367,25 @@ PRD §7 已同步至 **35 动作**（v1.1）。
 **边界**：没有 APNs / FCM / 微信凭据，没有网关实现，没有客户端上报（线上表仍空），
 没有 outbox / 重试，**真机推送一次都没发生过**。明细见
 [`29-w6a-handoff.md`](./29-w6a-handoff.md) §5。
+
+
+**W6-B（2026-10-24）推送失败不再「发一次就没了」：多了一张 `PushRetryJob` 与一个后台 worker。**
+`PUSH_PORT`（业务：发一次 + **失败即入队**）与 `PUSH_DELIVERY_PORT`（worker：只发一次）被拆成
+**两个令牌** —— 否则每次重试失败都会再入一次队，「谁负责重试」变成两个地方。
+失败分两类：`provider_error`（渠道坏了）**消耗** `attempts`，按 30s→1m→2m→4m→8m→16m
+（封顶 30m）退避，用满 6 次 ⇒ `dead`；`no_device_token` / `provider_not_configured`
+（结构缺失：装好 App / 配上网关就有了）**不消耗**次数，固定 5m 重试直到 TTL ⇒ `expired` ——
+若也按 6 次判死，配个网关的工夫就把队列清空了。
+领取是单条 `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`（多实例不重发），
+`sending` 超 `claimTimeout` 可回收（崩溃自愈，代价是极端下**可能重复发一次**）。
+**真库抓到一个离线用例永远抓不到的 bug**：`RETURNING` 的行序在 Postgres 里未定义，
+「拖得最久的最先发」只在某些执行计划下成立 —— 已在应用侧按 `nextAttemptAt` 重排。
+证据：离线 **36** ＋ 真库 **14**（并发不重叠 / 回收 / 条件结算 / 唯一约束**不改写原行**）；
+`npm test` → **664/664**、`npm run test:db` → **220/220**、矩阵仍 **35** 动作（无迁移外的新动作）。
+**边界**：这**不是真 outbox** —— 请求路径仍先同步发一次，入队在业务事务之外，
+「事务已提交、入队前崩溃」那条缝隙还在；没有厂商凭据 / 网关 / 客户端上报（线上表仍空），
+没有 retention、没有外接告警，**真机推送仍一次都没发生过**。明细见
+[`30-w6b-handoff.md`](./30-w6b-handoff.md) §5 / §6。
 
 
 

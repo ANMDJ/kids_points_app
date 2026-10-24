@@ -8,6 +8,7 @@ import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
 import { applyGlobalPipes, logBootstrap } from './app.setup'
+import { PushRetryWorker } from './notifications/push-retry.worker'
 
 /**
  * 入口。
@@ -36,6 +37,11 @@ async function bootstrap(): Promise<void> {
   // ★ W3-C：审批 TTL 后台扫描（02 §4.3）。计时器在无库装配下自动 no-op；
   //   `enableShutdownHooks()` 已在上方注册，进程退出时 `onApplicationShutdown` 清理计时器。
   app.get(ApprovalsExpiryService).start()
+
+  // ★ W6-B：推送失败重试 worker。`start()` 内部自己判断 `PUSH_RETRY_ENABLED`，
+  //   无库时 `PUSH_RETRY_REPOSITORY` 是 501 实现 —— 这里**不**再复写一遍开关条件，
+  //   否则「模块装配说的」与「main 说的」会成为两处真相。
+  app.get(PushRetryWorker).start()
 }
 
 void bootstrap()

@@ -24,6 +24,7 @@ import type {
 } from './notifications.types'
 import {
   PUSH_PORT,
+  PUSH_SEND_TIMEOUT_MS,
   type ApprovalStatusChangedPush,
   type ApprovalSubmittedEvent,
   type ApprovalSubmittedPush,
@@ -31,15 +32,6 @@ import {
   type PushPort,
   type PushResult
 } from './push.port'
-
-/**
- * 推送适配器的等待上限。
- *
- * ★ 为什么需要它：即使适配器不抛错，**永不 resolve** 也一样能把一次审批请求挂住。
- *   第三方推送不可靠是 `01` §4 的前提，所以「失败」必须包含「太慢」。
- *   真实适配器应当入队后立即返回；这条上限只是最后一道兜底，不承担重试。
- */
-const PUSH_TIMEOUT_MS = 1000
 
 /**
  * 通知的**唯一业务入口**（W5-K 推送 / W5-L 站内，2026-10-23）。
@@ -196,9 +188,9 @@ export class NotificationsService {
               resolve({
                 delivered: false,
                 reason: 'provider_error',
-                detail: `推送适配器超过 ${PUSH_TIMEOUT_MS}ms 未返回`
+                detail: `推送适配器超过 ${PUSH_SEND_TIMEOUT_MS}ms 未返回`
               }),
-            PUSH_TIMEOUT_MS
+            PUSH_SEND_TIMEOUT_MS
           )
         })
       ])

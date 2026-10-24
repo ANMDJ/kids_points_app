@@ -766,7 +766,7 @@ User（自然人）
 | **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` / `request_points_bonus` / `add_wish`；`autoReason` **五种全部可复现**；`expired` 有后台扫描（`ApprovalsExpiryService`）；`Idempotency-Key` 已接到 create / decide / withdraw（无库 501）。真库证据：`test-db/approvals-closing-db.dbtest.ts`（5 文件 / 75 条） | 审批状态机本身已收尾；W4 起是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点） |
 | **双端接 API** | ✅ **W4-C** 起双端只读接入；**W4-E** 起首页打卡 / 撤销真写；**W5-A** 起规则四条写入口真写（未配 env 仍为本地预览）；其余写入口仍本地 | 见 `design/` 的 W4 / W5-A 段；**"接了 API"≠"全部写入口都通了"** |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
-| **通知 / 推送** | ❌ 无依赖、无凭据（L3） | W6 |
+| **通知 / 推送** | ⚠️ **服务端链路已建，触达仍为 0**：W5-K 推送端口 ＋ W5-L 站内通知中心 ＋ W6-A 设备 token 上报 / 真 Webhook 适配器 ＋ W6-B 失败重试队列（`PushRetryJob`：指数退避 ＋ TTL ＋ `claimTimeout` 回收）；**仍无 L3 凭据 / 网关实现 / 客户端上报**，故线上 `DeviceToken` 与 `PushRetryJob` 都是空的，**真机推送一次都没发生过** | W6 剩余：厂商凭据 · 网关 · 客户端上报（明细见 `design/29-w6a-handoff.md` §5、`design/30-w6b-handoff.md` §6） |
 | **Agent** | ❌ 待建 | W6 |
 | **前端两条流水线进 CI** | ⚠️ 未接入 CI 平台（第 1–2 步尚未进 `npm run ci`）；`run.js` 跑 `dist/` 产物，**必须现编**否则会用旧代码考满分 | 见 §16.3 |
 | **`persistence`** | ⚠️ 内存态；接持久化只需在 `AppStore._persist()` 写入 shared_preferences / sqflite，UI 无需改动 | 见 `lib/data/app_store.dart` 注释 |

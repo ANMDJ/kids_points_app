@@ -716,6 +716,82 @@ model Notification {
   @@index([childId, createdAt])
 }
 
+/// 推送失败重试队列的状态（W6-B，2026-10-24）。
+///
+/// ── 五个状态各自回答一个问题 ────────────────────────────────────────────────
+///   pending  —— 还没送（或失败后等待下次重试）；`nextAttemptAt` 是「什么时候可以再试」；
+///   sending  —— 已被 worker 领走（`claimedAt`）；进程崩了要能被**超时回收**；
+///   sent     —— 网关受理（`providerMessageId` 可能为 null，不编造）；
+///   dead     —— 试满 `maxAttempts` 仍失败（渠道真的坏了，需要人看）；
+///   expired  —— 超过 `expiresAt` 仍未送出（例如 24 小时都没配上网关）。
+///
+/// ★ `dead` 与 `expired` 必须在运维上分开：前者是**渠道故障**（重试耗尽），
+///   后者是**一直没有渠道 / 一直没有设备**（结构性的）。混成一个「失败」，
+///   排查时只能看到「有 300 条没发出去」，却不知道该修网关还是该修客户端。
+enum PushRetryStatus {
+  pending
+  sending
+  sent
+  dead
+  expired
+}
+
+/// 推送失败重试队列（W6-B，2026-10-24）。
+///
+/// ── 它**不是**完整 outbox（诚实边界）────────────────────────────────────────
+///   W6-A 的发送仍是**同步先试一次**（`NotificationsService` 1s 兜底）。
+///   本表只收「试过了、没送达」的那些事实，由 worker 按退避重试。
+///   完整 outbox（业务事务内同写、请求内完全不发送）需要先把通知的入队
+///   挪进账本事务边界内，那会改变 `01` §4 的语义 —— 见 30 号交接单 §5。
+///
+/// ── 为什么**没有** User / Child 外键 ─────────────────────────────────────────
+///   这是一条「投递事实」：用户被移出 / 孩子被删之后，仍然要能回答
+///   「那条推送到底发了没有」。加 `onDelete: Cascade` 会让删除孩子顺手抹掉
+///   故障记录（正是最需要被看到的时候）。
+///   `recipientUserId` / `childId` 因此是**字符串记录**，不是关系约束。
+model PushRetryJob {
+  id String @id @default(cuid())
+
+  /// 事件类型，恒等于 `payload.type`（便于按事件计数，不必解 JSON）。
+  event String
+  /// 去重键：**同一事实只入队一次**（唯一约束兜住并发 / 重放）。
+  /// 形状见 `src/notifications/push-retry.types.ts` 的 `buildPushRetryDedupeKey`。
+  dedupeKey String @unique
+  /// 消息原文（`PushMessage` 的 JSON）：worker 原样送回 `PushPort`，不重新拼装。
+  payload Json
+
+  /// 收件人 / 孩子：只用于排查与计数，**不参与**发送决策（收件人已在 payload 里）。
+  recipientUserId String
+  childId         String
+
+  status PushRetryStatus @default(pending)
+  /// 已消耗的尝试次数。★ 只有**渠道故障**才 +1；「没设备」「没配网关」不消耗
+  /// （它们是结构性的，不是渠道坏了），见 `push-retry.policy.ts`。
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(6)
+
+  /// 下次可以领取的时刻；入队即「立刻可试」。
+  nextAttemptAt DateTime  @default(now())
+  /// 超过它仍未送达 ⇒ `expired`（不再无限期占着队列）。
+  expiresAt     DateTime
+  /// 最近一次被 worker 领走的时刻（`sending` 的回收依据）。
+  claimedAt     DateTime?
+
+  lastError         String?
+  providerMessageId String?
+  sentAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// 领件：`status + nextAttemptAt` 是唯一的排序/过滤组合。
+  @@index([status, nextAttemptAt])
+  /// 运维：「这个人的推送怎么老是失败」。
+  @@index([recipientUserId, createdAt])
+  /// 过期清扫。
+  @@index([expiresAt])
+}
+
 /// 02 §4.4：幂等记录。防「双击同意」「网络重试」导致的重复扣分。
 /// 与 `PointRecord.idempotencyKey` 配合：唯一约束在数据库层兜底，不能只靠应用判断。
 model IdempotencyRecord {

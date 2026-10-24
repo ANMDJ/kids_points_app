@@ -19,7 +19,17 @@ import {
   type NotificationsPort
 } from './notifications.repository'
 import { NotificationsService } from './notifications.service'
-import { PUSH_PORT } from './push.port'
+import { PUSH_DELIVERY_PORT, PUSH_PORT, type PushPort } from './push.port'
+import { PushRetryAdapter } from './push-retry.adapter'
+import { PUSH_RETRY_CONFIG, readPushRetryConfig, type PushRetryConfig } from './push-retry.config'
+import { PushRetryMetrics } from './push-retry.metrics'
+import { PrismaPushRetryRepository } from './push-retry.prisma.repository'
+import {
+  PUSH_RETRY_REPOSITORY,
+  NotImplementedPushRetryRepository,
+  type PushRetryPort
+} from './push-retry.repository'
+import { PushRetryWorker } from './push-retry.worker'
 import { readWebhookPushConfig, type WebhookPushConfigResult } from './push-webhook.config'
 import { createPushAdapter } from './webhook-push.adapter'
 
@@ -29,9 +39,12 @@ import { createPushAdapter } from './webhook-push.adapter'
  * ── 两条通道，两种诚实 ────────────────────────────────────────────────────
  *   · **站内**（W5-L，2026-10-23）：`GET /notifications` / `PATCH /notifications/:id/read`。
  *     有库 ⇒ 真读 `Notification` 表；无库 ⇒ 501（不返回空列表冒充「你没有通知」）。
- *   · **推送**（W5-K → W6-A，2026-10-24）：`PUSH_PORT`。配置了 `PUSH_WEBHOOK_URL`
+ *   · **推送**（W5-K → W6-A → W6-B，2026-10-24）：`PUSH_PORT`。配置了 `PUSH_WEBHOOK_URL`
  *     ⇒ `WebhookPushAdapter`（读 `DeviceToken` 表、POST 到网关）；
  *     否则 ⇒ `NoopPushAdapter`，如实返回 `provider_not_configured`，**不假装送达**。
+ *   · **重试**（W6-B）：`PUSH_PORT` = 原始适配器（`PUSH_DELIVERY_PORT`）+ `PushRetryAdapter`
+ *     （失败即写 `PushRetryJob`）；`PushRetryWorker` 由 `main.ts` 启动，按退避重发，
+ *     超过 TTL 标 `expired`、渠道故障用满次数标 `dead`。**无库 ⇒ 不套装饰器、不启动**。
  *
  * ── ★ 本模块的唯一不可妥协点 ──────────────────────────────────────────────
  *   通知发送必须在账本事务**之外**。若把通知放进事务，一次推送失败会回滚一笔
@@ -52,6 +65,15 @@ export function resolveNotificationsRepositoryClass(
   return hasDatabase ? PrismaNotificationsRepository : NotImplementedNotificationsRepository
 }
 
+/**
+ * 重试队列端口的实现选择 —— 与上面那个函数**同一手法**：
+ * 有库 ⇒ 真 `PushRetryJob` 读写；无库 ⇒ 全 501（`enqueue` 的 501 会被
+ * `PushRetryAdapter` 吞掉并记 warn，业务请求不受影响）。
+ */
+export function resolvePushRetryRepositoryClass(hasDatabase: boolean): Type<PushRetryPort> {
+  return hasDatabase ? PrismaPushRetryRepository : NotImplementedPushRetryRepository
+}
+
 export interface NotificationsAssemblyOptions {
   /** 省略 ⇒ 按环境推断（只有生产代码允许省略；用例必须显式钉死世界）。 */
   hasDatabase?: boolean
@@ -61,6 +83,11 @@ export interface NotificationsAssemblyOptions {
    * 传 `{ kind: 'disabled', reason: 'not_configured' }` 即强制 no-op。
    */
   pushWebhook?: WebhookPushConfigResult
+  /**
+   * 推送重试配置（W6-B）。省略 ⇒ 读 `process.env`（生产）；
+   * 用例必须显式传入，否则本机恰好导出了 `PUSH_RETRY_BATCH=500` 就会改变结论。
+   */
+  pushRetry?: PushRetryConfig
 }
 
 @Module({})
@@ -68,7 +95,9 @@ export class NotificationsModule {
   static register(options: NotificationsAssemblyOptions = {}): DynamicModule {
     const hasDatabase = options.hasDatabase ?? hasDatabaseUrl()
     const pushWebhook = options.pushWebhook ?? readWebhookPushConfig(process.env)
+    const pushRetry = options.pushRetry ?? readPushRetryConfig(process.env)
     logPushSelection(hasDatabase, pushWebhook)
+    logPushRetrySelection(hasDatabase, pushRetry)
     return {
       module: NotificationsModule,
       imports: [
@@ -86,15 +115,41 @@ export class NotificationsModule {
         // 控制器上的 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块 exports 提供。
         DeviceSessionGuard,
         { provide: NOTIFICATIONS_REPOSITORY, useClass: resolveNotificationsRepositoryClass(hasDatabase) },
+        // ★ W6-B：重试队列的持久化端口（无库 ⇒ 501，`enqueue` 的 501 被适配器吞掉）。
+        {
+          provide: PUSH_RETRY_REPOSITORY,
+          useClass: resolvePushRetryRepositoryClass(hasDatabase)
+        },
+        // ★ W6-B：配置是**值**，不是实现 —— `main.ts` 与 worker 读同一份。
+        { provide: PUSH_RETRY_CONFIG, useValue: pushRetry },
+        // ★ W6-B：进程内计数（随重启归零；跨实例口径请查 `PushRetryJob` 表）。
+        PushRetryMetrics,
         // ★ 唯一换绑点（W6-A）：`createPushAdapter` 是三种配置结论的唯一分叉，
         //   生产与用例共用同一函数 —— 测试里另写一份 if/else 就会测到不存在的代码。
+        // ★ W6-B：这是**原始**适配器（只发一次），worker 用它；业务用下面那个。
         {
-          provide: PUSH_PORT,
+          provide: PUSH_DELIVERY_PORT,
           useFactory: (tokens: DeviceTokensPort) => createPushAdapter(pushWebhook, tokens),
           inject: [DEVICE_TOKENS_REPOSITORY]
-        }
+        },
+        // ★ W6-B：业务入口 = 原始适配器 + 「失败即入队」。无库时不套装饰器 ——
+        //   没有队列可写，套上只会让每一次推送失败都多一条「入队失败」的 warn。
+        {
+          provide: PUSH_PORT,
+          useFactory: (
+            delivery: PushPort,
+            repository: PushRetryPort,
+            config: PushRetryConfig,
+            metrics: PushRetryMetrics
+          ): PushPort =>
+            hasDatabase ? new PushRetryAdapter(delivery, repository, config, metrics) : delivery,
+          inject: [PUSH_DELIVERY_PORT, PUSH_RETRY_REPOSITORY, PUSH_RETRY_CONFIG, PushRetryMetrics]
+        },
+        // ★ W6-B：计时器**不**在这里启动 —— 只有 `main.ts` 调 `start()`
+        //   （与 `ApprovalsExpiryService` 同一纪律：`npm test` 不留下 setInterval）。
+        PushRetryWorker
       ],
-      exports: [NotificationsService, PUSH_PORT]
+      exports: [NotificationsService, PUSH_PORT, PUSH_DELIVERY_PORT, PUSH_RETRY_CONFIG, PushRetryWorker]
     }
   }
 }
@@ -124,6 +179,34 @@ function logPushSelection(hasDatabase: boolean, result: WebhookPushConfigResult)
     return
   }
   Logger.log(`推送走 webhook 网关（超时 ${result.config.timeoutMs}ms）`, 'NotificationsModule')
+}
+
+/**
+ * 重试队列的装配结论（W6-B）。
+ *
+ * ★ `enabled=false` 用 **warn**：它是「队列存在但不工作」，与「没配网关」不同 ——
+ *   失败推送会一直停在 `pending` 直到有人翻 `.env`。悄悄不启动是最糟的默认值。
+ */
+function logPushRetrySelection(hasDatabase: boolean, config: PushRetryConfig): void {
+  if (!config.enabled) {
+    Logger.warn(
+      `PUSH_RETRY_ENABLED=0 —— 失败推送只入队不重试（worker 不启动）`,
+      'NotificationsModule'
+    )
+    return
+  }
+  if (!hasDatabase) {
+    Logger.warn(
+      '推送重试已启用，但没有数据库连接 —— 队列端点为 501，失败推送不会入队',
+      'NotificationsModule'
+    )
+    return
+  }
+  Logger.log(
+    `推送重试队列已装配（每 ${config.intervalMs}ms，批量 ${config.batchSize}，` +
+      `TTL ${config.ttlMs}ms，渠道故障上限 ${config.maxAttempts} 次）`,
+    'NotificationsModule'
+  )
 }
 
 

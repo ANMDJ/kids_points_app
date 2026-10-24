@@ -18,6 +18,30 @@ import type { ActionType } from '../contracts/permission-matrix'
  */
 export const PUSH_PORT = Symbol('PUSH_PORT')
 
+/**
+ * **原始发送端口**（W6-B，2026-10-24）：只发一次，失败不重试。
+ *
+ * ── 两个令牌，两种语义 ────────────────────────────────────────────────────
+ *   `PUSH_PORT`          业务入口（`NotificationsService`）：发一次 + 失败**入队**
+ *   `PUSH_DELIVERY_PORT` worker 入口：只发一次，失败由 worker 自己结算
+ *
+ * ★ 为什么不让 worker 也用 `PUSH_PORT`：那会在每次重试失败时再入一次队
+ *   （唯一约束会挡住，但它同时会刷新 `lastAttempt` 相关计数，且让「谁负责重试」
+ *   变成两个地方）。职责分开之后，「入队」只发生在业务路径，「结算」只发生在 worker。
+ */
+export const PUSH_DELIVERY_PORT = Symbol('PUSH_DELIVERY_PORT')
+
+/**
+ * 单次推送适配器调用的等待上限（毫秒）。
+ *
+ * ★ 调用方（`NotificationsService`）与 worker 共用同一个数字：
+ *   两处若各写一个，「业务路径 1s、重试路径 10s」这种漂移会让同一条推送
+ *   在两条路径上表现不同，而排查时只会看到「有时很快失败、有时很慢」。
+ *   它必须**大于** `PUSH_WEBHOOK_TIMEOUT_MS`（默认 800ms），否则适配器还没超时
+ *   就已被上层判死，网关上真正发生了什么永远不会被记录。
+ */
+export const PUSH_SEND_TIMEOUT_MS = 1000
+
 /** 审批结论（只推「人做出的判定」；`expired` / `invalidated` 是系统判定，暂不推）。 */
 export type ApprovalPushStatus = 'approved' | 'rejected'
 
@@ -130,8 +154,9 @@ export type PushResult =
  * ★ 实现约束：
  *   ① `send` **必须快速返回**，不得在审批请求里同步等第三方做成「慢但成功」；
  *      `WebhookPushAdapter`（W6-A）是**有界**的例外：单次 HTTP 调用上限 800ms，
- *      且 `NotificationsService` 另有 1s 兜底。重试 / 出队**没有实现**
- *      （需要 outbox + 幂等键），见 29 号交接单 §5；
+ *      且调用方另有 `PUSH_SEND_TIMEOUT_MS`（1s）兜底。**重试**由 W6-B 的
+ *      `PushRetryJob` + `PushRetryWorker` 承担（失败入队、指数退避、TTL 上限），
+ *      所以 `send` 自己**仍然不许**在请求路径里重试；
  *   ② 任何失败都要么返回 `delivered: false`，要么抛错 —— 两者都会被
  *      `NotificationsService` 兜住并记日志（抛错不会传播到 HTTP 响应）；
  *   ③ 实现**不得**写业务表 / 账本（推送是事务之外的事，`01` §4）。
