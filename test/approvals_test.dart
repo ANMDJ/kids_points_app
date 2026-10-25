@@ -48,7 +48,9 @@ void main() {
       'cost': 100,
     },
     String createdAt = '2026-10-20T08:00:00.000Z',
-    String expiresAt = '2026-10-23T08:00:00.000Z',
+    // 用一个**远期**时间：这条默认值昨天是“未来”，今天就成了“已过期”，
+    // 批准按钮会静默禁用，用例跟着日期变红。需要过期的用例显式传 expiresAt。
+    String expiresAt = '2099-01-01T00:00:00.000Z',
     String? autoReason,
   }) =>
       <String, Object?>{

@@ -39,6 +39,9 @@
 | [`30-w6b-handoff.md`](./30-w6b-handoff.md) | **阶段 W6-B 交接单**（推送失败重试队列 `PushRetryJob`）：新枚举 ＋ 新表（`dedupeKey` 唯一 / **无** User·Child 外键 / `expiresAt` 必填）＋ 迁移；`PUSH_PORT`（业务：发一次 + **失败即入队**）与 `PUSH_DELIVERY_PORT`（worker：只发一次）**两个令牌**，杜绝「重试再入队」的环；失败分两类 —— `provider_error` **消耗** `attempts`、按 30s→1m→2m→4m→8m→16m（封顶 30m）退避、用满 6 次 ⇒ `dead`；`no_device_token` / `provider_not_configured` **不消耗**次数、固定 5m 重试到 TTL ⇒ `expired`；`claimDue` = 单条 `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`（**真库抓到 `RETURNING` 行序未定义**，已在应用侧按 `nextAttemptAt` 重排），`sending` 超 `claimTimeout` 可回收（崩溃自愈，极端下**可能重复发一次**）；六个 `PUSH_RETRY_*` 旋钮（非法值夹取、开关拼错仍开启、`enabled=0` 打 warn）；连续 3 次失败打一条 warn（成功才重新武装）；证据 = 离线 **36** ＋ 真库 **14**（并发不重叠 / `sending` 回收 / 条件结算 / 唯一约束**不改写原行**），`npm test` **664/664**、`test:db` **220/220**、矩阵仍 **35** 动作；**这不是真 outbox**（请求路径仍同步发一次、入队在事务外）、仍无厂商凭据 / 网关 / 客户端上报 / retention / 外接告警 | ✅ W6-B 已收口（**仅服务端**；真机推送未验） |
 | [`31-w6c-handoff.md`](./31-w6c-handoff.md) | **阶段 W6-C 交接单**（审批通知的**真 outbox**）：`approval.submitted` / `approved` / `rejected` 的 `Notification` 与 `PushRetryJob` 在**审批的同一个数据库事务**里写入（`createPending` / `decide` 内），请求路径**一次推送都不发**、`PushRetryWorker` 成为唯一发送者；收件人解析（active guardian、排除提交人）与去重（先查 `dedupeKey`、`skipDuplicates` 兜竞态）都在 outbox；`PUSH_PORT` 不再套重试装饰器（`useExisting: PUSH_DELIVERY_PORT`），`NotificationsService` 收敛为**只读**；outbox 写失败 ⇒ 审批事务回滚（响亮失败，无库 501），外部推送失败仍只影响 `attempts` / `status`；证据 = 离线 8 ＋ HTTP 组 G/H ＋ 真库 3（同事务两行 / 真实监护人 / 注入抛错回滚审批），`npm test` **653/653**、`test:db` **223/223**、矩阵仍 **35** 动作；**仍无厂商凭据 / 网关 / 客户端 token 上报 / 对账 / retention** | ✅ W6-C 已收口（**仅服务端**；真机推送未验） |
 | [`32-w6d-handoff.md`](./32-w6d-handoff.md) | **阶段 W6-D 交接单**（对账 ＋ 保留清理）：`NotificationsReconcileWorker` **只读、只告警、绝不自动补发**（端口只有一个 `snapshot(now)`），匹配键三层 —— `recipientUserId` ＋ `payload.approvalId` ＋ 事件语义（`submitted`⇔`submitted`；`approved`/`rejected`⇔`status_changed` 且 `payload.status` 相符），缺任一层都会让对账恒为 0 或把「批准通知 ↔ 拒绝任务」错配；额外一条**分组计数** `duplicateNotifications`（同「收件人+类型+approvalId」出现 n 次计 n−1）—— W6-C 唯一残留竞态（多一条站内通知、任务只有一条）在「配对存在性」看来完全健康；状态分布 `dead`/`expired`/`pending` **不算漂移**（没配网关时会把告警变成永远为真）；`PushRetryRetentionWorker` 只删 `sent`(7d)/`expired`(7d)/`dead`(30d)，`pending`/`sending` 永不删，时间字段 `updatedAt`（三终态统一的终结时刻），严格 `<` 截止线，分批 `DELETE … WHERE id IN (SELECT … ORDER BY updatedAt LIMIT n)`（`deleteMany` 无 limit）＋ 适配器运行期状态白名单，**部分失败一轮仍抛错**；两个无库实现都抛 **501**（不返回全零快照 / 0 条删除冒充「一切正常」）；新增 `@@index([status, updatedAt])` 迁移；证据 = 离线 **40** ＋ 真库 **17**（收件人隔离 / 状态错配 / 重复计数 / 真实删除范围 / 边界 1ms / `LIMIT` / 枚举强转 / `updatedAt` 口径），`npm test` **693/693**、`test:db` **240/240**、矩阵仍 **35** 动作；**仍无厂商凭据 / 网关 / 客户端 token 上报**（真机推送未验），无外部告警通道、无归档、无多实例锁 | ✅ W6-D 已收口（**仅服务端**；真机推送未验） |
+| [`33-w6e-handoff.md`](./33-w6e-handoff.md) | **阶段 W6-E 交接单**（Flutter 设备 token 上报）：独立 `DeviceTokenApi`（**不并进 `WriteApi`** —— 推送失败不得影响打卡 / 登录 / 首页，且现有 `implements WriteApi` 替身不该被牵连）；`PushTokenConfig` 区分「未配置 / 配置错误」（release/profile **拒绝**编译期 `KP_PUSH_TOKEN`）；`PushTokenRegistrar` **永不抛错**、单飞（并发拿到同一 Future）、同 token 去重、**409 `OWNED_BY_OTHER` 进程内短路不重试**、注销 404 按已注销；`main()` fire-and-forget 并 `whenComplete(close)`（W6-F 已改为长期存活的 runtime）；日志 / 结果 / `ArgumentError` **都不含 token**（SDK 异常只打 `runtimeType`）；新增 40 条用例，`flutter analyze` 无问题、`flutter test` **240/240**；**W6-E 当时仍无真实 FCM/APNs SDK、无生命周期重报、无退出登录注销、无真机 / 真后端证据**（生命周期重报 / 注销入口已由 W6-F 补上）；小程序因缺微信登录（`openid`）**刻意不做** | ✅ W6-E 已收口（**仅 Flutter**；厂商 SDK 未接） |
+| [`34-w6f-handoff.md`](./34-w6f-handoff.md) | **阶段 W6-F 交接单**（推送 token 生命周期）：`PushTokenRuntime` 长期持有 registrar —— `start()` 启动即报、`reportIfDue()` 只在 **resumed** 时按 **5 分钟冷却**重报（失败也消耗窗口，避免断网时每次切前台都等超时）、`revoke()` **先停用再注销**（并发 resume 不会把 token 登记回去）、`dispose()` 等在途请求结束才关 HttpClient；`PushTokenLifecycle` 是唯一 Flutter 绑定胶水，只认 `resumed`；新增 **16** 条用例，`flutter analyze` 无问题、`flutter test` **256/256**；**仍无真实 FCM/APNs SDK、无 token refresh 流、无登录流程调用点、无真机证据** | ✅ W6-F 已收口（**仅 Flutter**；真实 SDK 未接） |
+| [`35-w6g-handoff.md`](./35-w6g-handoff.md) | **阶段 W6-G 交接单**（推送链路端到端冒烟）：`test-db/push-delivery-e2e-db.dbtest.ts` 用**真 `AppModule` ＋ 真 Prisma ＋ 真 `PushRetryWorker.tick()` ＋ 真 `WebhookPushAdapter`**，把「审批 HTTP → 同事务 outbox → 领件 → 查 active token → POST **本地 `node:http` 网关** → 回写任务」一次跑通；只覆盖 `PUSH_DELIVERY_PORT`（仍是生产适配器，仅 URL 指向本地）与 `PUSH_RETRY_CONFIG.batchSize=1`，**不需要 L2/L3 推送凭据**；网关三种回应分别钉死 `sent` / 渠道故障 `attempts+1` / `410` 下线 token；★ 500 组额外断言**推送失败不回滚业务**（审批仍 `approved`、心愿仍落库），无 token 组断言网关 **0 次调用**且 `attempts` **仍 0**（结构性失败不烧次数）；共享库不 DELETE，靠 `nextAttemptAt=2000-01-01` 选行；证据 = `test:db` **246/246**（本套件 **6** 条）、`npm test` **693/693**、矩阵仍 **35** 动作；**仍无真实厂商 SDK / 凭据、无客户端参与、无调度计时 / 真机到达验证** | ✅ W6-G 已收口（**服务端链路已接通到本地网关**；真机推送未验） |
 | [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **35 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-24 矩阵同步至 35 动作） |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
@@ -1427,8 +1430,55 @@ W6-C 承认过的那个极小竞态（并发下多一条站内通知、任务只
 告警只写日志、没有外部通道；保留清理无归档（删掉的 `dead` 就再也查不到）；
 对账无时间窗口也无分布式锁。明细见 [`32-w6d-handoff.md`](./32-w6d-handoff.md) §5。
 
+**W6-E（2026-10-25）客户端第一次真的会写 `DeviceToken`：推送失败从启动路径上被隔离出去。**
+Flutter 启动时若后端已配置，就 fire-and-forget 上报一次；**没配推送 token 是正常状态**，
+配置错误只打日志，请求失败 / 超时 / 409 全部归一成 `PushTokenResult`，**不 `await`、不抛错**。
+接口刻意独立于 `WriteApi`：推送失败不得改变打卡 / 登录 / 首页刷新，也不该让一堆
+`implements WriteApi` 的测试替身被迫加方法。`PushTokenRegistrar` 做四件事 ——
+单飞（并发拿到**同一个 Future**，只发一次）、同 `(platform, token)` 去重、
+**409 `DEVICE_TOKEN_OWNED_BY_OTHER` 本次进程内不重试**（重试永远是 409，换 token 才解除）、
+注销 404 按「已注销」处理；连 `PushTokenSource.platform` 这种外部 getter 抛错也在
+`report()` 内兜住，由用例钉死。`KP_PUSH_TOKEN` **只允许调试构建**：发布包里写死一个 token，
+所有安装会抢同一个地址（后端 409，新用户永远收不到推送）。日志、结果与 `ArgumentError`
+**都不含 token**；SDK 异常只打 `runtimeType` —— 最初打 `$error` 时测试放过了，
+但真实 SDK 的异常串常把 token 一起带出来。
+证据：新增 **40** 条用例（API 16 ＋ 上报器 24），`flutter analyze` 无问题、`flutter test` **240/240**。
+**边界**：W6-E 当时没有真实 FCM / APNs SDK、没有权限申请、没有生命周期重报、没有退出登录注销、
+没有跨启动去重、**没有真机 / 真后端证据**；小程序因缺微信登录（拿不到可信 `openid`）
+**刻意不做**，不造假的 `weapp` token 来源。明细见 [`33-w6e-handoff.md`](./33-w6e-handoff.md) §5。
+（其中“生命周期重报 / 退出登录注销入口”已由下一阶段 **W6-F** 补上。）
 
+**W6-F（2026-10-25）推送 token 从「启动报一次」变成「进程级运行时」。**
+W6-E 的 registrar 用完即关，真实 SDK 在运行中轮换 token 时没有任何补报机会。
+W6-F 新增 `PushTokenRuntime` 长期持有它：`start()` 绕过冷却立即报；
+App 回到前台（**只认 `resumed`**）调用 `reportIfDue()`，默认 **5 分钟冷却**，
+窗口内一个请求都不发；失败也记录尝试时刻，避免断网时每次切前台都等 10 秒超时；
+`revoke()` **先置停用再注销**，并发 resume 不会把 token 登记回去（退出登录后不能仍收推送）；
+`dispose()` 有在途请求时等它结束再关 HttpClient，且只关一次。
+`PushTokenLifecycle` 是唯一 Flutter 绑定胶水（`addObserver` / 只过滤 `resumed`），
+策略全在纯 Dart runtime 里：13 条运行时用例不需要 widget binding 就能证伪，
+另 3 条只验证 observer 接线。证据：新增 **16** 条，`flutter analyze` 无问题、`flutter test` **256/256**。
+**边界**：仍无真实 FCM / APNs SDK、无 token refresh 流（轮换要等下一次 resume）、
+无登录流程可调 `revoke()`、无跨启动去重、**无真机 / 真后端证据**；
+小程序仍因缺微信登录刻意不做。明细见 [`34-w6f-handoff.md`](./34-w6f-handoff.md) §5。
 
+**W6-G（2026-10-25）推送链路第一次被一条用例从头跑到尾。**
+W6-A ~ W6-F 各自证明了一段（token 能登记、任务能入队、worker 会结算、队列能对账、客户端会上报），
+但没有任何一条用例把它们串起来。W6-G 新增 `test-db/push-delivery-e2e-db.dbtest.ts`：
+真 `AppModule` 起 HTTP 服务 → 真审批写同事务 outbox → 真 `PushRetryWorker.tick()` 领件 →
+真 `WebhookPushAdapter` 查真 `DeviceToken` → POST 到本进程的 `node:http` 网关 → 回写任务。
+网关只扮演「我们自己的推送网关」这一端，因此**不需要 L2 / L3 凭据**，但适配器本身没有替身。
+只覆盖两个 provider：`PUSH_DELIVERY_PORT`（生产适配器 + 本地 URL）与
+`PUSH_RETRY_CONFIG.batchSize=1`（共享库选行隔离）；适配器 `timeoutMs=800` 必须小于
+worker 的 1000ms 兜底。网关三种回应钉死三条结算分支：200 ⇒ `sent` + `providerMessageId`；
+500 ⇒ `pending` + `attempts=1` + 30s 退避；410 ⇒ 同样重试且库里 token `active=false`。
+最要紧的两条：**500 之后审批仍 `approved`、心愿仍落库**（推送失败不回滚业务），
+**没有 token 时网关 0 次调用且 `attempts` 仍 0**（结构性失败不烧 24h 的重试预算）。
+共享实验库仍不 DELETE：只把被测任务的 `nextAttemptAt` 拨到 2000 年，保证它是
+`ORDER BY nextAttemptAt ASC` 的第一条。证据：`test:db` **246/246**（本套件 **6** 条）、
+`npm test` **693/693**，矩阵仍 **35** 动作。**边界**：本地网关不是 APNs / FCM，
+token 由测试直接登记（没有客户端参与），`tick()` 由测试手动调（没验 15s 调度 / 重启 / 多实例），
+**真机推送仍然一次都没发生过**。明细见 [`35-w6g-handoff.md`](./35-w6g-handoff.md) §5。
 
 **上一轮（自查发现）**
 
