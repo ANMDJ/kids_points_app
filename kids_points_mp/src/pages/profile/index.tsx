@@ -7,6 +7,7 @@ import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
 import type { IconName } from '../../components/Icon/icons'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
+import ConsentSheet from '../../sheets/ConsentSheet'
 import InviteSheet from '../../sheets/InviteSheet'
 import MemberSheet from '../../sheets/MemberSheet'
 import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
@@ -66,6 +67,8 @@ export default function Profile() {
   // W5-I：邀请码面板自己先确认角色（`invite_member` 仅家长 ALLOW），
   // 所以入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const inviteSheet = useSheet()
+  // W7-B：监护人同意。入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
+  const consentSheet = useSheet()
   // W5-J：我的申请。与家长收件箱分开 —— 这里只看「我提交的」，动作是撤回。
   const myApplicationsSheet = useSheet()
   // W5-L：站内通知中心。未读数由服务端下发的整份 `unreadCount` 决定；
@@ -240,6 +243,21 @@ export default function Profile() {
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
             <View className='kp-profile__menu-divider' />
+            {/* W7-B：监护人同意（先确认角色，再拉 `GET /consent`） */}
+            <View
+              className='kp-profile__menu'
+              onClick={() => consentSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#6aa84f', 34 / 255) }}
+              >
+                <Icon name='check' size={19} color='#6aa84f' />
+              </View>
+              <Text className='kp-profile__menu-label'>监护人同意</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
               onClick={() => {
@@ -311,6 +329,13 @@ export default function Profile() {
           <InviteSheet
             visible={inviteSheet.visible}
             onClose={inviteSheet.hide}
+          />
+        ) : null}
+        {/* W7-B：监护人同意弹窗（先确认角色，再拉 `GET /consent`） */}
+        {consentSheet.open ? (
+          <ConsentSheet
+            visible={consentSheet.visible}
+            onClose={consentSheet.hide}
           />
         ) : null}
       </View>

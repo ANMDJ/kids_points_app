@@ -607,6 +607,87 @@ export class InviteListDto {
   }
 }
 
+// ─────────────────────────── 监护人同意（W7-B） ───────────────────────────
+
+/**
+ * `GET /consent` 的响应体。
+ *
+ * 线值（`backend/src/contracts/consent-policy.ts` 的 `CONSENT_STATUSES`）：
+ * `granted` / `withdrawn` / `none`。`status` 在这里**只保证是字符串**，
+ * 认识的枚举交给 `mapConsent` —— 与 `MemberDto.role` 同一条原则：
+ * DTO 负责形状，mapper 负责语义。
+ *
+ * 三个可选字段的**形状一致性**也在这里校验（后端一定满足，校验是为了
+ * 契约漂移时显式失败，而不是在界面上画出「已同意但没有版本号」）：
+ *   · `granted` ⇒ `consentVersion` 与 `grantedAt` 都必须有；
+ *   · `withdrawn` ⇒ `withdrawnAt` 必须有；
+ *   · `none` ⇒ 三个字段都为 null。
+ */
+export class ConsentStateDto {
+  constructor(
+    readonly childId: string,
+    readonly status: string,
+    readonly consentVersion: string | null,
+    readonly grantedAt: number | null,
+    readonly withdrawnAt: number | null
+  ) {
+    if (childId.trim() === '') {
+      throw ReadApiException.malformed('$.childId', 'childId 不能为空')
+    }
+    switch (status) {
+      case 'granted':
+        if ((consentVersion ?? '').trim() === '') {
+          throw ReadApiException.malformed(
+            '$.consentVersion',
+            'status=granted 时必须带协议版本'
+          )
+        }
+        if (grantedAt === null) {
+          throw ReadApiException.malformed(
+            '$.grantedAt',
+            'status=granted 时必须带同意时间'
+          )
+        }
+        break
+      case 'withdrawn':
+        if (withdrawnAt === null) {
+          throw ReadApiException.malformed(
+            '$.withdrawnAt',
+            'status=withdrawn 时必须带撤回时间'
+          )
+        }
+        break
+      case 'none':
+        if (
+          consentVersion !== null ||
+          grantedAt !== null ||
+          withdrawnAt !== null
+        ) {
+          throw ReadApiException.malformed(
+            '$.status',
+            'status=none 时 consentVersion / grantedAt / withdrawnAt 必须为 null'
+          )
+        }
+        break
+      default:
+        // 未知状态不在这里判：DTO 只保证形状，`mapConsent` 才决定
+        // 「认不认识」—— 与 `MemberDto.role` 同一条分工。
+        break
+    }
+  }
+
+  static fromJson(raw: unknown, path = '$'): ConsentStateDto {
+    const json = readObject(raw, path)
+    return new ConsentStateDto(
+      readString(json, 'childId', `${path}.childId`),
+      readString(json, 'status', `${path}.status`),
+      readOptionalString(json, 'consentVersion', `${path}.consentVersion`),
+      readOptionalDate(json, 'grantedAt', `${path}.grantedAt`),
+      readOptionalDate(json, 'withdrawnAt', `${path}.withdrawnAt`)
+    )
+  }
+}
+
 // ───────────────────────────── 严格读取助手 ─────────────────────────────
 
 export function readObject(

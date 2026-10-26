@@ -543,6 +543,105 @@ export function revokedInviteCopy(invite: InviteCode): InviteCode {
   return { ...invite, revoked: true }
 }
 
+// ============================================================ 监护人同意（W7-B）
+
+/**
+ * 监护人同意的**库内状态**（`GET /consent` 的 `status`）。
+ *
+ * 线值只有三个：`granted` / `withdrawn` / `none`。后两者是不同事实
+ * （「撤回」与「从没同意过」），文案也分开 —— 撤回过的家庭再点同意
+ * 是**恢复**，不是首次同意。
+ */
+export type GuardianConsentStatus = 'granted' | 'withdrawn' | 'none'
+
+/**
+ * 当前孩子的监护人同意快照（`GET /consent`）。
+ *
+ * **只有事实**：状态 / 协议版本 / 两个时间点。谁能写由服务端矩阵判定
+ * （`grant_consent` / `withdraw_consent` 仅 guardian ALLOW），客户端
+ * 只负责在服务端拒绝时把 403 的 code 原样解释出来。
+ *
+ * `consentVersion` 是**同意时**的协议版本，不是当前协议版本：协议升级后
+ * 旧记录仍显示旧版本号，「孩子的新资料按哪一版处理」才有据可查。
+ */
+export interface GuardianConsent {
+  childId: string
+  status: GuardianConsentStatus
+  /** 同意时的协议版本（例如 `2026-10-27`）；`none` 时为 null。 */
+  consentVersion: string | null
+  /** 同意时间（epoch 毫秒）；`none` 时为 null。 */
+  grantedAt: number | null
+  /** 撤回时间（epoch 毫秒）；仅 `withdrawn` 时有值。 */
+  withdrawnAt: number | null
+}
+
+/**
+ * 「还没有任何记录」的本地初值 —— **不是**服务端下发的事实。
+ *
+ * 界面用它画空态，但不应把它当成「服务端说没同意」：在
+ * `consentReadStatus !== 'ready'` 时显示「同意状态未知」更诚实。
+ */
+export const unknownGuardianConsent: GuardianConsent = {
+  childId: '',
+  status: 'none',
+  consentVersion: null,
+  grantedAt: null,
+  withdrawnAt: null
+}
+
+/** 状态徽标文案（双端口径一致，见 Flutter `GuardianConsent.statusLabel`）。 */
+export function guardianConsentStatusLabelOf(
+  status: GuardianConsentStatus
+): string {
+  switch (status) {
+    case 'granted':
+      return '已同意'
+    case 'withdrawn':
+      return '已撤回'
+    case 'none':
+      return '未同意'
+  }
+}
+
+/** 协议版本展示值：没有版本号时显示「—」，不要留空（看起来像加载失败）。 */
+export function consentVersionLabel(consent: GuardianConsent): string {
+  const raw = (consent.consentVersion ?? '').trim()
+  return raw === '' ? '—' : raw
+}
+
+/**
+ * 协议文本仍是占位版（`*-draft`）—— 界面据此提醒「法务文本待替换」。
+ *
+ * 后端只保证 `CONSENT_VERSION` 这一常量，「是不是草案」是**命名约定**，
+ * 放在 UI 侧解释比新增一个只读字段更轻。
+ */
+export function isDraftConsentVersion(consent: GuardianConsent): boolean {
+  const raw = (consent.consentVersion ?? '').trim()
+  return raw === '' || raw.endsWith('-draft')
+}
+
+/**
+ * 「2026-10-27 09:30 同意」；没有时间时返回 null（不编一个假时间）。
+ */
+export function consentGrantedText(consent: GuardianConsent): string | null {
+  if (consent.grantedAt === null) return null
+  return `${formatConsentMoment(consent.grantedAt)} 同意`
+}
+
+/** 「2026-10-27 10:05 撤回」；没有时间时返回 null。 */
+export function consentWithdrawnText(consent: GuardianConsent): string | null {
+  if (consent.withdrawnAt === null) return null
+  return `${formatConsentMoment(consent.withdrawnAt)} 撤回`
+}
+
+function formatConsentMoment(value: number): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '时间未知'
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
+    date.getDate()
+  )} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
 // ============================================================ 规则版本（修 C10）
 
 /**

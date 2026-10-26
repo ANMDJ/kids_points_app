@@ -169,6 +169,19 @@ class ReadApiClient {
     return InviteListDto.fromJson(await _get('/invites'));
   }
 
+  /// `GET /consent`：当前孩子的监护人同意状态（W7-B）。
+  ///
+  /// **只有家长能读**（矩阵 `view_consent` guardian ALLOW / child DENY）——
+  /// 孩子身份请求会 403，客户端据此只在家长视角请求它，并把 403 解释成
+  /// 「只有监护人能查看同意状态」，而不是画成「未同意」。
+  ///
+  /// 返回的是**事实**（`status` / 同意时版本 / 时间），不带「你能不能同意」：
+  /// 写资格由服务端矩阵判定（`manage_consent` 同样仅 guardian），
+  /// 客户端在 403 时原样解释。
+  Future<ConsentStateDto> fetchConsent() async {
+    return ConsentStateDto.fromJson(await _get('/consent'));
+  }
+
   /// 第一页传 `cursor: null`；之后把响应里的 [RecordsPageDto.nextCursor]
   /// **原样**传回来。游标不是 offset，客户端不许自己拼。
   Future<RecordsPageDto> fetchRecords({

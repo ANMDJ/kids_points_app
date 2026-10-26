@@ -7,7 +7,14 @@ import {
   type ReadEnvironment
 } from './read_api'
 import { ReadApiException } from './read_api_errors'
-import { HabitDto, InviteDto, MemberDto, RuleDto, WishDto } from './read_dto'
+import {
+  ConsentStateDto,
+  HabitDto,
+  InviteDto,
+  MemberDto,
+  RuleDto,
+  WishDto
+} from './read_dto'
 import { WriteApiException } from './write_api_errors'
 import {
   ApprovalDto,
@@ -306,6 +313,30 @@ export interface WriteApi {
    * 理解成「这次真的改了一行」，也不要拿它去覆盖别的字段。
    */
   revokeInvite(inviteId: string): Promise<InviteRevokeDto>
+
+  /**
+   * 作出监护人同意（`POST /consent`，W7-B）。
+   *
+   * 请求体只有 `{accepted: true}`：协议版本由**服务端**决定
+   * （`CONSENT_VERSION`），客户端不能自报 —— 否则家长同意的可能是
+   * 一版服务端根本没生效的文本。
+   *
+   * 构造幂等：已同意再调仍是 200，`grantedAt` 保持第一次的时间。
+   * 常见业务拒绝：403 `FORBIDDEN`（不是家长）、400 `CONSENT_NOT_ACCEPTED`、
+   * 500 `CONSENT_VERSION_MISSING`（服务端漏配协议版本）。
+   */
+  grantConsent(): Promise<ConsentStateDto>
+
+  /**
+   * 撤回监护人同意（`POST /consent/withdraw`，W7-B）。
+   *
+   * 没有请求体：目标孩子由会话决定，不需要幂等键。
+   *
+   * 撤回后写动作会被 `ConsentGuard` 拦成 403 `CONSENT_REQUIRED`；读取与
+   * 重新同意仍可用。回包状态是 `withdrawn`（曾同意过）或 `none`
+   * （从没同意过）—— 两种都算撤回成功，界面按状态文案区分。
+   */
+  withdrawConsent(): Promise<ConsentStateDto>
 
   /**
    * 标记一条站内通知已读（`PATCH /notifications/:id/read`，W5-L）。
@@ -789,6 +820,36 @@ export class WriteApiClient implements WriteApi {
     )
   }
 
+  async grantConsent(): Promise<ConsentStateDto> {
+    // 显式 `accepted: true`：后端 `@IsDefined()` 拒绝空 body，
+    // 这里仍写全 —— 让「同意」这件事在客户端代码里也是显式的。
+    return this.send('POST', '/consent', { accepted: true }, (raw) => {
+      const dto = this.parseConsent(raw)
+      // 服务端说没同意 ⇒ 界面不能显示「已同意」（比如它悄悄走了另一个分支）。
+      if (dto.status !== 'granted') {
+        throw WriteApiException.malformed(
+          '$.status',
+          `同意回包 status=${dto.status}，期望 granted`
+        )
+      }
+      return dto
+    })
+  }
+
+  async withdrawConsent(): Promise<ConsentStateDto> {
+    return this.send('POST', '/consent/withdraw', null, (raw) => {
+      const dto = this.parseConsent(raw)
+      // 撤回回包必须是 withdrawn / none（从未同意）：`granted` 说明没生效。
+      if (dto.status === 'granted') {
+        throw WriteApiException.malformed(
+          '$.status',
+          '撤回回包 status=granted —— 撤回没有生效'
+        )
+      }
+      return dto
+    })
+  }
+
   async markNotificationRead(
     notificationId: string
   ): Promise<NotificationReadDto> {
@@ -905,6 +966,17 @@ export class WriteApiClient implements WriteApi {
   ): InviteRevokeDto {
     try {
       return InviteRevokeDto.fromJson(raw, '$', expectedInviteId)
+    } catch (error) {
+      if (error instanceof ReadApiException) {
+        throw WriteApiException.malformed('$', error.detail ?? undefined)
+      }
+      throw error
+    }
+  }
+
+  private parseConsent(raw: unknown): ConsentStateDto {
+    try {
+      return ConsentStateDto.fromJson(raw, '$')
     } catch (error) {
       if (error instanceof ReadApiException) {
         throw WriteApiException.malformed('$', error.detail ?? undefined)

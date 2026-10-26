@@ -8,6 +8,7 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
+import 'sheets/consent_sheet.dart';
 import 'sheets/invite_sheet.dart';
 import 'sheets/member_sheet.dart';
 import 'sheets/my_applications_sheet.dart';
@@ -221,6 +222,22 @@ class ProfileScreen extends StatelessWidget {
                       // 面板内部先确认角色，不会先吃一个必然的 403。
                       showInviteSheet(context);
                     },
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.verified_user_outlined,
+                    // W7-B：监护人同意（查看 / 作出 / 撤回）。矩阵里
+                    // `view_consent` / `manage_consent` 仅家长 ALLOW ——
+                    // 面板内部先确认角色，孩子点进来只看到「找家长」说明，
+                    // 不会先用一次必然 403 的请求去「探测」身份。
+                    color: AppColors.primaryDeep,
+                    label: '监护人同意',
+                    onTap: () => showConsentSheet(context),
                   ),
                   const Divider(
                     height: 1,

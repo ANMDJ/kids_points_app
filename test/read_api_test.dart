@@ -10,6 +10,7 @@ import 'package:kids_points_app/data/read_api_errors.dart';
 import 'package:kids_points_app/data/read_dto.dart';
 import 'package:kids_points_app/data/read_mapper.dart';
 import 'package:kids_points_app/main.dart';
+import 'package:kids_points_app/models/consent.dart';
 import 'package:kids_points_app/models/point_record.dart';
 import 'package:kids_points_app/models/trash.dart';
 
@@ -611,6 +612,157 @@ void main() {
     await tester.tap(quickNote);
     await tester.pump();
     expect(find.text(store.readOnlyWriteMessage), findsOneWidget);
+  });
+
+  // ============================================ W7-B：监护人同意
+  group('监护人同意（W7-B）：ConsentStateDto / mapConsent / GET /consent', () {
+    Map<String, Object?> consentJson({
+      String childId = 'child-1',
+      String status = 'granted',
+      String? consentVersion = '2026-10-27-draft',
+      String? grantedAt = '2026-10-27T01:30:00.000Z',
+      String? withdrawnAt,
+    }) =>
+        <String, Object?>{
+          'childId': childId,
+          'status': status,
+          'consentVersion': consentVersion,
+          'grantedAt': grantedAt,
+          'withdrawnAt': withdrawnAt,
+        };
+
+    test('GET /consent：路径 + 两个身份头；版本与时间原样落地', () async {
+      final List<Uri> calls = <Uri>[];
+      final _FakeTransport transport = _FakeTransport((Uri uri) async {
+        calls.add(uri);
+        return ReadHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(consentJson()),
+        );
+      });
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      final GuardianConsent consent =
+          mapConsent(await client.fetchConsent());
+
+      expect(calls.single.path, '/api/consent');
+      expect(transport.headers.single[kDeviceIdHeader], 'device-1');
+      expect(transport.headers.single[kChildIdHeader], 'child-1');
+      expect(consent.childId, 'child-1');
+      expect(consent.status, GuardianConsentStatus.granted);
+      expect(consent.isGranted, isTrue);
+      expect(consent.statusLabel, '已同意');
+      expect(consent.consentVersion, '2026-10-27-draft');
+      expect(consent.versionLabel, '2026-10-27-draft');
+      expect(consent.isDraftVersion, isTrue, reason: '*-draft 是法务占位文本');
+      expect(consent.grantedAt, DateTime.utc(2026, 10, 27, 1, 30));
+      expect(consent.withdrawnAt, isNull);
+      expect(consent.withdrawnText, isNull, reason: '没撤回就不要编一个撤回时间');
+    });
+
+    test('形状校验：granted 缺版本/时间、withdrawn 缺时间、none 带时间 ⇒ malformed',
+        () async {
+      Future<ReadApiException> failWith(Map<String, Object?> body) async {
+        try {
+          ConsentStateDto.fromJson(body);
+          fail('必须抛出 malformed');
+        } on ReadApiException catch (error) {
+          return error;
+        }
+      }
+
+      final ReadApiException noVersion = await failWith(
+        consentJson(consentVersion: '   '),
+      );
+      expect(noVersion.kind, ReadFailureKind.malformed);
+      expect(noVersion.detail, contains('协议版本'));
+
+      final ReadApiException noGrantedAt =
+          await failWith(consentJson(grantedAt: null));
+      expect(noGrantedAt.kind, ReadFailureKind.malformed);
+      expect(noGrantedAt.detail, contains('同意时间'));
+
+      final ReadApiException withdrawnNoTime = await failWith(
+        consentJson(status: 'withdrawn', grantedAt: null),
+      );
+      expect(withdrawnNoTime.kind, ReadFailureKind.malformed);
+      expect(withdrawnNoTime.detail, contains('撤回时间'));
+
+      final ReadApiException noneWithTime = await failWith(
+        consentJson(status: 'none'),
+      );
+      expect(noneWithTime.kind, ReadFailureKind.malformed);
+      expect(noneWithTime.detail, contains('必须为 null'));
+    });
+
+    test('未知 status 交给 mapConsent 抛（不能猜成「未同意」）', () async {
+      final ConsentStateDto dto = ConsentStateDto.fromJson(
+        consentJson(status: 'pending', consentVersion: null, grantedAt: null),
+      );
+
+      expect(
+        () => mapConsent(dto),
+        throwsA(
+          isA<ReadApiException>()
+              .having((ReadApiException e) => e.kind, 'kind',
+                  ReadFailureKind.malformed)
+              .having((ReadApiException e) => e.detail, 'detail',
+                  contains('未知同意状态：pending')),
+        ),
+      );
+    });
+
+    test('withdrawn / none 是两件不同的事实，文案不共用', () async {
+      final GuardianConsent withdrawn = mapConsent(
+        ConsentStateDto.fromJson(
+          consentJson(
+            status: 'withdrawn',
+            grantedAt: '2026-10-27T01:30:00.000Z',
+            withdrawnAt: '2026-10-27T03:05:00.000Z',
+          ),
+        ),
+      );
+      expect(withdrawn.isWithdrawn, isTrue);
+      expect(withdrawn.isNeverGranted, isFalse);
+      expect(withdrawn.statusLabel, '已撤回');
+      expect(withdrawn.withdrawnText, isNotNull);
+      expect(withdrawn.grantedText, isNotNull, reason: '撤回前的同意时间仍然是有据可查的事实');
+
+      final GuardianConsent never = mapConsent(
+        ConsentStateDto.fromJson(
+          consentJson(status: 'none', consentVersion: null, grantedAt: null),
+        ),
+      );
+      expect(never.isNeverGranted, isTrue);
+      expect(never.statusLabel, '未同意');
+      expect(never.versionLabel, '—', reason: '空版本号不能留白，看起来像加载失败');
+      expect(never.grantedText, isNull);
+    });
+
+    test('403：孩子视角拉同意状态翻成 forbidden，不冒充网络错误', () async {
+      final _FakeTransport transport = _FakeTransport(
+        (Uri uri) async => ReadHttpResponse(
+          statusCode: 403,
+          body: jsonEncode(<String, Object?>{
+            'statusCode': 403,
+            'code': 'FORBIDDEN',
+            'message': 'Forbidden',
+          }),
+        ),
+      );
+      final ReadApiClient client =
+          ReadApiClient(config: config, transport: transport);
+
+      try {
+        await client.fetchConsent();
+        fail('403 必须抛出 ReadApiException');
+      } on ReadApiException catch (error) {
+        expect(error.kind, ReadFailureKind.forbidden);
+        expect(error.statusCode, 403);
+        expect(error.userMessage, contains('没有查看'));
+      }
+    });
   });
 }
 

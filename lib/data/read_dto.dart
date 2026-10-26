@@ -901,3 +901,89 @@ class InviteListDto {
   final List<InviteDto> items;
 }
 
+// ─────────────────────────── 监护人同意（W7-B） ───────────────────────────
+
+/// `GET /consent` 的响应体。
+///
+/// 线值（`backend/src/contracts/consent-policy.ts` 的 `CONSENT_STATUSES`）：
+/// `granted` / `withdrawn` / `none`。`status` 在这里**只保证是字符串**，
+/// 认识的枚举交给 `mapConsent` —— 与 `MemberDto.role` 同一条原则：
+/// DTO 负责形状，mapper 负责语义。
+///
+/// 三个可选字段的**形状一致性**也在这里校验（后端一定满足，校验是为了
+/// 契约漂移时显式失败，而不是在界面上画出「已同意但没有版本号」）：
+///   · `granted` ⇒ `consentVersion` 与 `grantedAt` 都必须有；
+///   · `withdrawn` ⇒ `withdrawnAt` 必须有；
+///   · `none` ⇒ 三个字段都为 null。
+class ConsentStateDto {
+  ConsentStateDto({
+    required this.childId,
+    required this.status,
+    required this.consentVersion,
+    required this.grantedAt,
+    required this.withdrawnAt,
+  });
+
+  factory ConsentStateDto.fromJson(Object? raw) {
+    const String path = r'$';
+    final Map<String, Object?> json = readObject(raw, path);
+    final ConsentStateDto dto = ConsentStateDto(
+      childId: readString(json, 'childId', '$path.childId'),
+      status: readString(json, 'status', '$path.status'),
+      consentVersion:
+          readOptionalString(json, 'consentVersion', '$path.consentVersion'),
+      grantedAt: readOptionalDate(json, 'grantedAt', '$path.grantedAt'),
+      withdrawnAt:
+          readOptionalDate(json, 'withdrawnAt', '$path.withdrawnAt'),
+    );
+    dto._validateShape();
+    return dto;
+  }
+
+  final String childId;
+
+  /// 线值：`granted` / `withdrawn` / `none`。
+  final String status;
+  final String? consentVersion;
+  final DateTime? grantedAt;
+  final DateTime? withdrawnAt;
+
+  void _validateShape() {
+    if (childId.trim().isEmpty) {
+      throw ReadApiException.malformed(r'$.childId', detail: 'childId 不能为空');
+    }
+    switch (status) {
+      case 'granted':
+        if ((consentVersion ?? '').trim().isEmpty) {
+          throw ReadApiException.malformed(
+            r'$.consentVersion',
+            detail: 'status=granted 时必须带协议版本',
+          );
+        }
+        if (grantedAt == null) {
+          throw ReadApiException.malformed(
+            r'$.grantedAt',
+            detail: 'status=granted 时必须带同意时间',
+          );
+        }
+        return;
+      case 'withdrawn':
+        if (withdrawnAt == null) {
+          throw ReadApiException.malformed(
+            r'$.withdrawnAt',
+            detail: 'status=withdrawn 时必须带撤回时间',
+          );
+        }
+        return;
+      case 'none':
+        if (consentVersion != null || grantedAt != null || withdrawnAt != null) {
+          throw ReadApiException.malformed(
+            r'$.status',
+            detail: 'status=none 时 consentVersion / grantedAt / withdrawnAt 必须为 null',
+          );
+        }
+        return;
+    }
+  }
+}
+

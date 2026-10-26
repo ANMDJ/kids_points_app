@@ -11,6 +11,7 @@ import 'package:kids_points_app/data/write_api.dart';
 import 'package:kids_points_app/data/write_api_errors.dart';
 import 'package:kids_points_app/data/write_dto.dart';
 import 'package:kids_points_app/main.dart';
+import 'package:kids_points_app/models/consent.dart';
 import 'package:kids_points_app/models/habit.dart';
 import 'package:kids_points_app/models/invite.dart';
 import 'package:kids_points_app/models/member.dart';
@@ -2953,6 +2954,129 @@ void main() {
     });
   });
 
+  // ============================================ W7-B：监护人同意写端点
+  group('监护人同意写端点（W7-B）：POST /consent · POST /consent/withdraw', () {
+    Map<String, Object?> consentJson({
+      String childId = 'child-1',
+      String status = 'granted',
+      String? consentVersion = '2026-10-27-draft',
+      String? grantedAt = '2026-10-27T01:30:00.000Z',
+      String? withdrawnAt,
+    }) =>
+        <String, Object?>{
+          'childId': childId,
+          'status': status,
+          'consentVersion': consentVersion,
+          'grantedAt': grantedAt,
+          'withdrawnAt': withdrawnAt,
+        };
+
+    test('POST /consent：显式 accepted=true + 身份头；回包版本/时间原样落地', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async =>
+            WriteHttpResponse(statusCode: 200, body: jsonEncode(consentJson())),
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final ConsentStateDto dto = await client.grantConsent();
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'POST');
+      expect(call.uri.path, '/api/consent');
+      // 后端 `accepted` 是必填 —— 客户端也不许发空 body 蒙混过关。
+      expect(jsonDecode(call.body), <String, Object?>{'accepted': true});
+      expect(call.headers[kDeviceIdHeader], 'device-1');
+      expect(call.headers[kChildIdHeader], 'child-1');
+      expect(
+        call.headers.containsKey('idempotency-key'),
+        isFalse,
+        reason: '服务端构造幂等：重复同意不是「另一次操作」，不需要幂等键',
+      );
+      expect(dto.status, 'granted');
+      expect(dto.consentVersion, '2026-10-27-draft');
+      expect(dto.grantedAt, DateTime.utc(2026, 10, 27, 1, 30));
+    });
+
+    test('POST /consent 回包不是 granted ⇒ malformed（没生效不能当成功）', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async =>
+            WriteHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(consentJson(
+            status: 'withdrawn',
+            withdrawnAt: '2026-10-27T03:05:00.000Z',
+          )),
+        ),
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      try {
+        await client.grantConsent();
+        fail('必须抛出 WriteApiException');
+      } on WriteApiException catch (error) {
+        expect(error.kind, WriteFailureKind.malformed);
+        expect(error.detail, contains('期望 granted'));
+      }
+    });
+
+    test('POST /consent/withdraw：无请求体；withdrawn / none 都算成功', () async {
+      for (final String status in <String>['withdrawn', 'none']) {
+        final _FakeWriteTransport transport = _FakeWriteTransport(
+          (Uri uri, Map<String, String> headers, String body) async =>
+              WriteHttpResponse(
+            statusCode: 200,
+            body: jsonEncode(
+              status == 'withdrawn'
+                  ? consentJson(
+                      status: 'withdrawn',
+                      grantedAt: '2026-10-27T01:30:00.000Z',
+                      withdrawnAt: '2026-10-27T03:05:00.000Z',
+                    )
+                  : consentJson(
+                      status: 'none',
+                      consentVersion: null,
+                      grantedAt: null,
+                    ),
+            ),
+          ),
+        );
+        final WriteApiClient client =
+            WriteApiClient(config: config, transport: transport);
+
+        final ConsentStateDto dto = await client.withdrawConsent();
+
+        final _WriteCall call = transport.calls.single;
+        expect(call.method, 'POST');
+        expect(call.uri.path, '/api/consent/withdraw');
+        // 撤回的只有「当前这一份同意」，对象由会话决定 —— 没有请求体。
+        expect(call.body, isEmpty);
+        expect(call.headers.containsKey('content-type'), isFalse);
+        expect(call.headers[kDeviceIdHeader], 'device-1');
+        expect(call.headers[kChildIdHeader], 'child-1');
+        expect(dto.status, status);
+      }
+    });
+
+    test('撤回回包 granted ⇒ malformed（撤回没有生效）', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async =>
+            WriteHttpResponse(statusCode: 200, body: jsonEncode(consentJson())),
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      try {
+        await client.withdrawConsent();
+        fail('必须抛出 WriteApiException');
+      } on WriteApiException catch (error) {
+        expect(error.kind, WriteFailureKind.malformed);
+        expect(error.detail, contains('撤回没有生效'));
+      }
+    });
+  });
+
   // ============================================ W5-I：store 侧邀请码
   group('邀请码（W5-I）：拉取 / 生成 / 吊销', () {
     late _TrashScriptedTransport readTransport;
@@ -3209,6 +3333,256 @@ void main() {
       expect(store.invites[0].revoked, isFalse);
     });
   });
+
+  // ============================================ W7-B：store 侧监护人同意
+  group('监护人同意（W7-B）：拉取 / 作出 / 撤回', () {
+    late _TrashScriptedTransport readTransport;
+    late _FakeWriteApi writeApi;
+
+    Map<String, Object?> memberRow({
+      String role = 'guardian',
+      bool isSelf = true,
+    }) =>
+        <String, Object?>{
+          'memberId': 'm1',
+          'userId': 'u-m1',
+          'displayName': isSelf ? '妈妈' : '小明',
+          'role': role,
+          'status': 'active',
+          'joinedAt': '2026-10-01T10:00:00.000Z',
+          'removedAt': null,
+          'isSelf': isSelf,
+        };
+
+    Map<String, Object?> consentRow({
+      String status = 'none',
+      String? consentVersion,
+      String? grantedAt,
+      String? withdrawnAt,
+    }) =>
+        <String, Object?>{
+          'childId': 'child-1',
+          'status': status,
+          'consentVersion': consentVersion,
+          'grantedAt': grantedAt,
+          'withdrawnAt': withdrawnAt,
+        };
+
+    setUp(() {
+      readTransport = _TrashScriptedTransport(
+        homeJson: jsonEncode(<String, Object?>{
+          'child': <String, Object?>{
+            'id': 'child-1',
+            'name': '小明',
+            'pointsBalance': 0,
+          },
+          'goodHabitCount': 0,
+          'rewardCount': 0,
+          'habits': <Object?>[],
+          'rules': <Object?>[],
+          'wishes': <Object?>[],
+        }),
+        pageJson: jsonEncode(<String, Object?>{
+          'records': <Object?>[],
+          'limit': 50,
+          'hasMore': false,
+          'nextCursor': null,
+        }),
+        trashJson: jsonEncode(<String, Object?>{'items': <Object?>[]}),
+        membersJson: jsonEncode(<String, Object?>{
+          'items': <Map<String, Object?>>[memberRow()],
+        }),
+      );
+      writeApi = _FakeWriteApi()
+        ..grantConsentResult = ConsentStateDto(
+          childId: 'child-1',
+          status: 'granted',
+          consentVersion: '2026-10-27-draft',
+          grantedAt: DateTime.utc(2026, 10, 27, 1, 30),
+          withdrawnAt: null,
+        )
+        ..withdrawConsentResult = ConsentStateDto(
+          childId: 'child-1',
+          status: 'withdrawn',
+          consentVersion: '2026-10-27-draft',
+          grantedAt: DateTime.utc(2026, 10, 27, 1, 30),
+          withdrawnAt: DateTime.utc(2026, 10, 27, 3, 5),
+        );
+    });
+
+    AppStore buildStore({bool withWriteApi = true}) {
+      final AppStore store = AppStore(
+        readApi: ReadApiClient(config: config, transport: readTransport),
+        writeApi: withWriteApi ? writeApi : null,
+      );
+      addTearDown(store.dispose);
+      return store;
+    }
+
+    test('打开面板才拉；孩子视角 canManageConsent 为假（同一道权限线）', () async {
+      final AppStore store = buildStore();
+      expect(store.consentReadStatus, ReadStatus.idle);
+      expect(store.consent, same(GuardianConsent.unknown));
+
+      await store.refreshMembers();
+      expect(readTransport.consentCalls, 0, reason: '首页 / 成员刷新不该顺带拉同意状态');
+      expect(store.canManageConsent, isTrue);
+
+      await store.refreshConsent();
+      expect(readTransport.consentCalls, 1);
+      expect(store.consentReadStatus, ReadStatus.ready);
+      expect(store.consent.status, GuardianConsentStatus.none);
+      expect(store.consent.isNeverGranted, isTrue);
+
+      readTransport.membersJson = jsonEncode(<String, Object?>{
+        'items': <Map<String, Object?>>[memberRow(role: 'child')],
+      });
+      final AppStore childStore = buildStore();
+      await childStore.refreshMembers();
+      expect(childStore.canManageMembers, isFalse);
+      expect(childStore.canManageConsent, isFalse);
+    });
+
+    test('拉取失败保留上一次成功快照（不能改写成一个假的「未同意」）', () async {
+      readTransport.consentJson = jsonEncode(consentRow(
+        status: 'granted',
+        consentVersion: '2026-10-27-draft',
+        grantedAt: '2026-10-27T01:30:00.000Z',
+      ));
+      final AppStore store = buildStore();
+      await store.refreshConsent();
+      expect(store.consent.isGranted, isTrue);
+
+      readTransport.consentFailure = ReadApiException(
+        ReadFailureKind.forbidden,
+        '当前账号没有查看这个孩子数据的权限（403）。',
+      );
+      await store.refreshConsent();
+
+      expect(store.consentReadStatus, ReadStatus.error);
+      expect(store.consentError?.kind, ReadFailureKind.forbidden);
+      expect(store.consent.isGranted, isTrue, reason: '断网 / 403 不等于家长撤回了同意');
+      expect(readTransport.consentCalls, 2);
+    });
+
+    test('同意：回包替换快照，不重拉；保存中再点一次本地就拒', () async {
+      final AppStore store = buildStore();
+      await store.refreshMembers();
+      await store.refreshConsent();
+
+      final Completer<ConsentStateDto> gate = Completer<ConsentStateDto>();
+      writeApi.consentWriteGate = gate;
+      final Future<String?> pending = store.submitGrantConsent();
+
+      expect(store.isConsentWriteBusy, isTrue);
+      expect(await store.submitGrantConsent(), contains('正在保存'));
+      expect(writeApi.grantConsentCalls, 1, reason: '忙碌时不该再发一次请求');
+
+      gate.complete(writeApi.grantConsentResult);
+      expect(await pending, isNull);
+      expect(store.consent.status, GuardianConsentStatus.granted);
+      expect(store.consent.consentVersion, '2026-10-27-draft');
+      expect(store.consent.grantedAt, DateTime.utc(2026, 10, 27, 1, 30));
+      expect(store.consentReadStatus, ReadStatus.ready);
+      expect(store.isConsentWriteBusy, isFalse, reason: '提交结束必须解除忙碌');
+      expect(readTransport.consentCalls, 1, reason: '成功走回包，不需要重拉');
+    });
+
+    test('同意 403：原样回报原因并重拉（本地快照已经过时）', () async {
+      final AppStore store = buildStore();
+      await store.refreshMembers();
+      await store.refreshConsent();
+      writeApi.consentWriteError = WriteApiException(
+        WriteFailureKind.forbidden,
+        '当前账号不能修改同意状态（只有家长可以）。',
+      );
+
+      final String? message = await store.submitGrantConsent();
+
+      expect(message, contains('只有家长'));
+      expect(readTransport.consentCalls, 2, reason: '403 后必须重拉真状态');
+      expect(store.consent.isGranted, isFalse, reason: '失败不能凭空画出「已同意」');
+      expect(store.isConsentWriteBusy, isFalse);
+    });
+
+    test('撤回：回包 withdrawn 落地；重复撤回本地就拒，一次请求都不发', () async {
+      readTransport.consentJson = jsonEncode(consentRow(
+        status: 'granted',
+        consentVersion: '2026-10-27-draft',
+        grantedAt: '2026-10-27T01:30:00.000Z',
+      ));
+      final AppStore store = buildStore();
+      await store.refreshMembers();
+      await store.refreshConsent();
+
+      expect(await store.submitWithdrawConsent(), isNull);
+      expect(writeApi.withdrawConsentCalls, 1);
+      expect(store.consent.isWithdrawn, isTrue);
+      expect(store.consent.withdrawnAt, DateTime.utc(2026, 10, 27, 3, 5));
+      expect(store.isConsentWriteBusy, isFalse);
+      expect(readTransport.consentCalls, 1, reason: '撤回走回包，不需要重拉');
+
+      expect(await store.submitWithdrawConsent(), contains('已经撤回过了'));
+      expect(writeApi.withdrawConsentCalls, 1, reason: '重复撤回不该再发请求');
+    });
+
+    test('撤回 409：回报原因并重拉（另一台设备可能刚同意）', () async {
+      final AppStore store = buildStore();
+      await store.refreshMembers();
+      await store.refreshConsent();
+      writeApi.consentWriteError = WriteApiException(
+        WriteFailureKind.conflict,
+        '同意状态刚刚被别的设备改过，请刷新后再试。',
+      );
+
+      final String? message = await store.submitWithdrawConsent();
+
+      expect(message, contains('刷新'));
+      expect(readTransport.consentCalls, 2, reason: '409 后必须重拉');
+      expect(store.consent.isWithdrawn, isFalse, reason: '失败不能假装撤回成功');
+    });
+
+    test('live 但没注入写客户端：只读文案，快照不动', () async {
+      final AppStore store = buildStore(withWriteApi: false);
+      await store.refreshMembers();
+      await store.refreshConsent();
+
+      expect(store.isConsentWriteReadOnly, isTrue);
+      expect(await store.submitGrantConsent(), store.consentReadOnlyWriteMessage);
+      expect(
+        await store.submitWithdrawConsent(),
+        store.consentReadOnlyWriteMessage,
+      );
+      expect(writeApi.grantConsentCalls, 0);
+      expect(writeApi.withdrawConsentCalls, 0);
+      expect(store.consent.status, GuardianConsentStatus.none);
+    });
+
+    test('预览模式：没有真实的同意记录，不假装提交', () async {
+      final AppStore preview = AppStore();
+      addTearDown(preview.dispose);
+
+      expect(await preview.submitGrantConsent(), contains('预览模式'));
+      expect(await preview.submitWithdrawConsent(), contains('预览模式'));
+    });
+
+    test('同意后再撤回：状态按回包翻转，撤回文案带服务端时间', () async {
+      final AppStore store = buildStore();
+      await store.refreshConsent();
+      await store.submitGrantConsent();
+      expect(store.consent.isGranted, isTrue);
+
+      expect(await store.submitWithdrawConsent(), isNull);
+
+      expect(store.consent.isWithdrawn, isTrue);
+      expect(store.consent.isNeverGranted, isFalse, reason: '撤回 ≠ 从没同意过');
+      expect(store.consent.statusLabel, '已撤回');
+      expect(store.consent.withdrawnText, isNotNull);
+      expect(store.consentReadStatus, ReadStatus.ready);
+      expect(store.isConsentWriteBusy, isFalse);
+      expect(readTransport.consentCalls, 1, reason: '两次写都走回包，不需要重拉');
+    });
+  });
 }
 
 class _WriteCall {
@@ -3334,6 +3708,32 @@ class _FakeWriteApi implements WriteApi {
   String? lastNotificationId;
   NotificationReadDto? markNotificationReadResult;
   Object? notificationError;
+
+  // ── W7-B 监护人同意 ──
+  int grantConsentCalls = 0;
+  int withdrawConsentCalls = 0;
+  ConsentStateDto? grantConsentResult;
+
+  /// 非 null 时同意请求挂起在这里，用于复现「保存中再点一次」。
+  Completer<ConsentStateDto>? consentWriteGate;
+  ConsentStateDto? withdrawConsentResult;
+  Object? consentWriteError;
+
+  @override
+  Future<ConsentStateDto> grantConsent() async {
+    grantConsentCalls += 1;
+    if (consentWriteError != null) throw consentWriteError!;
+    final Completer<ConsentStateDto>? gate = consentWriteGate;
+    if (gate != null) return gate.future;
+    return grantConsentResult!;
+  }
+
+  @override
+  Future<ConsentStateDto> withdrawConsent() async {
+    withdrawConsentCalls += 1;
+    if (consentWriteError != null) throw consentWriteError!;
+    return withdrawConsentResult!;
+  }
 
   @override
   Future<NotificationReadDto> markNotificationRead(String notificationId) async {
@@ -3631,16 +4031,26 @@ class _TrashScriptedTransport implements ReadTransport {
     required this.trashJson,
     String? membersJson,
     String? invitesJson,
+    String? consentJson,
   })  : membersJson =
             membersJson ?? jsonEncode(<String, Object?>{'items': <Object?>[]}),
         invitesJson =
-            invitesJson ?? jsonEncode(<String, Object?>{'items': <Object?>[]});
+            invitesJson ?? jsonEncode(<String, Object?>{'items': <Object?>[]}),
+        consentJson = consentJson ??
+            jsonEncode(<String, Object?>{
+              'childId': 'child-1',
+              'status': 'none',
+              'consentVersion': null,
+              'grantedAt': null,
+              'withdrawnAt': null,
+            });
 
   String homeJson;
   String pageJson;
   String trashJson;
   String membersJson;
   String invitesJson;
+  String consentJson;
 
   /// 非 null 时 `/trash` 直接抛这个异常（模拟 403 / 断网）。
   ReadApiException? trashFailure;
@@ -3653,6 +4063,10 @@ class _TrashScriptedTransport implements ReadTransport {
   /// 非 null 时 `/invites` 直接抛这个异常（403 / 断网）。
   ReadApiException? invitesFailure;
   int invitesCalls = 0;
+
+  /// 非 null 时 `/consent` 直接抛这个异常（403 / 断网）。
+  ReadApiException? consentFailure;
+  int consentCalls = 0;
 
   @override
   Future<ReadHttpResponse> send(Uri uri, Map<String, String> headers) async {
@@ -3676,6 +4090,12 @@ class _TrashScriptedTransport implements ReadTransport {
       final ReadApiException? failure = invitesFailure;
       if (failure != null) throw failure;
       return ReadHttpResponse(statusCode: 200, body: invitesJson);
+    }
+    if (uri.path.endsWith('/consent')) {
+      consentCalls += 1;
+      final ReadApiException? failure = consentFailure;
+      if (failure != null) throw failure;
+      return ReadHttpResponse(statusCode: 200, body: consentJson);
     }
     return ReadHttpResponse(statusCode: 200, body: pageJson);
   }

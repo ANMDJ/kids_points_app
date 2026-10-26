@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/approval.dart';
+import '../models/consent.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
 import '../models/member.dart';
@@ -478,5 +479,38 @@ List<InviteCode> mapInvites(InviteListDto dto) {
       .map((MapEntry<int, InviteDto> entry) =>
           mapInvite(entry.value, path: 'items[${entry.key}]'))
       .toList(growable: false);
+}
+
+// ──────────────────────────── 监护人同意（W7-B） ────────────────────────────
+
+/// 线格式 → [GuardianConsent]。
+///
+/// `status` 只认识 `granted` / `withdrawn` / `none`；**不认识就抛**，不猜成
+/// `none` —— 猜成 `none` 会让「已同意」的家庭看到一个「同意」按钮，点下去
+/// 就是第二次同意（服务端虽然幂等，但界面在说谎）。
+///
+/// 形状校验（版本号 / 时间是否齐）在 [ConsentStateDto] 里已经做过了，
+/// 这里只做语义转换。
+GuardianConsent mapConsent(ConsentStateDto dto) {
+  final String path = r'$';
+  return GuardianConsent(
+    childId: dto.childId,
+    status: _consentStatusFromWire(dto.status, '$path.status'),
+    consentVersion: dto.consentVersion,
+    grantedAt: dto.grantedAt,
+    withdrawnAt: dto.withdrawnAt,
+  );
+}
+
+GuardianConsentStatus _consentStatusFromWire(String raw, String path) {
+  switch (raw) {
+    case 'granted':
+      return GuardianConsentStatus.granted;
+    case 'withdrawn':
+      return GuardianConsentStatus.withdrawn;
+    case 'none':
+      return GuardianConsentStatus.none;
+  }
+  throw ReadApiException.malformed(path, detail: '未知同意状态：$raw');
 }
 

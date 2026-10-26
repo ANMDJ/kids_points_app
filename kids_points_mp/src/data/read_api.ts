@@ -3,6 +3,7 @@ import { request } from '@tarojs/taro'
 import { ReadApiException } from './read_api_errors'
 import {
   ApprovalsPageDto,
+  ConsentStateDto,
   HomeDto,
   InviteListDto,
   MemberListDto,
@@ -329,6 +330,20 @@ export class ReadApiClient {
    */
   async fetchInvites(): Promise<InviteListDto> {
     return InviteListDto.fromJson(await this.get('/invites'))
+  }
+
+  /**
+   * 监护人同意状态（`GET /consent`，W7-B）。
+   *
+   * **只有家长能看**（矩阵 `view_consent` 对 child 是 DENY）—— 调用方必须
+   * 先确认 `canManageConsent`，不要用一次注定 403 的请求去「探测」角色：
+   * 那会把「没有权限」画成「加载失败」。
+   *
+   * 响应只含事实（状态 / 同意时的协议版本 / 两个时间点），没有
+   * `canGrant` / `canWithdraw` —— 谁能写由服务端矩阵判定。
+   */
+  async fetchConsent(): Promise<ConsentStateDto> {
+    return ConsentStateDto.fromJson(await this.get('/consent'))
   }
 
   private async get(

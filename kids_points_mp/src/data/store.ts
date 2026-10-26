@@ -10,6 +10,7 @@ import {
 import { ReadApiException } from './read_api_errors'
 import {
   mapApprovalsPage,
+  mapConsent,
   mapHabit,
   mapHome,
   mapInvite,
@@ -25,6 +26,7 @@ import {
 } from './read_mapper'
 import type { RecordsPage } from './read_mapper'
 import type {
+  ConsentStateDto,
   HabitDto,
   MemberDto,
   RecordDto,
@@ -53,6 +55,7 @@ import type {
   AuditTargetType,
   ChildProfile,
   FamilyMember,
+  GuardianConsent,
   Habit,
   HabitView,
   IconOption,
@@ -82,7 +85,8 @@ import {
   pickCoverStyle,
   recordSubtitle,
   revokedInviteCopy,
-  trashOnly
+  trashOnly,
+  unknownGuardianConsent
 } from './types'
 import type { InviteCode, InviteRole } from './types'
 
@@ -261,6 +265,27 @@ export class AppStore {
 
   /** 是否正在生成邀请码（表单按钮据此禁用并显示「生成中…」）。 */
   private creatingInviteValue = false
+
+  // ------------------------------------------- 监护人同意（W7-B，服务端）
+  //
+  // 与成员 / 邀请码同策略：**打开同意面板时才拉**（`refreshConsent`）。
+  // `GET /consent` 是 guardian 专属（`view_consent` 对 child 是 DENY），
+  // 因此**不能**塞进首页 / 全局刷新 —— 孩子每次刷新都会吃一个必然的 403。
+  //
+  // 快照只存服务端下发的事实（状态 / 同意时的版本 / 两个时间点）；
+  // 「能不能写」由服务端矩阵判定，客户端只按 `canManageConsent` 决定是否
+  // 画出按钮，403 照样原样上报。
+
+  /** 同意快照；未拉到时是 [unknownGuardianConsent]（**不是**服务端事实）。 */
+  private consentValue: GuardianConsent = unknownGuardianConsent
+  private consentStatusValue: ReadStatus = 'idle'
+  private consentErrorValue: ReadApiException | null = null
+
+  /** 同意状态自己的 epoch：重复打开面板 / 手动刷新时作废在途响应。 */
+  private consentEpoch = 0
+
+  /** 是否正在提交同意 / 撤回 —— 面板据此禁用两个按钮。 */
+  private consentWriteBusyValue = false
 
   // ------------------------------------------- 站内通知（W5-L，服务端）
   //
@@ -536,6 +561,54 @@ export class AppStore {
     return this.canManageMembers
   }
 
+  // ------------------------------------------------------------ 监护人同意（W7-B）
+
+  /** 当前同意快照；未拉到时是 [unknownGuardianConsent]（**不是**服务端事实）。 */
+  get consent(): GuardianConsent {
+    return this.consentValue
+  }
+
+  /** 同意状态的加载状态（与成员 / 邀请码分开）。 */
+  get consentReadStatus(): ReadStatus {
+    return this.consentStatusValue
+  }
+
+  /**
+   * 同意状态的加载错误（403 = 当前身份没有 `view_consent`）。
+   *
+   * **不能**画成「未同意」—— 那会诱导孩子或访客去点一个必然失败的按钮。
+   */
+  get consentError(): ReadApiException | null {
+    return this.consentErrorValue
+  }
+
+  /** 是否正在提交同意 / 撤回 —— 面板据此禁用两个按钮。 */
+  get isConsentWriteBusy(): boolean {
+    return this.consentWriteBusyValue
+  }
+
+  /** 同意写入口（作出 / 撤回）是否被只读拦截。 */
+  get isConsentWriteReadOnly(): boolean {
+    return this.isLiveMode && this.writeApi === null
+  }
+
+  /** 只读模式下同意写操作的文案 —— 页面直接展示，不另编理由。 */
+  get consentReadOnlyWriteMessage(): string {
+    return '只读模式：同意状态暂时写不进去（写客户端未就绪），这次没有保存到服务器。'
+  }
+
+  /**
+   * 能否管理同意 —— `view_consent` / `manage_consent` 在矩阵里都是
+   * guardian ALLOW / child DENY，与成员管理同一条判据。
+   *
+   * 服务端仍是最终裁决者：这里为 true 只表示「界面可以给出按钮」，403
+   * 照样原样上报。依赖成员列表已拉到（`selfMember`），所以同意面板打开时
+   * 同样要先 `refreshMembers()`。
+   */
+  get canManageConsent(): boolean {
+    return this.canManageMembers
+  }
+
   get readStatus(): ReadStatus {
     return this.readStatusValue
   }
@@ -734,6 +807,7 @@ export class AppStore {
     this.resetTrash()
     this.resetMembers()
     this.resetInvites()
+    this.resetConsent()
     this.resetNotifications()
   }
 
@@ -755,6 +829,7 @@ export class AppStore {
     this.resetTrash()
     this.resetMembers()
     this.resetInvites()
+    this.resetConsent()
     this.resetNotifications()
   }
 
@@ -798,6 +873,21 @@ export class AppStore {
     this.inviteErrorValue = null
     this.busyInviteIdValue = null
     this.creatingInviteValue = false
+  }
+
+  /**
+   * 清空同意快照（切账号 / 恢复正常数据 / 演示重置时调用）。
+   *
+   * 不清的话：换到另一个孩子后打开同意面板，会先看到上一个家庭的状态
+   * （甚至是「已同意」），家长据此以为新孩子也已经同意了 —— 这是一条
+   * 会直接影响合规判断的旧数据。
+   */
+  private resetConsent(): void {
+    this.consentEpoch++
+    this.consentValue = unknownGuardianConsent
+    this.consentStatusValue = 'idle'
+    this.consentErrorValue = null
+    this.consentWriteBusyValue = false
   }
 
   /** 清空收件箱的本地状态（切账号 / 恢复正常数据 / 演示重置时调用）。 */
@@ -3121,6 +3211,125 @@ export class AppStore {
       return '吊销请求已发出，但结果无法确认。请刷新后查看。'
     } finally {
       this.busyInviteIdValue = null
+      this.persist()
+    }
+  }
+
+  /**
+   * 拉取同意状态（`GET /consent`）—— **打开同意面板时**调用。
+   *
+   * 只有家长能看（`view_consent` guardian ALLOW / child DENY）；调用方先用
+   * [canManageConsent] 判断，孩子视角不要发这个请求（否则每次都是 403）。
+   *
+   * 失败**不清空**上一次成功的结果：把状态改写成「未同意」是最坏的一种
+   * 谎言 —— 家长会以为同意丢了，孩子会看到一个假的按钮。错误经
+   * [consentError] 上报，面板照实显示。
+   */
+  async refreshConsent(): Promise<void> {
+    const api = this.readApi
+    if (api === null) return
+
+    const epoch = ++this.consentEpoch
+    this.consentStatusValue = 'loading'
+    this.consentErrorValue = null
+    this.persist()
+
+    try {
+      const dto = await api.fetchConsent()
+      if (epoch !== this.consentEpoch) return
+      this.consentValue = mapConsent(dto)
+      this.consentStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.consentEpoch) return
+      this.consentErrorValue = toReadApiException(error)
+      this.consentStatusValue = 'error'
+    }
+    if (epoch !== this.consentEpoch) return
+    this.persist()
+  }
+
+  /**
+   * 作出同意（`POST /consent`，W7-B）。成功返回 null。
+   *
+   * 服务端构造幂等（已同意再调仍是 200、`grantedAt` 保持第一次的时间），
+   * 因此成功后直接用回包替换本地快照 —— 不重拉整份状态，也不提示
+   * 「已经同意过一次」。
+   */
+  async submitGrantConsent(): Promise<string | null> {
+    if (!this.isLiveMode) {
+      return '预览模式没有真实的同意记录，这次没有提交。'
+    }
+    const api = this.writeApi
+    if (api === null) return this.consentReadOnlyWriteMessage
+    if (this.consentWriteBusyValue) {
+      return '上一次同意操作正在保存中，请稍候…'
+    }
+
+    this.consentWriteBusyValue = true
+    this.persist()
+    try {
+      const written = await api.grantConsent()
+      this.consentValue = mapConsent(written)
+      this.consentStatusValue = 'ready'
+      this.consentErrorValue = null
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 403 / 409：本地快照可能已经过时（角色被降级 / 另一台设备刚撤回）。
+        // 拉一次真状态，比让家长对着旧状态再点一次更诚实。
+        if (error.kind === 'forbidden' || error.kind === 'conflict') {
+          await this.refreshConsent()
+        }
+        return error.userMessage
+      }
+      return '同意请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.consentWriteBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 撤回同意（`POST /consent/withdraw`，W7-B）。成功返回 null。
+   *
+   * 撤回后写动作会被 `ConsentGuard` 拦成 403 `CONSENT_REQUIRED`；读取与
+   * 重新同意不受影响 —— 面板必须把这句话说出来，否则家长会以为
+   * 「撤回 = 数据被删了」。
+   *
+   * 回包状态是 `withdrawn`（曾同意过）或 `none`（从没同意过）：两种都
+   * 可以用同一个快照替换，界面按状态文案区分。
+   */
+  async submitWithdrawConsent(): Promise<string | null> {
+    if (!this.isLiveMode) {
+      return '预览模式没有真实的同意记录，这次没有提交。'
+    }
+    const api = this.writeApi
+    if (api === null) return this.consentReadOnlyWriteMessage
+    if (this.consentWriteBusyValue) {
+      return '上一次同意操作正在保存中，请稍候…'
+    }
+    if (this.consentValue.status === 'withdrawn') {
+      return '同意已经撤回过了，不需要重复撤回。'
+    }
+
+    this.consentWriteBusyValue = true
+    this.persist()
+    try {
+      const written = await api.withdrawConsent()
+      this.consentValue = mapConsent(written)
+      this.consentStatusValue = 'ready'
+      this.consentErrorValue = null
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        if (error.kind === 'forbidden' || error.kind === 'conflict') {
+          await this.refreshConsent()
+        }
+        return error.userMessage
+      }
+      return '撤回请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.consentWriteBusyValue = false
       this.persist()
     }
   }

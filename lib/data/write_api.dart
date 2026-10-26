@@ -288,6 +288,30 @@ abstract class WriteApi {
   /// 理解成「多吊销了一次」。
   Future<InviteRevokeDto> revokeInvite(String inviteId);
 
+  /// 作出同意（`POST /consent`，`manage_consent`，W7-B）。
+  ///
+  /// 请求体**只有** `{accepted: true}`：协议版本由服务端决定
+  /// （`CONSENT_TEXT_VERSION`），客户端不能自报「我同意的是 v9」。
+  ///
+  /// 构造幂等：已同意再调仍是 200、`grantedAt` 保持第一次的时间 ——
+  /// 因此不需要幂等键。
+  ///
+  /// 常见业务拒绝（都必须原样展示，不能让界面假装成功）：
+  ///   · 403 `FORBIDDEN` —— 孩子设备没有 `manage_consent`（矩阵里 child DENY）
+  ///   · 400 `CONSENT_NOT_ACCEPTED` —— `accepted !== true`
+  ///   · 500 `CONSENT_VERSION_MISSING` —— 服务端配置缺失（契约漂移）
+  Future<ConsentStateDto> grantConsent();
+
+  /// 撤回同意（`POST /consent/withdraw`，`manage_consent`，W7-B）。
+  ///
+  /// **没有请求体**：撤回的只有「当前这一份同意」，对象由会话决定。
+  /// 构造幂等：未同意 / 已撤回再调仍是 200 ——「撤回一个不存在的同意」
+  /// 的正确答案就是「它现在不是同意状态」，不必报错制造焦虑。
+  ///
+  /// 撤回后写动作会被 `ConsentGuard`（W7-A 第四道屏障）拦成 403
+  /// `CONSENT_REQUIRED`；读取与重新同意不受影响。
+  Future<ConsentStateDto> withdrawConsent();
+
   /// 标记一条通知已读（`PATCH /notifications/:id/read`，`read_notifications`，W5-L）。
   ///
   /// **没有 body**：要改的只有「读了」这一个事实，路径里已经有 id。
@@ -799,6 +823,46 @@ class WriteApiClient implements WriteApi {
       (Object? raw, String path) =>
           InviteRevokeDto.fromJson(raw, path, expectedInviteId: id),
     );
+  }
+
+  @override
+  Future<ConsentStateDto> grantConsent() async {
+    // 显式 `accepted: true`：后端 `@IsDefined()` 拒绝空 body，
+    // 但这里仍然写全 —— 让「同意」这件事在客户端代码里也是显式的。
+    final Object? decoded = await _send(
+      'POST',
+      '/consent',
+      <String, Object?>{'accepted': true},
+    );
+    final ConsentStateDto dto = _parse(
+      decoded,
+      (Object? raw, String _) => ConsentStateDto.fromJson(raw),
+    );
+    // 服务端说没同意 ⇒ 界面不能显示「已同意」（比如它悄悄走了另一个分支）。
+    if (dto.status != 'granted') {
+      throw WriteApiException.malformed(
+        r'$.status',
+        detail: '同意回包 status=${dto.status}，期望 granted',
+      );
+    }
+    return dto;
+  }
+
+  @override
+  Future<ConsentStateDto> withdrawConsent() async {
+    final Object? decoded = await _send('POST', '/consent/withdraw', null);
+    final ConsentStateDto dto = _parse(
+      decoded,
+      (Object? raw, String _) => ConsentStateDto.fromJson(raw),
+    );
+    // 撤回回包必须是 withdrawn / none（从未同意）：`granted` 说明没生效。
+    if (dto.status == 'granted') {
+      throw WriteApiException.malformed(
+        r'$.status',
+        detail: '撤回回包 status=granted —— 撤回没有生效',
+      );
+    }
+    return dto;
   }
 
   @override

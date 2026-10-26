@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/approval.dart';
 import '../models/audit.dart';
 import '../models/child_profile.dart';
+import '../models/consent.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
 import '../models/member.dart';
@@ -179,6 +180,25 @@ class AppStore extends ChangeNotifier {
 
   /// 是否正在生成邀请码（提交期间禁用「生成」按钮，避免连点产生一屏废码）。
   bool _creatingInvite = false;
+
+  // ─────────────────────── 监护人同意（W7-B，服务端） ───────────────────────
+  //
+  // 与成员列表同策略：**打开同意面板 / 我的页时才拉**（`refreshConsent`）。
+  // `GET /consent` 是 guardian 专属（孩子 403），因此不能塞进首页刷新 ——
+  // 孩子每次下拉都会吃一个 403。
+  //
+  // 存的是服务端事实（状态 / 同意时版本 / 两个时间点）；「能不能改」由
+  // `canManageConsent` 从成员列表那一行现算 —— 与邀请码同一条判据。
+
+  GuardianConsent _consent = GuardianConsent.unknown;
+  ReadStatus _consentReadStatus = ReadStatus.idle;
+  ReadApiException? _consentError;
+
+  /// 同意状态的 epoch：重复打开面板 / 手动刷新时作废在途响应。
+  int _consentReadEpoch = 0;
+
+  /// 是否正在提交同意 / 撤回（两个按钮互斥，防双击）。
+  bool _consentWriteBusy = false;
 
   // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
   //
@@ -365,6 +385,36 @@ class AppStore extends ChangeNotifier {
   /// 要先 `refreshMembers()` —— 否则家长会看到一个空面板。
   bool get canManageInvites => canManageMembers;
 
+  // ─────────────────────── 监护人同意（W7-B，服务端） ───────────────────────
+
+  /// 当前同意快照；未拉到时是 [GuardianConsent.unknown]（**不是**服务端事实）。
+  GuardianConsent get consent => _consent;
+
+  /// 同意状态的加载状态（与成员 / 邀请码分开）。
+  ReadStatus get consentReadStatus => _consentReadStatus;
+
+  /// 同意状态的加载错误（403 = 当前身份没有 `view_consent`，
+  /// **不能**画成「未同意」—— 那会诱导孩子或访客去点一个必然失败的按钮）。
+  ReadApiException? get consentError => _consentError;
+
+  /// 是否正在提交同意 / 撤回 —— 面板据此禁用两个按钮。
+  bool get isConsentWriteBusy => _consentWriteBusy;
+
+  /// 同意写入口（作出 / 撤回）是否被只读拦截。
+  bool get isConsentWriteReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下同意写操作的文案 —— 页面直接展示，不另编理由。
+  String get consentReadOnlyWriteMessage =>
+      '只读模式：同意状态暂时写不进去（写客户端未就绪），这次没有保存到服务器。';
+
+  /// 能否管理同意 —— `view_consent` / `manage_consent` 在矩阵里都是
+  /// guardian ALLOW / child DENY，与成员管理同一条判据。
+  ///
+  /// 服务端仍是最终裁决者：这里为 true 只表示「界面可以给出按钮」，
+  /// 403 照样原样上报。依赖成员列表已拉到（`selfMember`），
+  /// 所以同意面板打开时同样要先 `refreshMembers()`。
+  bool get canManageConsent => canManageMembers;
+
   // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
 
   /// 通知列的**只读快照**（服务端顺序：新通知在前）。
@@ -523,6 +573,10 @@ class AppStore extends ChangeNotifier {
     _invitesError = null;
     _busyInviteId = null;
     _creatingInvite = false;
+    _consent = GuardianConsent.unknown;
+    _consentReadStatus = ReadStatus.idle;
+    _consentError = null;
+    _consentWriteBusy = false;
     _notifications.clear();
     _notificationsReadStatus = ReadStatus.idle;
     _notificationsError = null;
@@ -2904,6 +2958,121 @@ class AppStore extends ChangeNotifier {
       return '吊销请求已发出，但结果无法确认。请刷新后查看。';
     } finally {
       _busyInviteId = null;
+      _notify();
+    }
+  }
+
+  // ========================================== 监护人同意：服务端读写（W7-B）
+
+  /// 拉取同意状态（`GET /consent`）—— **打开同意面板时**调用。
+  ///
+  /// 只有家长能看（`view_consent` guardian ALLOW / child DENY）；调用方先用
+  /// [canManageConsent] 判断，孩子视角不要发这个请求（否则每次都是 403）。
+  ///
+  /// 失败**不清空**上一次成功的结果：把状态改写成「未同意」是最坏的一种
+  /// 谎言 —— 家长会以为同意丢了，孩子会看到一个假的按钮。错误经
+  /// [consentError] 上报，面板照实显示。
+  Future<void> refreshConsent() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) return;
+    final int epoch = ++_consentReadEpoch;
+    _consentReadStatus = ReadStatus.loading;
+    _consentError = null;
+    _notify();
+    try {
+      final ConsentStateDto dto = await api.fetchConsent();
+      if (_disposed || api != _readApi || epoch != _consentReadEpoch) return;
+      _consent = mapConsent(dto);
+      _consentReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _consentReadEpoch) return;
+      _consentError = error;
+      _consentReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _consentReadEpoch) return;
+      _consentError = ReadApiException.network(error);
+      _consentReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _consentReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 作出同意（`POST /consent`，W7-B）。成功返回 null。
+  ///
+  /// 服务端构造幂等（已同意再调仍是 200、`grantedAt` 保持第一次的时间），
+  /// 因此成功后直接用回包替换本地快照 —— 不重拉整份状态，也不提示
+  /// 「已经同意过一次」。
+  Future<String?> submitGrantConsent() async {
+    if (!isLiveMode) return '预览模式没有真实的同意记录，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return consentReadOnlyWriteMessage;
+    if (_consentWriteBusy) return '上一次同意操作正在保存中，请稍候…';
+
+    _consentWriteBusy = true;
+    _notify();
+    try {
+      final ConsentStateDto written = await api.grantConsent();
+      if (_disposed) return null;
+      _consent = mapConsent(written);
+      _consentReadStatus = ReadStatus.ready;
+      _consentError = null;
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 403 / 409：本地快照可能已经过时（角色被降级 / 另一台设备刚撤回）。
+      // 拉一次真状态，比让家长对着旧状态再点一次更诚实。
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshConsent();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '同意请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _consentWriteBusy = false;
+      _notify();
+    }
+  }
+
+  /// 撤回同意（`POST /consent/withdraw`，W7-B）。成功返回 null。
+  ///
+  /// 撤回后写动作会被 `ConsentGuard` 拦成 403 `CONSENT_REQUIRED`；读取与
+  /// 重新同意不受影响 —— 面板必须把这句话说出来，否则家长会以为
+  /// 「撤回 = 数据被删了」。
+  ///
+  /// 回包状态是 `withdrawn`（曾同意过）或 `none`（从没同意过）：两种都
+  /// 可以用同一个快照替换，界面按 `statusLabel` 区分。
+  Future<String?> submitWithdrawConsent() async {
+    if (!isLiveMode) return '预览模式没有真实的同意记录，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) return consentReadOnlyWriteMessage;
+    if (_consentWriteBusy) return '上一次同意操作正在保存中，请稍候…';
+    if (_consent.isWithdrawn) return '同意已经撤回过了，不需要重复撤回。';
+
+    _consentWriteBusy = true;
+    _notify();
+    try {
+      final ConsentStateDto written = await api.withdrawConsent();
+      if (_disposed) return null;
+      _consent = mapConsent(written);
+      _consentReadStatus = ReadStatus.ready;
+      _consentError = null;
+      _notify();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshConsent();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '撤回请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _consentWriteBusy = false;
       _notify();
     }
   }

@@ -1,6 +1,7 @@
 import type {
   ApprovalInboxItemDto,
   ApprovalsPageDto,
+  ConsentStateDto,
   HabitDto,
   HomeDto,
   InviteDto,
@@ -23,6 +24,7 @@ import { notificationApprovalId } from './notification'
 import type { NotificationItem, NotificationsPage } from './notification'
 import type {
   FamilyMember,
+  GuardianConsent,
   Habit,
   InviteCode,
   MemberRole,
@@ -412,6 +414,32 @@ export function mapInvite(dto: InviteDto, path = '$'): InviteCode {
 
 export function mapInvites(dto: InviteListDto): InviteCode[] {
   return dto.items.map((item, index) => mapInvite(item, `items[${index}]`))
+}
+
+// ============================================================ 监护人同意（W7-B）
+
+/**
+ * `ConsentStateDto` → [GuardianConsent]。
+ *
+ * `status` 只认识 `granted` / `withdrawn` / `none`；**不认识就抛**，不猜成
+ * `none` —— 猜成 `none` 会让「已同意」的家庭看到一个「同意」按钮，点下去
+ * 就是第二次同意（服务端虽然幂等，但界面在说谎）。
+ *
+ * 形状校验（版本号 / 时间是否齐）已在 [ConsentStateDto] 构造时做过，
+ * 这里只做语义转换。
+ */
+export function mapConsent(dto: ConsentStateDto, path = '$'): GuardianConsent {
+  return {
+    childId: dto.childId,
+    status: asEnum(
+      dto.status,
+      ['granted', 'withdrawn', 'none'] as const,
+      `${path}.status`
+    ),
+    consentVersion: dto.consentVersion,
+    grantedAt: dto.grantedAt,
+    withdrawnAt: dto.withdrawnAt
+  }
 }
 
 // ============================================================ 站内通知（W5-L）
