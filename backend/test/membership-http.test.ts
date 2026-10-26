@@ -63,6 +63,10 @@ import { PermissionsGuard } from '../src/permissions/permissions.guard'
 import { PermissionsModule } from '../src/permissions/permissions.module'
 import { RequireAction } from '../src/permissions/require-action.decorator'
 
+// ★ W7-A：同意闸门（第四道屏障）—— 见 test/support/consent-fake.ts
+import { CONSENT_REPOSITORY } from '../src/consent/consent.repository'
+import { makeGrantedConsentFake } from './support/consent-fake'
+
 const CHILD_ID = 'child-1'
 /** 第二个孩子：只用于证明"childId 真的参与判定"。 */
 const OTHER_CHILD_ID = 'child-2'
@@ -324,6 +328,9 @@ async function send(
  * ★ 会话替身**恒注入**（W1-C）：身份是这条链的第一道，不喂它整条链会在身份层就断
  *   （那时组 C 测到的就不是"屏障一没落地"了）。"无库装配下身份层 501"
  *   由 `device-session-http.test.ts` 组 D 专门钉住。
+ * ★ W7-A：`ApprovalsModule` 自带 controller，而审批端点现在挂**第四道屏障**（同意闸门）。
+ *   故同意替身也**恒注入**（`granted`）—— 不注入，组 C 的「穿过屏障一到达业务层」会停在
+ *   闸门的 501 上，那测的就不是屏障一了。撤回/重授予的行为见 `consent-http.test.ts`。
  */
 async function startApp(
   options: { membership?: MembershipPort; approvals?: ApprovalsPort } = {}
@@ -331,6 +338,8 @@ async function startApp(
   const builder = Test.createTestingModule({ imports: [MembershipProbeModule] })
     .overrideProvider(DEVICE_SESSION_REPOSITORY)
     .useValue(makeSessionFake())
+    .overrideProvider(CONSENT_REPOSITORY)
+    .useValue(makeGrantedConsentFake())
   if (options.membership !== undefined) {
     builder.overrideProvider(MEMBERSHIP_REPOSITORY).useValue(options.membership)
   }

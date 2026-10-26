@@ -52,6 +52,11 @@ import { PermissionsGuard } from '../src/permissions/permissions.guard'
 import { PermissionsModule } from '../src/permissions/permissions.module'
 import { RequireAction } from '../src/permissions/require-action.decorator'
 
+// ★ W7-A：同意闸门（第四道屏障）—— `ApprovalsModule` 自带 controller，
+//   本文件的探针图里那条 `POST /approvals` 现在会过闸门；不注入替身会停在 501 上。
+import { CONSENT_REPOSITORY } from '../src/consent/consent.repository'
+import { makeGrantedConsentFake } from './support/consent-fake'
+
 /**
  * 身份（W1-C 起）：**客户端不再自报角色** —— 只说「我是哪台设备、在哪个孩子的档案上」。
  * 角色与 userId 由会话行给出；屏障一要拿 childId 去问"这个人跟这个孩子有没有关系"。
@@ -203,6 +208,10 @@ before(async () => {
     // 会话替身：身份解析的端口（不注入 ⇒ 501，整条链在**身份**就断了）
     .overrideProvider(DEVICE_SESSION_REPOSITORY)
     .useValue(makeSessionFake())
+    // ★ W7-A：同意替身（第四道屏障）。屏障二/三的用例要走到业务层，
+    //   而 `/approvals` 已挂同意闸门 —— 不给 granted 就只会看到闸门的 501。
+    .overrideProvider(CONSENT_REPOSITORY)
+    .useValue(makeGrantedConsentFake())
     .compile()
   app = moduleRef.createNestApplication()
   applyGlobalPipes(app) // 与 main.ts 同一函数：测的是**真装配**，不是测试自己搭的

@@ -157,6 +157,15 @@ AI 压缩的是编码，不是需要儿童教育判断的内容产出。→ 对�
 - 未勾选时，`onboarding/complete` 返回 `403 CONSENT_REQUIRED`
 - 撤回同意（`02` §9.20）后，引导入口重新出现
 
+> **落地（W7-A，2026-10-26）**：`GET /consent` 读状态、`POST /consent` 记录授予
+> （显式 `accepted: true`，版本由服务端 `CONSENT_TEXT_VERSION` 给出，客户端不能自报）、
+> `POST /consent/withdraw` 撤回（从未授予 ⇒ `409 CONSENT_NOT_GRANTED`）。
+> 撤回后 24 个写动作被 `ConsentGuard` 拒为 `403 CONSENT_REQUIRED`，清单在
+> `backend/src/contracts/consent-policy.ts`（**读路径 / 撤回自己的申请 / 重新同意**豁免，
+> 否则会造出「撤回了却无法恢复」的死状态）。
+> ⚠ 本节第 ① 步的**勾选界面仍未开发**，`L5` 法务文本也未定稿（版本号还是占位
+> `2026-10-draft`）—— 后端链路先立起来，**不代表引导可用**。
+
 **为什么放在引导而非设置页**：儿童个人信息的同意必须**在采集之前**取得，
 而引导第 ② 步就开始采集昵称。放到设置页等于"先采集后征求"，合规上不成立。
 

@@ -493,6 +493,10 @@ async function startApp(
     .useValue(makeSessionFake())
     .overrideProvider(MEMBERSHIP_REPOSITORY)
     .useValue(makeMembershipFake())
+    // ★ W7-A：第四道屏障（同意闸门）。这些用例测的是本文件自己的关口，
+    //   同意状态作为背景条件恒为 granted —— 撤回/重授予的行为见 consent-http.test.ts。
+    .overrideProvider(CONSENT_REPOSITORY)
+    .useValue(makeGrantedConsentFake())
   if (repository !== undefined) {
     builder.overrideProvider(APPROVALS_REPOSITORY).useValue(repository)
   }
@@ -1723,3 +1727,8 @@ describe('组 H：提交路径不直接写站内通知（W6-C：写入已进审�
     assert.equal(r.body.status, 'pending')
   })
 })
+
+
+// ★ W7-A：同意闸门（第四道屏障）—— 见 test/support/consent-fake.ts
+import { CONSENT_REPOSITORY } from '../src/consent/consent.repository'
+import { makeGrantedConsentFake } from './support/consent-fake'

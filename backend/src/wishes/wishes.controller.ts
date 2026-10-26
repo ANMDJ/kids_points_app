@@ -11,6 +11,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
@@ -39,12 +40,14 @@ import { WishesService, type WishOperator } from './wishes.service'
  *   `DeviceSessionGuard` → `MembershipGuard` → `PermissionsGuard`；
  *   两条写入口都支持 `Idempotency-Key`：双击「保存心愿」不会建出两个心愿，
  *   双击「删除」也不会写出两条审计。
+ *   ★ W7-A 起另有 `ConsentGuard`（第四道）：撤回同意后新增 / 删除都回
+ *   `403 CONSENT_REQUIRED`（见 `contracts/consent-policy.ts`）。
  *
  * ── 状态码 ────────────────────────────────────────────────────────────────
  *   新增 201（返回与 `GET /home` 的 `wishes[]` 同构的行）；删除 200 `{ wishId }`（幂等）。
  */
 @Controller('wishes')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class WishesController {
   constructor(
     private readonly service: WishesService,

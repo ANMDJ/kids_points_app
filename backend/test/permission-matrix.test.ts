@@ -25,9 +25,9 @@ import {
 const VERDICTS: Verdict[] = ['ALLOW', 'REQUIRE_APPROVAL', 'DENY']
 const ROLES: Role[] = ['guardian', 'child']
 
-test('规模与唯一性：35 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
-  assert.equal(ALL_ACTIONS.length, 35)
-  assert.equal(new Set(ALL_ACTIONS).size, 35, '动作键有重复')
+test('规模与唯一性：37 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
+  assert.equal(ALL_ACTIONS.length, 37)
+  assert.equal(new Set(ALL_ACTIONS).size, 37, '动作键有重复')
 })
 
 test('W5-L 站内通知：两侧都能看自己的、也能标已读；viewer 仍 fail-closed', () => {

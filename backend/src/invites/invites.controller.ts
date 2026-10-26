@@ -10,6 +10,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import {
   DEVICE_ID_HEADER,
   DeviceSessionGuard
@@ -73,7 +74,7 @@ export class InvitesController {
   constructor(private readonly service: InvitesService) {}
 
   @Post()
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @RequireAction('invite_member')
   async create(
     @Body() dto: CreateInviteDto,
@@ -83,14 +84,14 @@ export class InvitesController {
   }
 
   @Get()
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @RequireAction('invite_member')
   async list(@Req() req: RequestWithActor): Promise<InviteListResponse> {
     return await this.service.listInvites(this.childIdOf(req))
   }
 
   @Post(':id/revoke')
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @HttpCode(200)
   @RequireAction('invite_member')
   async revoke(

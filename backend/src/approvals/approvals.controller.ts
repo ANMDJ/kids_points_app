@@ -12,6 +12,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
@@ -62,7 +63,10 @@ import { ListApprovalsQueryDto } from './dto/list-approvals.query'
 //     · 资格在矩阵之后 ⇒ 非成员先收到"角色不被允许"这种**含义错误**的 403（02 §3 的顺序是有理由的）。
 //   Nest 的执行顺序是「全局 → 控制器 → 方法」，同一层级内按数组顺序 —— 这也是
 //   屏障二**不能**改成 `APP_GUARD` 的原因。
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+//   ★ W7-A 起数组**末尾**多了 `ConsentGuard`（第四道：同意闸门）。它排在矩阵之后，
+//     因为「你准不准做」比「现在能不能做」更根本（见 consent.guard.ts 类注释）。
+//     `withdraw_request` / `view_own_approvals` 是它的豁免动作 —— 撤回后仍能撤回自己的申请。
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class ApprovalsController {
   constructor(
     @Inject(ApprovalsService) private readonly service: ApprovalsService,

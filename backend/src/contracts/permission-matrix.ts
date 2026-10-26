@@ -110,6 +110,16 @@ export const PERMISSION_MATRIX = {
   switch_role_mode: { guardian: 'ALLOW', child: 'ALLOW' }, // 受 PIN 保护（02 §7）
   edit_child_profile: { guardian: 'ALLOW', child: 'DENY' },
   apply_onboarding: { guardian: 'ALLOW', child: 'DENY' },
+
+  /* ── 合规与监护人同意（W7-A）────────────────────────────── */
+  // 看同意状态：只给家长。它不是给孩子的界面，而且矩阵不给孩子任何合规控制面
+  // （同意只能由监护人作出 —— 04 §5）。
+  view_consent: { guardian: 'ALLOW', child: 'DENY' },
+  // 授予 / 撤回同意：只给家长。
+  // ★ 这两个动作是「撤回后写入停止」的**豁免口**（见 contracts/consent-policy.ts）：
+  //   若连它也被拦，用户会被锁在「撤回了却无法重新同意」的死状态里 ——
+  //   合规要求的「可撤回」必须同时意味着「可再次授予」。
+  manage_consent: { guardian: 'ALLOW', child: 'DENY' },
   // ← E18：生产环境永久关闭。reset_demo_data 双侧均为 DENY，
   //    且**必须**保持双侧 DENY —— 客户端"生产可重置数据"是已修的严重缺陷。
   reset_demo_data: { guardian: 'DENY', child: 'DENY' }
@@ -117,7 +127,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 35 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 37 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**

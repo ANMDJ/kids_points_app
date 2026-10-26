@@ -1,5 +1,6 @@
 import { Body, Controller, HttpCode, Post, Req, UseGuards } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { MembershipGuard } from '../membership/membership.guard'
 import { PermissionsGuard } from '../permissions/permissions.guard'
@@ -41,7 +42,7 @@ export class DeviceTokensController {
 
   @Post()
   @HttpCode(200)
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @RequireAction('manage_device_tokens')
   async register(
     @Body() dto: RegisterDeviceTokenDto,
@@ -52,7 +53,7 @@ export class DeviceTokensController {
 
   @Post('revoke')
   @HttpCode(200)
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @RequireAction('manage_device_tokens')
   async revoke(
     @Body() dto: RevokeDeviceTokenDto,

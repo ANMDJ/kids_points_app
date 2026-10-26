@@ -9,6 +9,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { MembershipGuard } from '../membership/membership.guard'
 import { PermissionsGuard } from '../permissions/permissions.guard'
@@ -32,10 +33,14 @@ import type { TrashListResponse, TrashMutationResponse } from './trash.types'
  * ── 为什么不做幂等键 ──────────────────────────────────────────────────────
  *   · 恢复本身就是幂等的：重复调用返回同一 `{kind,id}`，不写第二条审计；
  *   · 彻底删除重复调用得到 404（这一项真的不在了）—— 这正是**应当**给出的答案。
+ *
+ * ── 同意闸门（W7-A）──────────────────────────────────────────────────────
+ *   `GET /trash`（`view_trash`）是**读** ⇒ 豁免；`restore` / `purge` 是写 ⇒
+ *   撤回同意后 `403 CONSENT_REQUIRED`。孩子连回收站也读得到，但改不了。
  *   再加一层响应缓存只会多一个"缓存说成功、库里已没有"的中间态。
  */
 @Controller('trash')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class TrashController {
   constructor(private readonly service: TrashService) {}
 

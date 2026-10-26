@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common'
 import { ApprovalsModule } from './approvals/approvals.module'
 import { AuditModule } from './audit/audit.module'
 import { ChildrenModule } from './children/children.module'
+import { ConsentHttpModule } from './consent/consent-http.module'
 import { DeviceSessionModule } from './device-session/device-session.module'
 import { DeviceTokensHttpModule } from './device-tokens/device-tokens-http.module'
 import { HabitsModule } from './habits/habits.module'
@@ -85,6 +86,13 @@ import { WishesModule } from './wishes/wishes.module'
     //   `DELETE /members/:id`。有库 ⇒ PrismaMembersRepository（最后一位家长保护 +
     //   同事务收回会话 + 审计）；无库 ⇒ 501（不返回空列表冒充「家里只有我一个人」）。
     MembersModule.register(),
+    // ★ W7-A（2026-10-26）：监护人对儿童数据处理的同意 `GET /consent` /
+    //   `POST /consent` / `POST /consent/withdraw`。有库 ⇒ PrismaConsentRepository
+    //   （`Child` 行加锁 ⇒ 读最新一版 ⇒ 写新行 + 审计同一事务）；无库 ⇒ 三个端点全 501
+    //   （**不**返回 `status:'none'` 冒充「这个家还没同意」）。
+    //   ⚠ 这里挂的是 **Http** 层：`ConsentModule.register()` 还会被 ~10 个特性模块导入
+    //   （它们只要 `ConsentGuard` + 端口），若 controller 跟着核心模块走，路由会被注册多次。
+    ConsentHttpModule.register(),
     // ★ 动态模块（W2-D，2026-10-16）：有库 ⇒ PrismaDeviceSessionRepository
     //   （真查 DeviceSession，身份/角色由库给出）；没有 ⇒ 501（无库时连 PrismaService 都不建）。
     DeviceSessionModule.register(),

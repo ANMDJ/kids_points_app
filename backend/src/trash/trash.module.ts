@@ -1,5 +1,7 @@
 import { DynamicModule, Module, type Type } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
+import { ConsentModule } from '../consent/consent.module'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { MembershipModule } from '../membership/membership.module'
@@ -44,13 +46,18 @@ export class TrashModule {
         ...(hasDatabase ? [PrismaModule] : []),
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
-        PermissionsModule
+        PermissionsModule,
+        // ★ W7-A：同意闸门（`restore_trash_item` / `purge_trash_item` 是写动作）。
+        ConsentModule.register({ hasDatabase })
       ],
       controllers: [TrashController],
       providers: [
         TrashService,
-        // 控制器上的三个 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块的 exports 提供。
+        // 控制器上的四个 Guard 在本模块注入器里实例化 —— 依赖由上面四个模块
+        // （身份 / 成员 / 矩阵 / **同意**）的 exports 提供。
         DeviceSessionGuard,
+        // ★ W7-A：同意闸门（依赖 CONSENT_REPOSITORY 由 ConsentModule.exports 提供）。
+        ConsentGuard,
         {
           provide: TRASH_REPOSITORY,
           useClass: resolveTrashRepositoryClass(hasDatabase)

@@ -11,6 +11,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import {
   DEVICE_ID_HEADER,
   DeviceSessionGuard
@@ -64,14 +65,14 @@ export class MembersController {
   constructor(private readonly service: MembersService) {}
 
   @Get()
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @RequireAction('view_members')
   async list(@Req() req: RequestWithActor): Promise<MemberListResponse> {
     return await this.service.listMembers(this.childIdOf(req), this.actorOf(req))
   }
 
   @Patch(':id')
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @RequireAction('change_member_role')
   async changeRole(
     @Param('id') id: string,
@@ -89,7 +90,7 @@ export class MembersController {
   }
 
   @Delete(':id')
-  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+  @UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
   @HttpCode(200)
   @RequireAction('remove_member')
   async remove(

@@ -12,6 +12,7 @@ import {
   BadRequestException
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
@@ -35,13 +36,15 @@ import { RulesService, type RuleOperator } from './rules.service'
  *   `DeviceSessionGuard` → `MembershipGuard` → `PermissionsGuard`；
  *   **孩子一律 403**（矩阵四条 `*_rule` 动作都是 guardian ALLOW / child DENY）。
  *   四个写入口都支持 `Idempotency-Key`：双击"保存" / "删除"不会产生两个版本或两条审计。
+ *   ★ W7-A 起另有 `ConsentGuard`（第四道）：撤回同意后四条写入口全部
+ *   `403 CONSENT_REQUIRED`（见 `contracts/consent-policy.ts`）。
  *
  * ── 状态码 ────────────────────────────────────────────────────────────────
  *   建规则 201；改规则 200（返回新版本）；删规则 200 `{ ruleId }`（幂等）；
  *   加习惯 201（返回与 `GET /home` 的 `habits[]` 同构的行）。
  */
 @Controller('point-rules')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class RulesController {
   constructor(
     private readonly service: RulesService,

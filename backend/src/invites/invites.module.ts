@@ -1,5 +1,7 @@
 import { DynamicModule, Module, type Type } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
+import { ConsentModule } from '../consent/consent.module'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { MembershipModule } from '../membership/membership.module'
@@ -69,13 +71,17 @@ export class InvitesModule {
         ...(hasDatabase ? [PrismaModule] : []),
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
-        PermissionsModule
+        PermissionsModule,
+        // ★ W7-A：同意闸门（`invite_member` 是写动作；`/invites/accept` 不挂，见 controller）。
+        ConsentModule.register({ hasDatabase })
       ],
       controllers: [InvitesController],
       providers: [
         InvitesService,
         // 控制器上的 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块 exports 提供。
         DeviceSessionGuard,
+        // ★ W7-A：同意闸门（依赖 CONSENT_REPOSITORY 由 ConsentModule.exports 提供）。
+        ConsentGuard,
         {
           provide: INVITES_REPOSITORY,
           useClass: resolveInvitesRepositoryClass(hasDatabase)

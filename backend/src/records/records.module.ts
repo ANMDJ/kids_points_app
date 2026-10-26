@@ -1,5 +1,7 @@
 import { DynamicModule, Module, type Type } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
+import { ConsentModule } from '../consent/consent.module'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { IdempotencyModule } from '../idempotency/idempotency.module'
@@ -59,6 +61,8 @@ export class RecordsModule {
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
         PermissionsModule,
+        // ★ W7-A：同意闸门。有库 ⇒ PrismaConsentRepository；无库 ⇒ 501（见 ConsentModule）。
+        ConsentModule.register({ hasDatabase }),
         // 带 `Idempotency-Key` 的请求要先过幂等层；无库时它自己 501。
         IdempotencyModule.register({ hasDatabase })
       ],
@@ -66,6 +70,8 @@ export class RecordsModule {
       providers: [
         RecordsService,
         DeviceSessionGuard,
+        // ★ W7-A：同意闸门（依赖 CONSENT_REPOSITORY 由 ConsentModule.exports 提供）。
+        ConsentGuard,
         {
           provide: RECORDS_REPOSITORY,
           useClass: resolveRecordsRepositoryClass(hasDatabase)

@@ -137,7 +137,7 @@ enum DevicePlatform {
   android
 }
 
-/// 02 §2：ActionType —— 与 PERMISSION_MATRIX 的键**必须逐一对应**（35 个）。
+/// 02 §2：ActionType —— 与 PERMISSION_MATRIX 的键**必须逐一对应**（37 个）。
 /// 该矩阵同时被 HTTP Guard 与 Agent action-dispatcher 消费（02 §3 屏障二）。
 enum ActionType {
   view_child_points
@@ -176,6 +176,10 @@ enum ActionType {
   switch_role_mode
   edit_child_profile
   apply_onboarding
+  /// 合规与监护人同意（W7-A）：看 / 授予 / 撤回同意。
+  /// 这两个动作是「撤回后写入停止」的豁免口（contracts/consent-policy.ts）。
+  view_consent
+  manage_consent
   reset_demo_data
 }
 

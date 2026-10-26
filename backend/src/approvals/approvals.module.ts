@@ -1,5 +1,7 @@
 import { DynamicModule, Module, type Type } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
+import { ConsentModule } from '../consent/consent.module'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { IdempotencyModule } from '../idempotency/idempotency.module'
@@ -130,6 +132,9 @@ export class ApprovalsModule {
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
         PermissionsModule,
+        // ★ W7-A：同意闸门（approvals 的 `review_approvals` / `request_approval` 都是写动作）。
+        //   有库 ⇒ PrismaConsentRepository；无库 ⇒ 501（见 ConsentModule）。
+        ConsentModule.register({ hasDatabase }),
         // ★ W3-C：`Idempotency-Key` 的持久化端口也必须按同一个世界选实现
         //   （无库 ⇒ 501，带 key 的请求不会假装重放保护已生效）。
         IdempotencyModule.register({ hasDatabase }),
@@ -149,6 +154,8 @@ export class ApprovalsModule {
         //   `Nest can't resolve dependencies of the DeviceSessionGuard (?)`
         //   （W1-B 在 MembershipModule 上实测过；W1-C 给 DeviceSessionModule 补齐了 exports）。
         DeviceSessionGuard,
+        // ★ W7-A：同意闸门（依赖 CONSENT_REPOSITORY 由 ConsentModule.exports 提供）。
+        ConsentGuard,
         // ★ W3-A（2026-10-18）：**有库 ⇒ 真实现**（同事务写 ApprovalRequest + PointRecord +
         //   Child.pointsBalance + AuditLog）；无库 ⇒ 显式 501（不假装写入成功）。
         //   service / controller 一行都不用改 —— 这正是端口存在的意义。

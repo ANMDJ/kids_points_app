@@ -8,6 +8,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
@@ -32,13 +33,14 @@ import { HabitsService } from './habits.service'
  * ── 三道屏障 + 幂等（与 `HabitsController` 同一手法）────────────────────────
  *   `DeviceSessionGuard` → `MembershipGuard` → `PermissionsGuard`；
  *   矩阵 `delete_habit` = 家长 ALLOW / 孩子 DENY。带 `Idempotency-Key` 时重放
- *   不会产生第二条审计。
+ *   不会产生第二条审计。★ W7-A 起另有 `ConsentGuard`（第四道）：撤回同意后
+ *   `DELETE /habits/:id` 回 `403 CONSENT_REQUIRED`。
  *
  * ── 状态码 ────────────────────────────────────────────────────────────────
  *   200 `{ habitId }`（幂等：已经删过也回同一个 id）；404 `HABIT_NOT_FOUND`（含跨孩子）。
  */
 @Controller('habits')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class HabitsLifecycleController {
   constructor(
     private readonly service: HabitsService,

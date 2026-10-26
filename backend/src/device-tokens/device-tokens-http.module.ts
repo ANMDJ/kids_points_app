@@ -1,5 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
+import { ConsentModule } from '../consent/consent.module'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { DeviceSessionModule } from '../device-session/device-session.module'
 import { MembershipModule } from '../membership/membership.module'
@@ -13,9 +15,9 @@ import { DeviceTokensModule, type DeviceTokensAssemblyOptions } from './device-t
  *
  * ── 为什么要单独一层 ──────────────────────────────────────────────────────
  *   `DeviceTokensModule`（核心）会被 `NotificationsModule` 导入多次，因此不能带
- *   controller；controller 需要三道屏障（身份 / 成员位 / 矩阵），而那些守卫只在
+ *   controller；controller 需要四道屏障（身份 / 成员位 / 矩阵 / 同意），而那些守卫只在
  *   **声明 controller 的模块**的注入器里实例化。所以这一层只做一件事：
- *   把「核 + 三道屏障 + 两条路由」装在一起。
+ *   把「核 + 四道屏障 + 两条路由」装在一起。
  *
  * ── 谁能调 ────────────────────────────────────────────────────────────────
  *   `manage_device_tokens`：guardian / child **都 ALLOW**（孩子的设备也要能收到推送）；
@@ -36,11 +38,17 @@ export class DeviceTokensHttpModule {
         DeviceTokensModule.register({ hasDatabase }),
         DeviceSessionModule.register({ hasDatabase }),
         MembershipModule.register({ hasDatabase }),
-        PermissionsModule
+        PermissionsModule,
+        // ★ W7-A：同意闸门（登记推送 token = 采集设备信息，属写动作）。
+        ConsentModule.register({ hasDatabase })
       ],
       controllers: [DeviceTokensController],
       // 控制器上的 Guard 在本模块注入器里实例化 —— 依赖由上面三个模块 exports 提供。
-      providers: [DeviceSessionGuard]
+      providers: [
+        DeviceSessionGuard,
+        // ★ W7-A：同意闸门（依赖 CONSENT_REPOSITORY 由 ConsentModule.exports 提供）。
+        ConsentGuard
+      ]
     }
   }
 }

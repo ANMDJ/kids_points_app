@@ -9,6 +9,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
@@ -33,6 +34,8 @@ import { HabitsService } from './habits.service'
  *   `DeviceSessionGuard`（身份/孩子上下文）→ `MembershipGuard`（成员资格）→
  *   `PermissionsGuard`（矩阵）× 成员级收紧。缺任何一道都会 401/403，
  *   根本到不了本控制器的方法体。
+ *   ★ W7-A 起还有**第四道** `ConsentGuard`（同意闸门）：撤回同意后打卡 / 撤销
+ *   一律 `403 CONSENT_REQUIRED`（清单见 `contracts/consent-policy.ts`）。
  *
  * ── 幂等（`02` §4.4）──────────────────────────────────────────────────────
  *   带 `Idempotency-Key`：重放直接返回首次响应，**不再调用业务**；
@@ -40,7 +43,7 @@ import { HabitsService } from './habits.service'
  *   无论带不带，账本层都还会用 `(childId, idempotencyKey)` 唯一约束兜底。
  */
 @Controller('records')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class HabitsController {
   constructor(
     private readonly service: HabitsService,

@@ -8,6 +8,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { MembershipGuard } from '../membership/membership.guard'
 import { PermissionsGuard } from '../permissions/permissions.guard'
@@ -31,6 +32,8 @@ import { UpdateChildProfileDto } from './dto/update-child-profile.dto'
  *   `DeviceSessionGuard` → `MembershipGuard` → `PermissionsGuard`；
  *   `edit_child_profile` 在矩阵里是 guardian ALLOW / child DENY ⇒ 孩子设备 403，
  *   viewer 也不是成员 ⇒ 屏障一就拦下。
+ *   ★ W7-A 起还有**第四道** `ConsentGuard`（同意闸门）：撤回同意后 `PATCH /child`
+ *   一律 `403 CONSENT_REQUIRED`（清单见 `contracts/consent-policy.ts`）。
  *
  * ── 为什么不需要 `Idempotency-Key` ─────────────────────────────────────────
  *   PATCH 是**幂等**的：重复提交同一个昵称，第二次在仓储里命中「同名」分支，
@@ -38,7 +41,7 @@ import { UpdateChildProfileDto } from './dto/update-child-profile.dto'
  *   `child.rename` 审计 —— 这比额外维护一份响应缓存更简单也更诚实。
  */
 @Controller('child')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class ChildrenController {
   constructor(private readonly service: ChildrenService) {}
 

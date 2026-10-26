@@ -42,7 +42,8 @@
 | [`33-w6e-handoff.md`](./33-w6e-handoff.md) | **阶段 W6-E 交接单**（Flutter 设备 token 上报）：独立 `DeviceTokenApi`（**不并进 `WriteApi`** —— 推送失败不得影响打卡 / 登录 / 首页，且现有 `implements WriteApi` 替身不该被牵连）；`PushTokenConfig` 区分「未配置 / 配置错误」（release/profile **拒绝**编译期 `KP_PUSH_TOKEN`）；`PushTokenRegistrar` **永不抛错**、单飞（并发拿到同一 Future）、同 token 去重、**409 `OWNED_BY_OTHER` 进程内短路不重试**、注销 404 按已注销；`main()` fire-and-forget 并 `whenComplete(close)`（W6-F 已改为长期存活的 runtime）；日志 / 结果 / `ArgumentError` **都不含 token**（SDK 异常只打 `runtimeType`）；新增 40 条用例，`flutter analyze` 无问题、`flutter test` **240/240**；**W6-E 当时仍无真实 FCM/APNs SDK、无生命周期重报、无退出登录注销、无真机 / 真后端证据**（生命周期重报 / 注销入口已由 W6-F 补上）；小程序因缺微信登录（`openid`）**刻意不做** | ✅ W6-E 已收口（**仅 Flutter**；厂商 SDK 未接） |
 | [`34-w6f-handoff.md`](./34-w6f-handoff.md) | **阶段 W6-F 交接单**（推送 token 生命周期）：`PushTokenRuntime` 长期持有 registrar —— `start()` 启动即报、`reportIfDue()` 只在 **resumed** 时按 **5 分钟冷却**重报（失败也消耗窗口，避免断网时每次切前台都等超时）、`revoke()` **先停用再注销**（并发 resume 不会把 token 登记回去）、`dispose()` 等在途请求结束才关 HttpClient；`PushTokenLifecycle` 是唯一 Flutter 绑定胶水，只认 `resumed`；新增 **16** 条用例，`flutter analyze` 无问题、`flutter test` **256/256**；**仍无真实 FCM/APNs SDK、无 token refresh 流、无登录流程调用点、无真机证据** | ✅ W6-F 已收口（**仅 Flutter**；真实 SDK 未接） |
 | [`35-w6g-handoff.md`](./35-w6g-handoff.md) | **阶段 W6-G 交接单**（推送链路端到端冒烟）：`test-db/push-delivery-e2e-db.dbtest.ts` 用**真 `AppModule` ＋ 真 Prisma ＋ 真 `PushRetryWorker.tick()` ＋ 真 `WebhookPushAdapter`**，把「审批 HTTP → 同事务 outbox → 领件 → 查 active token → POST **本地 `node:http` 网关** → 回写任务」一次跑通；只覆盖 `PUSH_DELIVERY_PORT`（仍是生产适配器，仅 URL 指向本地）与 `PUSH_RETRY_CONFIG.batchSize=1`，**不需要 L2/L3 推送凭据**；网关三种回应分别钉死 `sent` / 渠道故障 `attempts+1` / `410` 下线 token；★ 500 组额外断言**推送失败不回滚业务**（审批仍 `approved`、心愿仍落库），无 token 组断言网关 **0 次调用**且 `attempts` **仍 0**（结构性失败不烧次数）；共享库不 DELETE，靠 `nextAttemptAt=2000-01-01` 选行；证据 = `test:db` **246/246**（本套件 **6** 条）、`npm test` **693/693**、矩阵仍 **35** 动作；**仍无真实厂商 SDK / 凭据、无客户端参与、无调度计时 / 真机到达验证** | ✅ W6-G 已收口（**服务端链路已接通到本地网关**；真机推送未验） |
-| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **35 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-24 矩阵同步至 35 动作） |
+| [`36-w7a-handoff.md`](./36-w7a-handoff.md) | **阶段 W7-A 交接单**（监护人同意 · 后端）：`GET /consent` / `POST /consent` / `POST /consent/withdraw` ＋ 矩阵 **37** 动作（`view_consent` / `manage_consent`，对孩子均 DENY，迁移 `20261026090000_consent_actions`）；「撤回后写入停止」落在**第四道屏障** `ConsentGuard`，判据是 `contracts/consent-policy.ts` 的**显式清单**（24 写 / 13 豁免，两个集合恰好划分全部动作，未知动作按写 fail-closed）；豁免口（`manage_consent` / `view_consent` / `withdraw_request` / `switch_role_mode`）是合规要求 —— 否则「可撤回」变成「可永久锁死」；`GuardianConsent` 授予 / 撤回在 `$transaction` + `SELECT … FOR UPDATE` 内完成（同版本重复授予不写审计、重复撤回幂等、从未授予撤回 ⇒ **409 `CONSENT_NOT_GRANTED`**）；`none`（从未同意）**同样 403**，不自动补假同意；IP / UA 只存 HMAC（无 `CONSENT_PII_SALT` ⇒ 存 `null`）；证据 = `npm test` **41 文件 / 746 条**（新增 `consent-policy` / `consent-guard` / `consent-http` / `consent-pii`）、`honesty:probe` 5 项全 PASS、`npm run ci` **CI_EXIT=0**；**L5 法务文本未定稿（版本号仍占位）、前端同意入口未建、导出 / 删除仍未实现、真库并发幂等无用例** | ✅ W7-A 已收口（**仅后端**；引导第①步 UI 与导出未做） |
+| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **37 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-26 矩阵同步至 37 动作） |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
@@ -109,6 +110,12 @@
 > **W3-B** 起 `withdrawn` 可达且审批读写按 `childId` 收口；**W3-C** 起执行器/扫描/幂等键收尾。
 > 前文所有「审批有库也是 501」都是
 > **W2-D 当时**的事实；以本目录最后几段（W3-A / W3-B / W3-C / W4-A / W4-B / W4-C / W4-D / W4-E）为准。
+> **W7-A（2026-10-26）** 监护人同意链路（**仅后端**）：`GET /consent` / `POST /consent` /
+> `POST /consent/withdraw` ＋ 第四道屏障 `ConsentGuard` —— 撤回（或从未同意）后 24 个写动作
+> 一律 `403 CONSENT_REQUIRED`，清单在 `backend/src/contracts/consent-policy.ts`
+> （读路径、撤回自己的申请、**重新同意**豁免，否则「可撤回」会变成死状态）。
+> 引导第①步的勾选界面**仍未开发**，法务文本仍是占位版本，**导出 / 删除未实现**；
+> 详见 [`36-w7a-handoff.md`](./36-w7a-handoff.md)。
 
 ### ✅ 已完成并验证
 
@@ -1366,7 +1373,7 @@
 **顺手补上一个闸门**：PRD §7 的表格从 W5-H 起就停在 29 个动作（代码早已 35），而十几轮 CI 全绿 ——
 因为没有任何检查读过文档。现在 `honesty:probe` 多了检查 **E**（PRD §7 ↔ 矩阵逐行动作/判定对账），
 `test:canfail` 多了检查 **D**（拿一份故意写错的夹具 PRD，必须让探针变红并点名），
-PRD §7 已同步至 **35 动作**（v1.1）。
+PRD §7 已同步至 **37 动作**（v1.1 从 29 → 35；v1.6 / W7-A 再 +2：`view_consent` / `manage_consent`）。
 **边界**：没有 APNs / FCM / 微信凭据，没有网关实现，没有客户端上报（线上表仍空），
 没有 outbox / 重试，**真机推送一次都没发生过**。明细见
 [`29-w6a-handoff.md`](./29-w6a-handoff.md) §5。

@@ -1,5 +1,6 @@
 import { Body, Controller, Headers, HttpCode, Post, Req, UseGuards } from '@nestjs/common'
 
+import { ConsentGuard } from '../consent/consent.guard'
 import { DeviceSessionGuard } from '../device-session/device-session.guard'
 import { IdempotencyService } from '../idempotency/idempotency.service'
 import { MembershipGuard } from '../membership/membership.guard'
@@ -23,6 +24,8 @@ import { RecordsService } from './records.service'
  *   `PermissionsGuard`（矩阵 `adjust_points`：guardian ALLOW / child DENY）。
  *   孩子**不能**直接记账：他有正当诉求，但要走 `request_points_bonus` 审批
  *   （`02` §6 的归一化），否则「孩子给自己加分」就成了后门。
+ *   ★ W7-A 起还有**第四道** `ConsentGuard`（同意闸门）：撤回同意后
+ *   `POST /records/adjust` 回 `403 CONSENT_REQUIRED`（清单见 `contracts/consent-policy.ts`）。
  *
  * ── 幂等（`02` §4.4）──────────────────────────────────────────────────────
  *   带 `Idempotency-Key`：重放直接返回首次响应，**不再调用业务**；
@@ -30,7 +33,7 @@ import { RecordsService } from './records.service'
  *   账本层再用 `(childId, idempotencyKey)` 唯一约束兜底。
  */
 @Controller('records')
-@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard)
+@UseGuards(DeviceSessionGuard, MembershipGuard, PermissionsGuard, ConsentGuard)
 export class RecordsController {
   constructor(
     private readonly service: RecordsService,

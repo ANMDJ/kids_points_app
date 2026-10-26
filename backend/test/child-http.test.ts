@@ -34,6 +34,10 @@ import type { SessionLookupRow } from '../src/device-session/session.gate'
 import type { MembershipLookupRow } from '../src/membership/membership.gate'
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 
+// ★ W7-A：同意闸门（第四道屏障）—— 见 test/support/consent-fake.ts
+import { CONSENT_REPOSITORY } from '../src/consent/consent.repository'
+import { makeGrantedConsentFake } from './support/consent-fake'
+
 const CHILD_ID = 'child-1'
 const DEV_DAD = 'dev-dad'
 const DEV_KID = 'dev-kid'
@@ -127,6 +131,10 @@ async function startApp(
     .useValue(makeSessionFake())
     .overrideProvider(MEMBERSHIP_REPOSITORY)
     .useValue(makeMembershipFake())
+    // ★ W7-A：第四道屏障（同意闸门）。这些用例测的是本文件自己的关口，
+    //   同意状态作为背景条件恒为 granted —— 撤回/重授予的行为见 consent-http.test.ts。
+    .overrideProvider(CONSENT_REPOSITORY)
+    .useValue(makeGrantedConsentFake())
 
   if (options.port !== undefined) {
     builder.overrideProvider(CHILDREN_REPOSITORY).useValue(options.port)
