@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/approval.dart';
 import '../models/consent.dart';
+import '../models/family_export.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
 import '../models/member.dart';
@@ -512,5 +513,31 @@ GuardianConsentStatus _consentStatusFromWire(String raw, String path) {
       return GuardianConsentStatus.none;
   }
   throw ReadApiException.malformed(path, detail: '未知同意状态：$raw');
+}
+
+// ──────────────────────────── 家庭数据导出（W7-C） ────────────────────────────
+
+/// 线格式 → [FamilyExport]。
+///
+/// 几乎是 1:1（导出文件本身就是界面要展示的结论），只多带一份 `rawJson`：
+/// 家长复制 / 落盘时应当拿到服务端下发的**同一份字节**。
+///
+/// 版本号不做「不认识就抛」：文件来自更新的服务端时，界面要能**看到**它并把
+/// 这件事说出来（[FamilyExport.isKnownSchemaVersion]），而不是把整份导出
+/// 变成一个错误页 —— 家长要的是数据，不是一个版本协商失败。
+FamilyExport mapFamilyExport(FamilyExportDto dto) {
+  return FamilyExport(
+    rawJson: dto.rawJson,
+    schemaVersion: dto.schemaVersion,
+    generator: dto.generator,
+    generatedAt: dto.generatedAt,
+    childId: dto.childId,
+    childName: dto.childName,
+    pointsBalance: dto.pointsBalance,
+    counts: Map<String, int>.unmodifiable(dto.counts),
+    totals: Map<String, int>.unmodifiable(dto.totals),
+    truncated: dto.truncated,
+    truncatedSections: List<String>.unmodifiable(dto.truncatedSections),
+  );
 }
 

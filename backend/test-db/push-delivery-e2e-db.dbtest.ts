@@ -63,6 +63,7 @@ import {
   type WebhookPushPayload
 } from '../src/notifications/webhook-push.adapter'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 
@@ -240,6 +241,12 @@ async function seed(): Promise<void> {
       { childId: ID.childC, userId: ID.kidC, role: 'child' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：三家各自授权（提交 → 审批都要过闸门）。
+  await grantConsentFor(prisma, [
+    [ID.child, ID.dad],
+    [ID.childB, ID.dadB],
+    [ID.childC, ID.momC]
+  ])
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future },

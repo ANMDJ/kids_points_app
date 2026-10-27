@@ -120,6 +120,15 @@ export const PERMISSION_MATRIX = {
   //   若连它也被拦，用户会被锁在「撤回了却无法重新同意」的死状态里 ——
   //   合规要求的「可撤回」必须同时意味着「可再次授予」。
   manage_consent: { guardian: 'ALLOW', child: 'DENY' },
+
+  /* ── 数据导出（W7-C）────────────────────────────────────── */
+  // 导出整个家庭的可携带数据（档案 / 成员 / 规则与版本 / 习惯 / 心愿 / 流水 /
+  // 审批 / 同意记录 / 审计），供家长行使查阅与可携带权（02 §9.20 / 04 §5）。
+  // ★ 只给家长：孩子不该能成批导出全家数据（一次请求就能拿走所有流水与成员信息）。
+  // ★ 它不是写动作：导出**不改变任何一行**，且撤回同意后仍必须可用 ——
+  //   否则「撤回」就等于「连自己的数据也拿不走」，与 04 §5 的可携带承诺相反。
+  //   因此 `contracts/consent-policy.ts` 把它归入豁免集合，并由用例钉住。
+  export_family_data: { guardian: 'ALLOW', child: 'DENY' },
   // ← E18：生产环境永久关闭。reset_demo_data 双侧均为 DENY，
   //    且**必须**保持双侧 DENY —— 客户端"生产可重置数据"是已修的严重缺陷。
   reset_demo_data: { guardian: 'DENY', child: 'DENY' }
@@ -127,7 +136,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 37 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 38 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**

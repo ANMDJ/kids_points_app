@@ -42,6 +42,7 @@ import {
 } from '../src/notifications/notifications.repository'
 import { PrismaNotificationsRepository } from '../src/notifications/notifications.prisma.repository'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 
@@ -202,6 +203,8 @@ async function seed(): Promise<void> {
       // ID.stranger 刻意**没有**成员位：屏障一必须给出 403。
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：组 E（新申请待确认）要真的提交申请 ⇒ main 需授权。
+  await grantConsentFor(prisma, [[ID.main, ID.dad]])
   await prisma.deviceSession.createMany({
     data: [
       {

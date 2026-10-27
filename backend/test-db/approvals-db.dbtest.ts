@@ -50,6 +50,7 @@ import { PrismaDeviceSessionRepository } from '../src/device-session/device-sess
 import { MEMBERSHIP_REPOSITORY, type MembershipPort } from '../src/membership/membership.repository'
 import { PrismaMembershipRepository } from '../src/membership/membership.prisma.repository'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 /** 本轮运行的唯一前缀 —— 每次跑都是“新孩子、新设备、新成员位”，与历史数据互不干扰。 */
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
@@ -152,6 +153,9 @@ async function seed(): Promise<void> {
       { childId: ID.childR, userId: ID.dad, role: 'guardian', status: 'removed', removedAt: new Date() }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：只给**会走写路径**的 childP 授权。
+  //   childR 的成员是 `removed` —— 那个 403 由屏障一先给，不该被同意状态掩盖。
+  await grantConsentFor(prisma, [[ID.childP, ID.dad]])
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.childP, userId: ID.dad, activeRole: 'guardian', expiresAt: future },

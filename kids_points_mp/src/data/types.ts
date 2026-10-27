@@ -642,6 +642,131 @@ function formatConsentMoment(value: number): string {
   )} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
 }
 
+// ============================================================ 家庭数据导出（W7-C）
+
+/**
+ * 客户端认识的**最新**导出文件格式版本（与后端 `EXPORT_SCHEMA_VERSION` 同口径）。
+ *
+ * 只做上限比较：`schemaVersion <= 1` 都能读（后端承诺字段只增不改名）；
+ * 更大的版本说明文件来自更新的服务端，界面不该假装看得懂。
+ */
+export const exportSchemaVersion = 1
+
+/** 导出文件里的一段 —— 只用于展示「本文件有几条 / 库里共几条」。 */
+export interface FamilyExportSection {
+  /** 线格式段名（`records` 等）。 */
+  key: string
+  /** 中文标签。 */
+  label: string
+  /** 本文件包含的条数。 */
+  included: number
+  /** 库里的全量条数；后端只在三张大表上下发 `totals`，其余段为 null。 */
+  total: number | null
+  /** 这一段是否被截断。 */
+  truncated: boolean
+}
+
+/**
+ * 家庭数据导出文件（`GET /export`）。
+ *
+ * `rawJson` 是**服务端原样下发的文本**：复制 / 落盘都应当给家长同一份文件，
+ * 而不是按本地模型重新序列化出来的近似物。
+ */
+export interface FamilyExport {
+  rawJson: string
+  schemaVersion: number
+  /** 生成方（后端固定 `kids-points-backend`）：文件被转到别处后仍可追溯来源。 */
+  generator: string
+  /** 生成时间（epoch 毫秒，服务端 UTC）。 */
+  generatedAt: number
+  childId: string
+  childName: string
+  pointsBalance: number
+  /** 段名 → 本文件条数（保持后端下发顺序）。 */
+  counts: Record<string, number>
+  /** 段名 → 库内全量条数（只有 records / approvals / auditLogs 三张表）。 */
+  totals: Record<string, number>
+  truncated: boolean
+  truncatedSections: string[]
+}
+
+/** 段名 → 中文标签。**顺序**由后端 `counts` 的插入顺序决定（文件段顺序）。 */
+export const exportSectionLabels: Record<string, string> = {
+  members: '家庭成员',
+  rules: '积分规则',
+  habits: '好习惯',
+  wishes: '心愿',
+  records: '积分流水',
+  approvals: '审批申请',
+  consents: '同意记录',
+  auditLogs: '审计日志'
+}
+
+/** 文件格式版本是否被本客户端认识。 */
+export function exportIsKnownSchemaVersion(file: FamilyExport): boolean {
+  return file.schemaVersion <= exportSchemaVersion
+}
+
+/** 这份文件一共多少行数据（各段之和，不含 `summary` 自身）。 */
+export function exportRowCount(file: FamilyExport): number {
+  return Object.keys(file.counts).reduce(
+    (sum, key) => sum + (file.counts[key] ?? 0),
+    0
+  )
+}
+
+/** 「2026-10-27 09:30 导出」；服务端时间是 UTC，展示一律转本地。 */
+export function exportGeneratedText(file: FamilyExport): string {
+  return `${formatConsentMoment(file.generatedAt)} 导出`
+}
+
+/** 建议文件名 —— 与后端 `Content-Disposition` 同口径（纯 ASCII）。 */
+export function exportFileName(file: FamilyExport): string {
+  const date = new Date(file.generatedAt)
+  const day = Number.isNaN(date.getTime())
+    ? 'unknown'
+    : `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
+        date.getDate()
+      )}`
+  return `family-export-${file.childId}-${day}.json`
+}
+
+/**
+ * 界面要显示的每一行：中文段名 + 本文件条数 +（被截断时的）全量条数。
+ *
+ * 遇到不认识的段名原样显示原名：宁可露出一个英文键，也不要把
+ * 「后端新增了一段」这种事实藏起来。
+ */
+export function exportSections(file: FamilyExport): FamilyExportSection[] {
+  return Object.keys(file.counts).map((key) => ({
+    key,
+    label: exportSectionLabels[key] ?? key,
+    included: file.counts[key] ?? 0,
+    total: file.totals[key] ?? null,
+    truncated: file.truncatedSections.includes(key)
+  }))
+}
+
+/** 「12 条」或「500 / 1200 条（已截断）」。 */
+export function exportSectionCountText(section: FamilyExportSection): string {
+  if (
+    section.truncated &&
+    section.total !== null &&
+    section.total !== section.included
+  ) {
+    return `${section.included} / ${section.total} 条（已截断）`
+  }
+  return `${section.included} 条`
+}
+
+/** 被截断的段的中文名（用于面板上的「不完整」提示）。 */
+export function exportTruncatedSectionsText(file: FamilyExport): string {
+  if (file.truncatedSections.length === 0) return '—'
+  return file.truncatedSections
+    .map((key) => exportSectionLabels[key] ?? key)
+    .join('、')
+}
+
 // ============================================================ 规则版本（修 C10）
 
 /**

@@ -43,7 +43,8 @@
 | [`34-w6f-handoff.md`](./34-w6f-handoff.md) | **阶段 W6-F 交接单**（推送 token 生命周期）：`PushTokenRuntime` 长期持有 registrar —— `start()` 启动即报、`reportIfDue()` 只在 **resumed** 时按 **5 分钟冷却**重报（失败也消耗窗口，避免断网时每次切前台都等超时）、`revoke()` **先停用再注销**（并发 resume 不会把 token 登记回去）、`dispose()` 等在途请求结束才关 HttpClient；`PushTokenLifecycle` 是唯一 Flutter 绑定胶水，只认 `resumed`；新增 **16** 条用例，`flutter analyze` 无问题、`flutter test` **256/256**；**仍无真实 FCM/APNs SDK、无 token refresh 流、无登录流程调用点、无真机证据** | ✅ W6-F 已收口（**仅 Flutter**；真实 SDK 未接） |
 | [`35-w6g-handoff.md`](./35-w6g-handoff.md) | **阶段 W6-G 交接单**（推送链路端到端冒烟）：`test-db/push-delivery-e2e-db.dbtest.ts` 用**真 `AppModule` ＋ 真 Prisma ＋ 真 `PushRetryWorker.tick()` ＋ 真 `WebhookPushAdapter`**，把「审批 HTTP → 同事务 outbox → 领件 → 查 active token → POST **本地 `node:http` 网关** → 回写任务」一次跑通；只覆盖 `PUSH_DELIVERY_PORT`（仍是生产适配器，仅 URL 指向本地）与 `PUSH_RETRY_CONFIG.batchSize=1`，**不需要 L2/L3 推送凭据**；网关三种回应分别钉死 `sent` / 渠道故障 `attempts+1` / `410` 下线 token；★ 500 组额外断言**推送失败不回滚业务**（审批仍 `approved`、心愿仍落库），无 token 组断言网关 **0 次调用**且 `attempts` **仍 0**（结构性失败不烧次数）；共享库不 DELETE，靠 `nextAttemptAt=2000-01-01` 选行；证据 = `test:db` **246/246**（本套件 **6** 条）、`npm test` **693/693**、矩阵仍 **35** 动作；**仍无真实厂商 SDK / 凭据、无客户端参与、无调度计时 / 真机到达验证** | ✅ W6-G 已收口（**服务端链路已接通到本地网关**；真机推送未验） |
 | [`36-w7a-handoff.md`](./36-w7a-handoff.md) | **阶段 W7-A 交接单**（监护人同意 · 后端）：`GET /consent` / `POST /consent` / `POST /consent/withdraw` ＋ 矩阵 **37** 动作（`view_consent` / `manage_consent`，对孩子均 DENY，迁移 `20261026090000_consent_actions`）；「撤回后写入停止」落在**第四道屏障** `ConsentGuard`，判据是 `contracts/consent-policy.ts` 的**显式清单**（24 写 / 13 豁免，两个集合恰好划分全部动作，未知动作按写 fail-closed）；豁免口（`manage_consent` / `view_consent` / `withdraw_request` / `switch_role_mode`）是合规要求 —— 否则「可撤回」变成「可永久锁死」；`GuardianConsent` 授予 / 撤回在 `$transaction` + `SELECT … FOR UPDATE` 内完成（同版本重复授予不写审计、重复撤回幂等、从未授予撤回 ⇒ **409 `CONSENT_NOT_GRANTED`**）；`none`（从未同意）**同样 403**，不自动补假同意；IP / UA 只存 HMAC（无 `CONSENT_PII_SALT` ⇒ 存 `null`）；证据 = `npm test` **41 文件 / 746 条**（新增 `consent-policy` / `consent-guard` / `consent-http` / `consent-pii`）、`honesty:probe` 5 项全 PASS、`npm run ci` **CI_EXIT=0**；**L5 法务文本未定稿（版本号仍占位）、前端同意入口未建、导出 / 删除仍未实现、真库并发幂等无用例** | ✅ W7-A 已收口（**仅后端**；引导第①步 UI 与导出未做） |
-| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **37 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-26 矩阵同步至 37 动作） |
+| [`37-w7c-handoff.md`](./37-w7c-handoff.md) | **阶段 W7-C 交接单**（家庭数据导出）：`GET /export` ＋ 矩阵 **38** 动作（`export_family_data`，guardian ALLOW / **child DENY**，迁移 `20261027090000_export_action`）；一份 JSON 含档案 / 成员 / 规则与版本 / 习惯 / 心愿 / 流水 / 审批 / 同意 / 审计九段，`summary` 如实给出 `counts` / `totals` / `truncated` / `truncatedSections`（`EXPORT_LIMITS`：流水 5 万、审批与审计各 5 千、小集合 2 千）；★ **不挂 `ConsentGuard`** —— 撤回同意后仍必须可用（04 §5 可携带权），清单变成 24 写 / 14 豁免；`Content-Disposition` 纯 ASCII ＋ `no-store`；无库 **501** 绝不返回空文件；双端只解析文件头与摘要、**复制服务端原文**，先 `refreshMembers()` 判角色（孩子不发请求）、单飞、失败不清空旧文件；证据 = `npm test` **43 文件 / 780 条**（`export-http` 9 ＋ `export-wiring` 23）、`flutter test` **296/296**（新增 22 条，含「刷新失败同时报错」）、小程序 `tsc` / `build:weapp` EXIT=0、`node .tmp_test/run-w7c.mjs` **12/12**（导出数据层的运行时用例：截断自洽 / `rawJson` 逐字 / 错误归一 / 单飞 / 失败保留旧文件）；**真库 `test-db/export-db.dbtest.ts` 19/19 通过（`test:db` 19 文件 / 265 用例全绿、`ci:db` EXIT=0）、删除未实现** | ✅ W7-C 已收口（后端 ＋ 双端 ＋ 真库） |
+| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **38 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-27 矩阵同步至 38 动作） |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
@@ -114,8 +115,17 @@
 > `POST /consent/withdraw` ＋ 第四道屏障 `ConsentGuard` —— 撤回（或从未同意）后 24 个写动作
 > 一律 `403 CONSENT_REQUIRED`，清单在 `backend/src/contracts/consent-policy.ts`
 > （读路径、撤回自己的申请、**重新同意**豁免，否则「可撤回」会变成死状态）。
-> 引导第①步的勾选界面**仍未开发**，法务文本仍是占位版本，**导出 / 删除未实现**；
+> 引导第①步的勾选界面**仍未开发**，法务文本仍是占位版本，**删除未实现**（导出已由 W7-C 落地）；
 > 详见 [`36-w7a-handoff.md`](./36-w7a-handoff.md)。
+> **W7-C（2026-10-27）** 家庭数据导出：`GET /export`（`export_family_data`，
+> guardian ALLOW / child DENY）把这一个孩子的九段数据打成一份 JSON，
+> `summary` 如实标注条数与**被截断的段**；★ 它**不挂 `ConsentGuard`** ——
+> 撤回同意后仍必须可用（04 §5 可携带权），因此清单变成 24 写 / 14 豁免。
+> 双端只解析文件头与摘要，**复制的是服务端原文**；孩子视角不发请求。
+> 真库用例 `test-db/export-db.dbtest.ts` **19/19 通过**（`npm run test:db` 19 文件 / 265 用例全绿、
+> `npm run ci:db` EXIT=0；首跑顺带修掉「真库夹具没有 `GuardianConsent` 行」的 W7-A 遗留），
+> 数据删除仍未实现；
+> 详见 [`37-w7c-handoff.md`](./37-w7c-handoff.md)。
 
 ### ✅ 已完成并验证
 
@@ -1373,7 +1383,8 @@
 **顺手补上一个闸门**：PRD §7 的表格从 W5-H 起就停在 29 个动作（代码早已 35），而十几轮 CI 全绿 ——
 因为没有任何检查读过文档。现在 `honesty:probe` 多了检查 **E**（PRD §7 ↔ 矩阵逐行动作/判定对账），
 `test:canfail` 多了检查 **D**（拿一份故意写错的夹具 PRD，必须让探针变红并点名），
-PRD §7 已同步至 **37 动作**（v1.1 从 29 → 35；v1.6 / W7-A 再 +2：`view_consent` / `manage_consent`）。
+PRD §7 已同步至 **38 动作**（v1.1 从 29 → 35；v1.6 / W7-A 再 +2：`view_consent` / `manage_consent`；
+v1.7 / W7-C 再 +1：`export_family_data`）。
 **边界**：没有 APNs / FCM / 微信凭据，没有网关实现，没有客户端上报（线上表仍空），
 没有 outbox / 重试，**真机推送一次都没发生过**。明细见
 [`29-w6a-handoff.md`](./29-w6a-handoff.md) §5。

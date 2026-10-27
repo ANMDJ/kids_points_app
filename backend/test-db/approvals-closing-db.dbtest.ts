@@ -27,6 +27,7 @@ import { ApprovalsExpiryService } from '../src/approvals/approvals-expiry.servic
 import { buildRecordDraft, verifyBalanceChain } from '../src/ledger/ledger.gate'
 import { PrismaLedgerRepository } from '../src/ledger/ledger.prisma.repository'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 
@@ -93,6 +94,8 @@ async function seed(): Promise<void> {
       { childId: ID.child, userId: ID.kid, role: 'child' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：夹具显式给「有效同意」（测到期收口，不是闸门）。
+  await grantConsentFor(prisma, [[ID.child, ID.dad]])
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future },

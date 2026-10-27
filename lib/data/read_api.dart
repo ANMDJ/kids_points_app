@@ -293,7 +293,29 @@ class ReadApiClient {
 
 
 
-  Future<Object?> _get(String path, [Map<String, String>? query]) async {
+  /// `GET /export`：家庭数据导出文件（W7-C）。
+  ///
+  /// 拿到的是**整份 JSON 文本** + 头与摘要（[FamilyExportDto]）：九个数据段
+  /// 不解析成模型，界面只用 `rawJson` 复制 / 落盘（见 `FamilyExport`）。
+  ///
+  /// 与其它读端点一样不带 query：导哪个孩子由会话头决定，客户端**没有**
+  /// 参数可以指定「导谁的数据」—— 服务端也绝不从 query 取 `childId`。
+  ///
+  /// 失败口径与 `/home` 一致：401 没身份、403 不是家长（`export_family_data`
+  /// 只有 guardian ALLOW）、404 孩子已删、501 后端没接数据库。
+  Future<FamilyExportDto> fetchExport() async {
+    final _RawResponse response = await _send('/export');
+    return FamilyExportDto.fromJson(response.decoded, rawJson: response.text);
+  }
+
+  Future<Object?> _get(String path, [Map<String, String>? query]) async =>
+      (await _send(path, query)).decoded;
+
+  /// 发一次 GET，返回**原始文本 + 解析后的 JSON**。
+  ///
+  /// 两样都要是因为导出端点需要原样字节（复制出来的文件应当与服务端下发的
+  /// 一模一样），而其它端点只需要解析结果。
+  Future<_RawResponse> _send(String path, [Map<String, String>? query]) async {
     final String? configError = config.validationError;
     if (configError != null) {
       throw ReadApiException(
@@ -336,8 +358,16 @@ class ReadApiClient {
       throw ReadApiException.malformed(r'$',
           detail: 'HTTP ${response.statusCode} 但响应体为空');
     }
-    return body;
+    return _RawResponse(response.body, body);
   }
 
   void close() => _transport.close();
+}
+
+/// 一次 GET 的两份结果：原始文本（落盘用）与解析后的 JSON（读字段用）。
+class _RawResponse {
+  const _RawResponse(this.text, this.decoded);
+
+  final String text;
+  final Object? decoded;
 }

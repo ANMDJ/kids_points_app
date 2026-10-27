@@ -4,6 +4,7 @@ import '../models/approval.dart';
 import '../models/audit.dart';
 import '../models/child_profile.dart';
 import '../models/consent.dart';
+import '../models/family_export.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
 import '../models/member.dart';
@@ -199,6 +200,26 @@ class AppStore extends ChangeNotifier {
 
   /// 是否正在提交同意 / 撤回（两个按钮互斥，防双击）。
   bool _consentWriteBusy = false;
+
+  // ─────────────────────── 家庭数据导出（W7-C，服务端） ───────────────────────
+  //
+  // 与同意面板同策略：**打开导出面板时才拉**（`loadExport`）。`GET /export`
+  // 是 guardian 专属（矩阵 `export_family_data` child DENY），塞进首页刷新
+  // 会让每个孩子每次下拉都吃一个 403。
+  //
+  // 与同意**不同**的一点：导出**不受** `ConsentGuard` 管辖 —— 撤回同意后
+  // 仍然必须可用（04 §5 的可携带权）。所以这里没有任何「同意生效中」前置判断，
+  // 缓存也不需要随同意状态失效。
+  //
+  // 存的是一份完整文件（含 `rawJson`）：家长点「复制」时复制的必须是服务端
+  // 下发的原始字节，而不是按本地模型重新拼出来的近似物。
+
+  FamilyExport? _familyExport;
+  ReadStatus _exportReadStatus = ReadStatus.idle;
+  ReadApiException? _exportError;
+
+  /// 是否正在下载导出文件（按钮据此禁用，防连点下载出两份时间不同的文件）。
+  bool _exportBusy = false;
 
   // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
   //
@@ -414,6 +435,29 @@ class AppStore extends ChangeNotifier {
   /// 403 照样原样上报。依赖成员列表已拉到（`selfMember`），
   /// 所以同意面板打开时同样要先 `refreshMembers()`。
   bool get canManageConsent => canManageMembers;
+
+  // ─────────────────────── 家庭数据导出（W7-C，服务端） ───────────────────────
+
+  /// 最近一次成功拉到的导出文件；还没拉到过时为 null（**不是**「没有数据」）。
+  FamilyExport? get familyExport => _familyExport;
+
+  /// 导出的加载状态（与成员 / 同意分开）。
+  ReadStatus get exportReadStatus => _exportReadStatus;
+
+  /// 导出的加载错误（403 = 当前身份没有 `export_family_data`，
+  /// **不能**画成「没有可导出的数据」—— 那会把权限问题说成数据问题）。
+  ReadApiException? get exportError => _exportError;
+
+  /// 是否正在下载导出文件。
+  bool get isExportBusy => _exportBusy;
+
+  /// 能否导出家庭数据 —— `export_family_data` 在矩阵里只有 guardian ALLOW，
+  /// 与成员管理同一条判据（`selfMember.role`）。
+  ///
+  /// 服务端仍是最终裁决者：这里为 true 只表示「界面可以给出入口」，
+  /// 403 照样原样上报。依赖成员列表已拉到（`selfMember`），
+  /// 所以导出面板打开时同样要先 `refreshMembers()`。
+  bool get canExportFamilyData => canManageMembers;
 
   // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
 
@@ -3074,6 +3118,59 @@ class AppStore extends ChangeNotifier {
     } finally {
       _consentWriteBusy = false;
       _notify();
+    }
+  }
+
+  // ========================================== 家庭数据导出：服务端读取（W7-C）
+
+  /// 下载家庭数据导出文件（`GET /export`）—— **打开导出面板时**调用。
+  ///
+  /// 只有家长能导出（`export_family_data` 在矩阵里 guardian ALLOW / child DENY）；
+  /// 调用方先用 [canExportFamilyData] 判断，孩子视角不要发这个请求 ——
+  /// 否则每次都是 403，还会把「没有权限」画成「加载失败」。
+  ///
+  /// ── 与同意状态的**关键差别** ────────────────────────────────────────────────
+  ///   导出**不受** `ConsentGuard` 管辖：撤回同意后仍然必须可用
+  ///   （04 §5 的可携带权 —— 家长撤回后想把自己提供的数据取走，
+  ///   正是这个权利最典型的场景）。因此这里刻意**不读** `_consent`：
+  ///   任何「先确认同意生效」的前置判断都会把「撤回」变成「数据扣留」。
+  ///
+  /// 失败**不清空**上一次成功的结果（家长可能刚复制过一份，界面不该突然说
+  /// 「没有文件」）；错误经 [exportError] 上报，面板照实显示。
+  Future<void> loadExport() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) {
+      // 预览模式没有服务端数据 —— 直接进入 ready 空态，而不是发一个只会 401
+      // 的请求再把 401 说成「网络错误」。
+      _familyExport = null;
+      _exportReadStatus = ReadStatus.ready;
+      _exportError = null;
+      _notify();
+      return;
+    }
+    // 单飞：连点只会拿到**一份**文件。因此这里不需要 epoch ——
+    // 同一时刻不存在两个在途请求，也就没有「旧响应覆盖新响应」的问题。
+    if (_exportBusy) return;
+    _exportBusy = true;
+    _exportReadStatus = ReadStatus.loading;
+    _exportError = null;
+    _notify();
+    try {
+      final FamilyExportDto dto = await api.fetchExport();
+      if (_disposed || api != _readApi) return;
+      _familyExport = mapFamilyExport(dto);
+      _exportReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi) return;
+      _exportError = error;
+      _exportReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi) return;
+      _exportError = ReadApiException.network(error);
+      _exportReadStatus = ReadStatus.error;
+    } finally {
+      _exportBusy = false;
+      if (!_disposed && api == _readApi) _notify();
     }
   }
 

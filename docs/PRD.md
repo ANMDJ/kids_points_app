@@ -411,7 +411,7 @@ User（自然人）
 
 | 需求点 | 规则 |
 |---|---|
-| 权限 | Agent `action-dispatcher` **消费同一张** `PERMISSION_MATRIX`（`contracts/permission-matrix.json`，37 动作，由 TS 生成） |
+| 权限 | Agent `action-dispatcher` **消费同一张** `PERMISSION_MATRIX`（`contracts/permission-matrix.json`，38 动作，由 TS 生成） |
 | 防提权 | Agent 伪造 `plan.role=guardian` 而实际为 child → **`401`，整份 plan 作废** |
 | 落账 | 与 HTTP 路径共用同一账本内核与不变量校验 |
 | 技术 | Python 3.12 + FastAPI + LangGraph |
@@ -465,7 +465,7 @@ User（自然人）
 
 ---
 
-## 7. 权限矩阵（37 个动作 · 唯一事实源）
+## 7. 权限矩阵（38 个动作 · 唯一事实源）
 
 > **权威定义**：`backend/src/contracts/permission-matrix.ts`；生成产物 `contracts/permission-matrix.json`
 > 供 Python Agent 消费。**HTTP Guard 与 Agent 只能读这一份，不得各写一版。**
@@ -509,6 +509,7 @@ User（自然人）
 | `apply_onboarding` | ALLOW | **DENY** | 引导 |
 | `view_consent` | ALLOW | **DENY** | 合规（W7-A：看同意状态 / 版本号；孩子没有合规控制面） |
 | `manage_consent` | ALLOW | **DENY** | 合规（W7-A：授予 / 撤回同意；**撤回后仍放行**，否则「可撤回」会变成死状态） |
+| `export_family_data` | ALLOW | **DENY** | 合规（W7-C：导出家庭数据；**不受 `ConsentGuard` 管辖** —— 撤回同意后仍必须可用，04 §5 可携带权） |
 | `reset_demo_data` | **DENY** | **DENY** | 运维 |
 
 **归一化规则**：孩子的 `adjust_points(delta=+10)` **不报错**，而是归一化为 `request_points_bonus` → `202` 生成待审申请；
@@ -528,7 +529,7 @@ User（自然人）
 `MemberRole`（guardian/child/viewer）、`MemberStatus`、`UserStatus`、`RelationKind`、
 `ApprovalStatus`（5 终态）、`AutoReason`、`RuleDirection`（reward/penalty）、`RecordStatus`、
 `RecordCategory`、`RecordSource`（含 `child_self`）、`AgeBand`（4 学段）、`WishCoverStyle`、
-`ConsentStatus`、`DevicePlatform`、`ActionType`（37 动作）。
+`ConsentStatus`、`DevicePlatform`、`ActionType`（38 动作）。
 
 ### 8.2 表（18）
 
@@ -748,16 +749,16 @@ User（自然人）
 
 | 项 | 状态 | 证据（最新基线） |
 |---|---|---|
-| Flutter 端 UI | ✅ 5 屏 + 弹窗 + 21 个组件 | `flutter analyze` → **0 issue**；`flutter test` → **41/41** |
-| Taro 小程序端 UI | ✅ 5 页 + 6 个 sheet，与 Flutter 像素级对齐 | `npx tsc --noEmit` → `EXIT=0`；`node .tmp_test/run.js` → **27/27** |
+| Flutter 端 UI | ✅ 6 屏 + 弹窗 + 组件，与小程序行为一致 | `flutter analyze` → **0 issue**；`flutter test` → **296/296** |
+| Taro 小程序端 UI | ✅ 6 页 + 11 个 sheet（`sheets/` 下 12 个 `.tsx`，其中 `ActionRow` 是行组件），与 Flutter 像素级对齐 | `npx tsc --noEmit` → `EXIT=0`；`npm run build:weapp` → `EXIT=0`；`node .tmp_test/run.js` → **91 PASS / ALL PASS** |
 | 既有缺陷台账（19 条） | ✅ **19/19 已修**（A1/A2/A3/A4/A5、B6/B7/B8、C9/C10/C11、D9/D12/D13、E15/E16/E17/E18/E19） | `npm run defects:check` → `ALL PASS` |
 | 后端 schema | ✅ **18 表 / 14 枚举**，含 `PointRuleVersion` + 不可变账本 + 软删除 + `AuditLog`（**同批**） | `prisma validate` + `generate` 通过；迁移 `20261012022042_w0_init` 已应用 |
 | 后端骨架 | ✅ 13 个模块（`approvals` / `device-session` / `membership` / `ledger` / `permissions` / `idempotency` 已有实体实现；其余仍为占位）＋ Prisma 7 adapter | `tsc --noEmit` / `nest build` EXIT=0 |
 | **I5 账本不可改（真实库实证）** | ✅ | `npm run db:verify` → 7 项全 PASS；**两次反向对照均能变红** |
 | 应用真实启动 | ✅ | `数据库已连接` + `已启动：http://localhost:3000`；无 `DATABASE_URL` 时**退出码 1 响亮失败** |
-| 跨语言契约 | ✅ `contracts/permission-matrix.json`（37 动作，含 W7-A 的 `view_consent` / `manage_consent`，由 TS 生成） | `contracts:emit` |
+| 跨语言契约 | ✅ `contracts/permission-matrix.json`（38 动作，含 W7-A 的 `view_consent` / `manage_consent` 与 W7-C 的 `export_family_data`，由 TS 生成） | `contracts:emit` |
 | **自批策略（"谁可以批准"的定义）** | ✅ **契约 + HTTP 路径 + 真库执行**：`approval-policy.ts`（含 W3-B 的 `withdrawDenial()`）＋ 真 HTTP `test/approvals-http.test.ts` ＋ 真库同事务 `test-db/approvals-execution-db.dbtest.ts`；W3-A / W3-B / W3-C 见 `design/README` | `npm test` → **14 个文件 / 261 条**；`npm run test:db` → **5 个文件 / 75 条**（均全绿） |
-| 模板库 | ✅ 18 条 + 离线自检（7 类坏数据可拦） | `npm run templates:check` |
+| **家庭数据导出（W7-C，2026-10-27）** | ✅ **后端 + 双端客户端**：`GET /export`（guardian ALLOW / child DENY，矩阵 `export_family_data`）把孩子的档案、家庭成员、规则与版本、习惯、心愿、积分流水、审批、同意记录、审计日志打成**一份 JSON**，`summary.counts` / `totals` / `truncatedSections` 如实标注被单次上限截断的段；**不受 `ConsentGuard` 管辖**（撤回同意后仍可用，04 §5 可携带权）；客户端只解析文件头与摘要、**从不重排九段正文**，复制的是服务端原文；刷新失败时同时报错并标明「下面是上一次生成的文件」。证据：`npm test` **43 文件 / 780 条全绿**、`npm run ci` **CI_EXIT=0**；`flutter analyze` 0 issue、`flutter test` **296/296**（新增 `export_test.dart` 22 条）；小程序 `npx tsc --noEmit` / `build:weapp` EXIT=0、`node .tmp_test/run.js` **91 PASS**、`node .tmp_test/run-w7c.mjs` **12/12**（导出数据层：截断自洽 / `rawJson` 逐字 / 错误归一 / 单飞 / 失败保留旧文件）；**真库 `npm run test:db` 19 文件 / 265 用例全绿（`export-db.dbtest.ts` 19/19）、`npm run ci:db` EXIT=0** | 真库侧只覆盖「未截断」的形状（真截断未触发过）；小程序 `ExportSheet` 的渲染分支仍只有编译证据；`02` §9.20 的「删除」半句仍未落地 |
 | 跨端契约闸门 | ✅ `icons:check` / `relation:check` / `restrictions:check` | `npm run ci` → **15 步全绿，`CI_EXIT=0`** |
 | 首启空态 + 演示数据守卫 | ✅（E18 收口） | release/profile 构建入口被树摇 |
 
@@ -770,7 +771,7 @@ User（自然人）
 | **审批写入路径（落库 / 撤回）** | ✅ **W3-A**：批准 / 自批在**同一事务**写 `ApprovalRequest` 终态 ＋ `PointRecord` ＋ `Child.pointsBalance` ＋ `AuditLog`（有库）；✅ **W3-B**：`withdrawn` 可达（只有申请人本人、零账本变化）＋ 审批读写按 `childId` 收口（跨孩子 `404`）。✅ **W3-C（2026-10-18）收尾**：执行器覆盖 `redeem` / `request_redeem` / `request_points_bonus` / `add_wish`；`autoReason` **五种全部可复现**；`expired` 有后台扫描（`ApprovalsExpiryService`）；`Idempotency-Key` 已接到 create / decide / withdraw（无库 501）。真库证据：`test-db/approvals-closing-db.dbtest.ts`（5 文件 / 75 条） | 审批状态机本身已收尾；W4 起是**其它业务模块**（规则 / 习惯 / 心愿 / 邀请等端点） |
 | **双端接 API** | ✅ **W4-C** 起双端只读接入；**W4-E** 起首页打卡 / 撤销真写；**W5-A** 起规则四条写入口真写（未配 env 仍为本地预览）；其余写入口仍本地 | 见 `design/` 的 W4 / W5-A 段；**"接了 API"≠"全部写入口都通了"** |
 | **首次引导与模板 UI** | ❌ 未开发（空态目前只渲染空列表，仅界面冒烟用例保证不崩） | W5；**"空态"≠"引导已完成"** |
-| **监护人同意链路（W7-A，2026-10-26）** | ✅ **后端已落地，前端未接**：`GuardianConsent`（表自 W0 就在 schema 里，本轮才第一次被读写）＋ `GET /consent` / `POST /consent`（显式 `accepted: true`，协议版本由服务端 `CONSENT_TEXT_VERSION` 决定）/ `POST /consent/withdraw`（从未授予 ⇒ `409 CONSENT_NOT_GRANTED`；重复撤回幂等；同版本重复授予不写审计）＋ **第四道屏障 `ConsentGuard`**：按 `contracts/consent-policy.ts` 的**显式清单**（24 写 / 13 豁免，两个集合恰好划分 37 个动作）拦撤回后的写入，`403 CONSENT_REQUIRED` 带 `details.status`；`none`（从未同意）**同样拦**（不自动补一条假同意）；IP / UA 只存 HMAC（`CONSENT_PII_SALT` 未配 ⇒ 该列为空，绝不退回无盐哈希或明文）。证据：`npm test` **41 文件 / 746 条全绿**（新增 `consent-policy` / `consent-guard` / `consent-http` / `consent-pii` 四份） | **L5 法务文本未定稿**（版本号仍是占位 `2026-10-draft`）；**引导第①步的勾选与前端入口未开发**（前端仍无 consent 界面）；**数据导出 / 删除未实现** —— 故 `02` §9.20 的「导出可下载」半句仍为 ❌；真库侧的并发幂等（`SELECT … FOR UPDATE`）**尚无用例覆盖**（无库 CI 验不了） |
+| **监护人同意链路（W7-A，2026-10-26）** | ✅ **后端已落地，前端未接**：`GuardianConsent`（表自 W0 就在 schema 里，本轮才第一次被读写）＋ `GET /consent` / `POST /consent`（显式 `accepted: true`，协议版本由服务端 `CONSENT_TEXT_VERSION` 决定）/ `POST /consent/withdraw`（从未授予 ⇒ `409 CONSENT_NOT_GRANTED`；重复撤回幂等；同版本重复授予不写审计）＋ **第四道屏障 `ConsentGuard`**：按 `contracts/consent-policy.ts` 的**显式清单**（24 写 / 14 豁免，两个集合恰好划分 38 个动作；多出的 `export_family_data` 由 W7-C 归入豁免侧）拦撤回后的写入，`403 CONSENT_REQUIRED` 带 `details.status`；`none`（从未同意）**同样拦**（不自动补一条假同意）；IP / UA 只存 HMAC（`CONSENT_PII_SALT` 未配 ⇒ 该列为空，绝不退回无盐哈希或明文）。证据：`npm test` **41 文件 / 746 条全绿**（新增 `consent-policy` / `consent-guard` / `consent-http` / `consent-pii` 四份） | **L5 法务文本未定稿**（版本号仍是占位 `2026-10-draft`）；**引导第①步的勾选与前端入口未开发**（前端仍无 consent 界面）；**数据删除未实现** —— 故 `02` §9.20 只剩「删除」半句为 ❌（导出已由 W7-C 落地）；真库侧的并发幂等（`SELECT … FOR UPDATE`）**尚无用例覆盖**（无库 CI 验不了） |
 | **通知 / 推送** | ⚠️ **服务端链路已建，触达仍为 0**：W5-K 推送端口 ＋ W5-L 站内通知中心 ＋ W6-A 设备 token 上报 / 真 Webhook 适配器 ＋ W6-B 失败重试队列（`PushRetryJob`：指数退避 ＋ TTL ＋ `claimTimeout` 回收）＋ **W6-C 审批提醒真 outbox**（`Notification` + `PushRetryJob` 与审批**同事务**，请求路径零推送）＋ **W6-D 对账与保留清理**（对账**只读、只告警、绝不自动补发**：单边缺失 ＋ 重复通知；`sent`/`expired` 7 天、`dead` 30 天后分批删除，`pending`/`sending` 永不删）；**W6-E Flutter 客户端上报已接**（启动 fire-and-forget；独立 `DeviceTokenApi`、单飞 / 去重 / 409 不重试、日志不含 token；**当前 token 来源仅调试构建**）＋ **W6-F 生命周期重报**（`PushTokenRuntime` 进程级持有；只在 `resumed` 按 5 分钟冷却重报，失败也消耗窗口；`revoke()` 先停用再注销，退出登录后 resume 不会重新登记；`dispose()` 等在途请求结束才关 HttpClient）；**W6-G 推送链路端到端冒烟**（真 `AppModule` ＋ 真 Prisma ＋ 真 `PushRetryWorker.tick()` ＋ 真 `WebhookPushAdapter` → 本地 `node:http` 网关；200 / 500 / 410 / 无 token 四类分支；500 后业务不回滚、无 token 不烧次数；证据 `test:db` **246/246**）；**仍无 L3 凭据 / 生产网关 / 真实厂商 SDK**，故**未配 `KP_PUSH_TOKEN` 时**线上 `DeviceToken` 与 `PushRetryJob` 仍然为空，**真机推送一次都没发生过** | W6 剩余：厂商凭据 · 生产网关 · 真实 SDK / 真机验证（明细见 `design/29-w6a-handoff.md` §5、`design/30-w6b-handoff.md` §6、`design/31-w6c-handoff.md` §8、`design/32-w6d-handoff.md` §5、`design/33-w6e-handoff.md` §5、`design/34-w6f-handoff.md` §5、`design/35-w6g-handoff.md` §5） |
 | **Agent** | ❌ 待建 | W6 |
 | **前端两条流水线进 CI** | ⚠️ 未接入 CI 平台（第 1–2 步尚未进 `npm run ci`）；`run.js` 跑 `dist/` 产物，**必须现编**否则会用旧代码考满分 | 见 §16.3 |
@@ -844,11 +845,11 @@ npx tsc --noEmit -p tsconfig.json
 npx tsc src/data/{store,seed,types}.ts src/utils/color.ts \
     --outDir .tmp_test/dist --module commonjs --target es2017 \
     --strictNullChecks --esModuleInterop --skipLibCheck
-node .tmp_test/run.js                      # 期望 27/27 ALL PASS
+node .tmp_test/run.js                      # 期望 91 PASS / ALL PASS
 
 # 2) 前端 Flutter
 flutter analyze                            # 期望 No issues found!
-flutter test                               # 期望 41/41
+flutter test                               # 期望 296/296
 
 # 3) 后端（backend/）
 npm run ci                                 # 期望 CI_EXIT=0（11 步，含 defects:check）
@@ -864,8 +865,8 @@ npm run ci                                 # 期望 CI_EXIT=0（11 步，含 def
 | v1.3 | 2026-10-25 | **§15 通知 / 推送行同步 W6-E**：Flutter 启动时已能上报设备 token（独立 `DeviceTokenApi`、单飞 / 去重 / 409 不重试、日志不含 token；编译期 token 仅调试构建）。§15 的“没有客户端上报”改为“未配 `KP_PUSH_TOKEN` 时仍为空”；W6 剩余收敛为「厂商凭据 · 网关 · 真实 SDK / 生命周期重报」。**仍无 L3 凭据 / 网关 / 真机推送证据**，小程序因缺微信登录刻意未接 |
 | v1.4 | 2026-10-25 | **§15 通知 / 推送行同步 W6-F**：新增 `PushTokenRuntime` 进程级运行时 —— App 回到前台（只认 `resumed`）按 **5 分钟冷却**重读 token 并补报；失败也消耗冷却窗口；`revoke()` **先停用再注销**，退出登录后 resume 不会重新登记；`dispose()` 等在途请求结束才关 HttpClient。`PushTokenLifecycle` 是唯一 Flutter 绑定胶水。证据：新增 16 条，`flutter analyze` 无问题、`flutter test` **256/256**。W6 剩余收敛为「厂商凭据 · 网关 · 真实 SDK / 真机验证」；**仍无真实厂商 SDK / token refresh 流 / 登录流程调用点 / 真机证据** |
 | v1.5 | 2026-10-25 | **§15 通知 / 推送行同步 W6-G**：新增 `test-db/push-delivery-e2e-db.dbtest.ts`，用真 `AppModule` ＋ 真 Prisma ＋ 真 `PushRetryWorker.tick()` ＋ 真 `WebhookPushAdapter` 打到本地 `node:http` 网关，第一次把「审批 HTTP → 同事务 outbox → 领件 → 查 token → POST → 结算」跑通。网关 200 / 500 / 410 / 无 token 四类分支分别钉死 `sent`、渠道故障重试、token 下线、结构性失败不烧次数；★ 500 后审批仍 `approved`、心愿仍落库（推送失败不回滚业务）。只覆盖 `PUSH_DELIVERY_PORT` 与 `batchSize=1`，**不需要 L2/L3 凭据**。证据：`test:db` **246/246**（本套件 6 条）、`npm test` **693/693**。W6 剩余收敛为「厂商凭据 · 生产网关 · 真实 SDK / 真机验证」；**本地网关不是 APNs/FCM，无客户端参与，`tick()` 手动调用未验调度 / 重启，真机推送一次都没发生过** |
-
 | v1.6 | 2026-10-26 | **§7 / §15 同步 W7-A**：权限矩阵 **35 → 37 动作**（新增 `view_consent` / `manage_consent`，对孩子均 DENY；两者在 `contracts/consent-policy.ts` 里是**撤回闸门的豁免口** —— 否则「可撤回」会变成「可永久锁死」）；§15 新增「监护人同意链路」一行，明确「**后端已落地、前端未接、导出仍未实现**」。本轮补的是**撤回后写入停止**这条可执行事实（24 个写动作 403 `CONSENT_REQUIRED`），不是合规闭环。证据：`npm test` **41 文件 / 746 条全绿**；`honesty:probe` 5 项全 PASS（含 §7 表格与矩阵**逐行**对账“表格 37 行 == 矩阵 37 个动作”） |
+| v1.7 | 2026-10-27 | **§7 / §15 同步 W7-C（家庭数据导出）**：权限矩阵 **37 → 38 动作**（新增 `export_family_data`，guardian ALLOW / **child DENY**；★ **不挂 `ConsentGuard`** —— 撤回同意后仍必须可用，属 04 §5 可携带权，因此写 / 豁免划分变为 **24 / 14**）。`GET /export` 把档案 / 成员 / 规则与版本 / 习惯 / 心愿 / 流水 / 审批 / 同意记录 / 审计九段打成一份 JSON，`summary` 如实给出 `counts` / `totals` / `truncated` / `truncatedSections`（无库 **501**，绝不返回空文件）；双端只解析文件头与摘要、**复制服务端原文**，孩子视角不发请求。§15 顺带修正两条陈旧基线（Flutter **41 → 295**、小程序 **27 → 91**）。证据：`npm test` **43 文件 / 780 条全绿**、`flutter analyze` 0 issue、`flutter test` **296/296**、小程序 `tsc` / `build:weapp` EXIT=0、`node .tmp_test/run-w7c.mjs` **12/12**（导出 DTO / 真客户端 / `loadExport` 的运行时用例；`ExportSheet` 渲染分支仍只有编译证据）；**真库 `test-db/export-db.dbtest.ts` 19/19 通过（`test:db` 19 文件 / 265 用例全绿、`ci:db` EXIT=0）—— 首跑时顺带暴露并修掉了 W7-A 的遗留回归：9 个真库套件的 `seed()` 从未造 `GuardianConsent`，`ConsentGuard` 就按设计把它们的写用例全拦成 403（现由 `test-db/support/consent-fixture.ts` 显式授权，`export-db` 不用该夹具、自己写撤回行）**；数据删除仍未实现 |
 
 > **本文档的立场**：需求文档的价值不在于把话说满，而在于**每一条都能被验证或被证伪**。
 > 凡本文写"已完成"的，都能在 §16.3 的命令里复现；凡本文写"未落地"的，都不在代码里假装存在。

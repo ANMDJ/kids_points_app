@@ -582,6 +582,93 @@
   color: $text-secondary;
 }
 
+// ───────────────────────────────────────────── 家庭数据导出（W7-C）
+// 四块：文件头 / 段清单 / 两个动作 / 两条说明。
+// 「完整 / 不完整」的结论来自服务端 `summary.truncated`，样式只负责
+// 让「不完整」和「被截断的那一段」看起来就该被注意到。
+.kp-export__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kp-export__card-title {
+  font-size: f2r(14);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-export__total {
+  font-size: f2r(12);
+  font-weight: 700;
+  color: $text-secondary;
+}
+
+.kp-export__line {
+  display: block;
+  padding-bottom: f2r(2);
+  font-size: f2r(12);
+  color: $text-secondary;
+}
+
+/* 截断提醒 / 未知格式版本：告警色，绝不与普通说明同色。 */
+.kp-export__warn {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(11.5);
+  line-height: 1.5;
+  color: $point-spend;
+}
+
+.kp-export__section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: f2r(3);
+}
+
+.kp-export__section-label {
+  font-size: f2r(12);
+  color: $text-secondary;
+}
+
+.kp-export__section-count {
+  font-size: f2r(12);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-export__section-count.is-truncated {
+  color: $point-spend;
+}
+
+.kp-export__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: f2r(12);
+}
+
+.kp-export__action-gap {
+  width: f2r(10);
+}
+
+.kp-export__paragraph {
+  display: block;
+  font-size: f2r(12);
+  line-height: 1.5;
+  color: $text-secondary;
+}
+
+.kp-export__hint {
+  padding: f2r(8) 0;
+}
+
+.kp-export__hint-text {
+  font-size: f2r(12);
+  line-height: 1.5;
+  color: $text-secondary;
+}
+
 // ───────────────────────────────────────────── 我的申请（W5-J）
 // 只负责排版与状态胶囊配色；「能不能撤回」来自 `canWithdrawApproval`，
 // 组件不在这里做第二套判断（两端同一条规则）。

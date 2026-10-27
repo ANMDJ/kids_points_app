@@ -4,6 +4,7 @@ import { ReadApiException } from './read_api_errors'
 import {
   ApprovalsPageDto,
   ConsentStateDto,
+  FamilyExportDto,
   HomeDto,
   InviteListDto,
   MemberListDto,
@@ -346,10 +347,43 @@ export class ReadApiClient {
     return ConsentStateDto.fromJson(await this.get('/consent'))
   }
 
+  /**
+   * 家庭数据导出（`GET /export`，W7-C）。
+   *
+   * **只有家长能导出**（矩阵 `export_family_data` guardian ALLOW / child DENY）：
+   * 调用方先用 `canExportFamilyData` 判断，孩子视角不要发这个请求 —— 每一次
+   * 都是 403，还会把「没有权限」画成「加载失败」。
+   *
+   * 但它**不**受 `ConsentGuard` 管辖：撤回同意后仍然可用（`04` §5 的可携带权）。
+   * 因此面板里没有任何「先确认同意生效」的前置判断。
+   *
+   * 与其它读端点不同，这里要保留**响应原文**：`rawJson` 直接给家长复制 /
+   * 落盘，重新序列化出来的「差不多一样」的 JSON 不是服务端那份文件。
+   * 传输层已经把 body 解析成对象时（部分平台如此）只能退回
+   * `JSON.stringify`，并在面板上据此不做「逐字节相同」的承诺。
+   */
+  async fetchExport(): Promise<FamilyExportDto> {
+    const response = await this.request('/export')
+    return FamilyExportDto.fromJson(response.body, response.text)
+  }
+
   private async get(
     path: string,
     query: Record<string, string> = {}
   ): Promise<unknown> {
+    return (await this.request(path, query)).body
+  }
+
+  /**
+   * 发一次读请求，同时保留**原文**与解析结果。
+   *
+   * `text` 只在「需要把整个响应交给用户」的端点上用（目前只有 `/export`）；
+   * 其余调用方继续用 `get()` 拿解析后的 body。
+   */
+  private async request(
+    path: string,
+    query: Record<string, string> = {}
+  ): Promise<{ text: string; body: unknown }> {
     const configError = this.config.validationError
     if (configError !== null) {
       throw new ReadApiException('badRequest', configError, {
@@ -382,7 +416,20 @@ export class ReadApiClient {
         body
       })
     }
-    return body
+    return { text: rawTextOf(response.body, body), body }
+  }
+}
+
+/**
+ * 响应原文：字符串原样保留（`decodeBody` 之前的那份），对象则退回
+ * `JSON.stringify` —— 这是「原文已不可得」时的**诚实降级**，不是等价物。
+ */
+function rawTextOf(rawBody: unknown, decoded: unknown): string {
+  if (typeof rawBody === 'string') return rawBody
+  try {
+    return JSON.stringify(decoded) ?? ''
+  } catch (error) {
+    return ''
   }
 }
 

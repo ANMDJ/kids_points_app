@@ -22,6 +22,7 @@ import { applyGlobalPipes } from '../src/app.setup'
 import { PrismaApprovalsRepository } from '../src/approvals/approvals.prisma.repository'
 import type { NotificationsOutboxPort } from '../src/notifications/notifications.outbox'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 
@@ -87,6 +88,8 @@ async function seed(): Promise<void> {
       { childId: ID.child, userId: ID.kid, role: 'child' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：同意按**孩子**记，一位家长授权即可（outbox 测两位家长的红点）。
+  await grantConsentFor(prisma, [[ID.child, ID.dad]])
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future },

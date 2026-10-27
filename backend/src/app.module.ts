@@ -5,6 +5,7 @@ import { ChildrenModule } from './children/children.module'
 import { ConsentHttpModule } from './consent/consent-http.module'
 import { DeviceSessionModule } from './device-session/device-session.module'
 import { DeviceTokensHttpModule } from './device-tokens/device-tokens-http.module'
+import { ExportModule } from './export/export.module'
 import { HabitsModule } from './habits/habits.module'
 import { IdempotencyModule } from './idempotency/idempotency.module'
 import { InvitesModule } from './invites/invites.module'
@@ -75,6 +76,12 @@ import { WishesModule } from './wishes/wishes.module'
     ApprovalsModule.register(),
     // ★ W4-A（2026-10-18）：只读入口 `GET /home` / `GET /records`。
     //   有库 ⇒ PrismaReadRepository；无库 ⇒ 501（不返回空数据冒充成功）。
+    // ★ W7-C（2026-10-27）：家庭数据导出 `GET /export`（guardian 专属；
+    //   child 在矩阵里为 DENY）。有库 ⇒ PrismaExportRepository（**一个事务**
+    //   读全份快照）；无库 ⇒ 501（**绝不**返回空文档冒充「孩子没有数据」）。
+    //   ★ 它**不**经 `ConsentGuard`：导出在豁免集合里，撤回同意后仍须可用
+    //   （04 §5 的可携带承诺）。
+    ExportModule.register(),
     ReadModule.register(),
     OnboardingModule,
     // ★ W5-G（2026-10-22）：邀请码 `POST/GET /invites`、`POST /invites/:id/revoke`、

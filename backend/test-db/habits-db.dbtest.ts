@@ -35,6 +35,7 @@ import { applyGlobalPipes } from '../src/app.setup'
 import { HABITS_REPOSITORY } from '../src/habits/habits.repository'
 import { PrismaHabitsRepository } from '../src/habits/habits.prisma.repository'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 process.env.KP_TIMEZONE = 'Asia/Shanghai'
 
@@ -185,6 +186,8 @@ async function seed(): Promise<void> {
       { childId: ID.other, userId: ID.dad, role: 'guardian', status: 'active' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：夹具显式给「有效同意」（测打卡，不是闸门）。
+  await grantConsentFor(prisma, [[ID.main, ID.dad]])
   await prisma.deviceSession.createMany({
     data: [
       {

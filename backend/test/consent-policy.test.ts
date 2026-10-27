@@ -29,7 +29,12 @@ import {
   unclassifiedActions,
   unknownClassifiedActions
 } from '../src/contracts/consent-policy'
-import { ALL_ACTIONS, PERMISSION_MATRIX, type ActionType } from '../src/contracts/permission-matrix'
+import {
+  ALL_ACTIONS,
+  PERMISSION_MATRIX,
+  resolveVerdict,
+  type ActionType
+} from '../src/contracts/permission-matrix'
 
 test('划分完整性：每个矩阵动作**恰好**落在写侧或豁免侧（这是本文件存在的理由）', () => {
   // 新增一个矩阵动作却没分类 ⇒ 这里点名。
@@ -46,10 +51,10 @@ test('划分完整性：每个矩阵动作**恰好**落在写侧或豁免侧（�
   assert.deepEqual(unknownClassifiedActions(), [], '分类表里出现了矩阵没有的动作（拼错 / 动作被删）')
 })
 
-test('规模：37 个动作 = 24 写 + 13 豁免（数字变了必须同时改 PRD 与用例）', () => {
-  assert.equal(ALL_ACTIONS.length, 37)
+test('规模：38 个动作 = 24 写 + 14 豁免（数字变了必须同时改 PRD 与用例）', () => {
+  assert.equal(ALL_ACTIONS.length, 38)
   assert.equal(CONSENT_GATED_ACTIONS.length, 24)
-  assert.equal(CONSENT_EXEMPT_ACTIONS.length, 13)
+  assert.equal(CONSENT_EXEMPT_ACTIONS.length, 14)
   assert.equal(
     CONSENT_GATED_ACTIONS.length + CONSENT_EXEMPT_ACTIONS.length,
     ALL_ACTIONS.length,
@@ -83,6 +88,17 @@ test('★ 撤回后必须还能恢复：`view_consent` / `manage_consent` 豁免
   assert.equal(isConsentGatedAction('manage_consent'), false)
   // 但**只有家长**能行使（屏障二仍然是 DENY，见 permission-matrix.test.ts）
   assert.equal(PERMISSION_MATRIX.manage_consent.child, 'DENY')
+})
+
+test('W7-C 数据导出：豁免，且撤回同意后仍可导出（可携带权的最后一条出口）', () => {
+  // 导出**不改变任何一行**，却是家长在撤回同意之后唯一还能行使的权利：
+  // 若把它放进写侧，撤回同意就等于「数据被扣住」—— 想走也带不走自己的数据。
+  assert.equal(isConsentGatedAction('export_family_data'), false)
+  // 但**只有家长**能导（child DENY）：一次带走的是一家人的流水与成员信息。
+  assert.equal(PERMISSION_MATRIX.export_family_data.guardian, 'ALLOW')
+  assert.equal(PERMISSION_MATRIX.export_family_data.child, 'DENY')
+  // viewer 没有列 ⇒ fail-closed（与其他动作同一条规则）。
+  assert.equal(resolveVerdict('export_family_data', 'viewer'), 'DENY')
 })
 
 test('行使权利不算新的处理：撤回自己已提交的申请、切家长模式都豁免', () => {

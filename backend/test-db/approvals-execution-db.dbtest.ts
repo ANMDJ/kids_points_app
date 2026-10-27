@@ -42,6 +42,7 @@ import { PrismaApprovalsRepository } from '../src/approvals/approvals.prisma.rep
 import { buildRecordDraft, verifyBalanceChain } from '../src/ledger/ledger.gate'
 import { PrismaLedgerRepository } from '../src/ledger/ledger.prisma.repository'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { grantConsentFor } from './support/consent-fixture'
 
 /** 本轮运行唯一前缀 —— 账本行删不掉，所以每轮必须是**全新的孩子**。 */
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
@@ -132,6 +133,11 @@ async function seed(): Promise<void> {
       { childId: ID.child2, userId: ID.mom, role: 'guardian' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：两家各自授权（各自的孩子、各自的家长）。
+  await grantConsentFor(prisma, [
+    [ID.child, ID.dad],
+    [ID.child2, ID.mom]
+  ])
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.child, userId: ID.dad, activeRole: 'guardian', expiresAt: future },

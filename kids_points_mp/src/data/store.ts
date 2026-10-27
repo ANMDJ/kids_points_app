@@ -11,6 +11,7 @@ import { ReadApiException } from './read_api_errors'
 import {
   mapApprovalsPage,
   mapConsent,
+  mapFamilyExport,
   mapHabit,
   mapHome,
   mapInvite,
@@ -27,6 +28,7 @@ import {
 import type { RecordsPage } from './read_mapper'
 import type {
   ConsentStateDto,
+  FamilyExportDto,
   HabitDto,
   MemberDto,
   RecordDto,
@@ -54,6 +56,7 @@ import type {
   AuditSnapshot,
   AuditTargetType,
   ChildProfile,
+  FamilyExport,
   FamilyMember,
   GuardianConsent,
   Habit,
@@ -286,6 +289,32 @@ export class AppStore {
 
   /** 是否正在提交同意 / 撤回 —— 面板据此禁用两个按钮。 */
   private consentWriteBusyValue = false
+
+  // ------------------------------------------- 家庭数据导出（W7-C，服务端）
+  //
+  // 与同意面板同策略：**打开导出面板时才拉**（`loadExport`）。`GET /export`
+  // 是 guardian 专属（`export_family_data` 对 child 是 DENY），塞进首页刷新
+  // 会让每个孩子每次下拉都吃一个必然的 403。
+  //
+  // 与同意**不同**的一点：导出**不受** `ConsentGuard` 管辖 —— 撤回同意后
+  // 仍然必须可用（04 §5 的可携带权）。所以这里没有任何「同意生效中」前置
+  // 判断，缓存也不随同意状态失效。
+  //
+  // 存的是一份完整文件（含 `rawJson`）：家长点「复制」时复制的必须是服务端
+  // 下发的原始文本，而不是按本地模型重新拼出来的近似物。
+
+  /** 最近一次成功拉到的导出文件；还没拉到过时是 null（**不是**「没有数据」）。 */
+  private exportValue: FamilyExport | null = null
+  private exportStatusValue: ReadStatus = 'idle'
+  private exportErrorValue: ReadApiException | null = null
+
+  /**
+   * 是否正在下载导出文件。
+   *
+   * 导出**单飞**（不像同意那样用 epoch）：同一时刻不允许两个在途请求，
+   * 因此不存在「旧响应覆盖新响应」，连点也只会拿到一份文件。
+   */
+  private exportBusyValue = false
 
   // ------------------------------------------- 站内通知（W5-L，服务端）
   //
@@ -609,6 +638,44 @@ export class AppStore {
     return this.canManageMembers
   }
 
+  // ------------------------------------------------------------ 家庭数据导出（W7-C）
+
+  /** 最近一次成功拉到的导出文件；还没拉到过时为 null（**不是**「没有数据」）。 */
+  get familyExport(): FamilyExport | null {
+    return this.exportValue
+  }
+
+  /** 导出的加载状态（与成员 / 同意分开）。 */
+  get exportReadStatus(): ReadStatus {
+    return this.exportStatusValue
+  }
+
+  /**
+   * 导出的加载错误（403 = 当前身份没有 `export_family_data`）。
+   *
+   * **不能**画成「没有可导出的数据」—— 那会把权限问题说成数据问题。
+   */
+  get exportError(): ReadApiException | null {
+    return this.exportErrorValue
+  }
+
+  /** 是否正在下载导出文件 —— 按钮据此禁用，防连点下载出两份文件。 */
+  get isExportBusy(): boolean {
+    return this.exportBusyValue
+  }
+
+  /**
+   * 能否导出家庭数据 —— `export_family_data` 在矩阵里只有 guardian ALLOW，
+   * 与成员管理同一条判据（`selfMember.role`）。
+   *
+   * 服务端仍是最终裁决者：这里为 true 只表示「界面可以给出入口」，403
+   * 照样原样上报。依赖成员列表已拉到（`selfMember`），所以导出面板打开时
+   * 同样要先 `refreshMembers()`。
+   */
+  get canExportFamilyData(): boolean {
+    return this.canManageMembers
+  }
+
   get readStatus(): ReadStatus {
     return this.readStatusValue
   }
@@ -808,6 +875,7 @@ export class AppStore {
     this.resetMembers()
     this.resetInvites()
     this.resetConsent()
+    this.resetExport()
     this.resetNotifications()
   }
 
@@ -830,6 +898,7 @@ export class AppStore {
     this.resetMembers()
     this.resetInvites()
     this.resetConsent()
+    this.resetExport()
     this.resetNotifications()
   }
 
@@ -888,6 +957,20 @@ export class AppStore {
     this.consentStatusValue = 'idle'
     this.consentErrorValue = null
     this.consentWriteBusyValue = false
+  }
+
+  /**
+   * 清空导出文件的本地状态（切账号 / 恢复正常数据 / 演示重置时调用）。
+   *
+   * 不清的话：换到另一个孩子后打开导出面板，会先看到**上一个家庭**的整份
+   * 数据（含昵称、积分、流水），复制出去就是把别人家的数据交给了当前家长。
+   * 这是本文件里最不该留缓存的一处。
+   */
+  private resetExport(): void {
+    this.exportValue = null
+    this.exportStatusValue = 'idle'
+    this.exportErrorValue = null
+    this.exportBusyValue = false
   }
 
   /** 清空收件箱的本地状态（切账号 / 恢复正常数据 / 演示重置时调用）。 */
@@ -3330,6 +3413,53 @@ export class AppStore {
       return '撤回请求已发出，但结果无法确认。请刷新后查看。'
     } finally {
       this.consentWriteBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 下载家庭数据导出文件（`GET /export`）—— **打开导出面板时**调用。
+   *
+   * 只有家长能导出（`export_family_data` guardian ALLOW / child DENY）；
+   * 调用方先用 [canExportFamilyData] 判断，孩子视角不要发这个请求 ——
+   * 否则每次都是 403，还会把「没有权限」画成「加载失败」。
+   *
+   * ── 与同意状态的**关键差别** ────────────────────────────────────────────────
+   *   导出**不受** `ConsentGuard` 管辖：撤回同意后仍然必须可用
+   *   （04 §5 的可携带权 —— 家长撤回后想把自己提供的数据取走，
+   *   正是这个权利最典型的场景）。因此这里刻意**不读** `consentValue`：
+   *   任何「先确认同意生效」的前置判断都会把「撤回」变成「数据扣留」。
+   *
+   * 失败**不清空**上一次成功的结果（家长可能刚复制过一份，界面不该突然说
+   * 「没有文件」）；错误经 [exportError] 上报，面板照实显示。
+   */
+  async loadExport(): Promise<void> {
+    const api = this.readApi
+    if (api === null) {
+      // 预览模式没有服务端文件 —— 直接进入 ready 空态，而不是发一个只会 401
+      // 的请求再把 401 说成「网络错误」。
+      this.exportValue = null
+      this.exportStatusValue = 'ready'
+      this.exportErrorValue = null
+      this.persist()
+      return
+    }
+    // 单飞：连点只会拿到**一份**文件，因此这里不需要 epoch。
+    if (this.exportBusyValue) return
+
+    this.exportBusyValue = true
+    this.exportStatusValue = 'loading'
+    this.exportErrorValue = null
+    this.persist()
+    try {
+      const dto = await api.fetchExport()
+      this.exportValue = mapFamilyExport(dto)
+      this.exportStatusValue = 'ready'
+    } catch (error) {
+      this.exportErrorValue = toReadApiException(error)
+      this.exportStatusValue = 'error'
+    } finally {
+      this.exportBusyValue = false
       this.persist()
     }
   }

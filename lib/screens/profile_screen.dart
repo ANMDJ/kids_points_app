@@ -9,6 +9,7 @@ import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
 import 'sheets/consent_sheet.dart';
+import 'sheets/export_sheet.dart';
 import 'sheets/invite_sheet.dart';
 import 'sheets/member_sheet.dart';
 import 'sheets/my_applications_sheet.dart';
@@ -238,6 +239,23 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.primaryDeep,
                     label: '监护人同意',
                     onTap: () => showConsentSheet(context),
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.file_download_outlined,
+                    // W7-C：家庭数据导出（可携带权，04 §5）。矩阵里
+                    // `export_family_data` 仅家长 ALLOW —— 面板内部先确认
+                    // 角色，孩子点进来只看到「找家长」说明。
+                    // 它与「监护人同意」是两件事：导出不受同意状态限制，
+                    // 撤回同意后仍然可用。
+                    color: AppColors.primaryDeep,
+                    label: '导出家庭数据',
+                    onTap: () => showExportSheet(context),
                   ),
                   const Divider(
                     height: 1,

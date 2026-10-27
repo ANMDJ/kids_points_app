@@ -25,9 +25,21 @@ import {
 const VERDICTS: Verdict[] = ['ALLOW', 'REQUIRE_APPROVAL', 'DENY']
 const ROLES: Role[] = ['guardian', 'child']
 
-test('规模与唯一性：37 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
-  assert.equal(ALL_ACTIONS.length, 37)
-  assert.equal(new Set(ALL_ACTIONS).size, 37, '动作键有重复')
+test('规模与唯一性：38 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
+  assert.equal(ALL_ACTIONS.length, 38)
+  assert.equal(new Set(ALL_ACTIONS).size, 38, '动作键有重复')
+})
+
+test('W7-C 数据导出：家长可导、孩子不可导（一次带走全家，不能挂在孩子可用的读动作上）', () => {
+  // 与 `view_records` 的区别不是“内容多少”，而是**作用域**：
+  // `view_records` 只回这一个孩子的流水，孩子自己看当然可以；
+  // 导出把成员名单 / 同意记录 / 审计一起打包 —— 那是家长的权利。
+  assert.equal(resolveVerdict('export_family_data', 'guardian'), 'ALLOW')
+  assert.equal(resolveVerdict('export_family_data', 'child'), 'DENY')
+  assert.equal(resolveVerdict('export_family_data', 'viewer'), 'DENY')
+  // 反向自证：孩子并没有因此丢掉「看自己的分」（导出 DENY 不许顺手收紧读路径）。
+  assert.equal(resolveVerdict('view_child_points', 'child'), 'ALLOW')
+  assert.equal(resolveVerdict('view_records', 'child'), 'ALLOW')
 })
 
 test('W5-L 站内通知：两侧都能看自己的、也能标已读；viewer 仍 fail-closed', () => {

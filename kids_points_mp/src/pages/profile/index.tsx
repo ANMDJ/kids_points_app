@@ -8,6 +8,7 @@ import Icon from '../../components/Icon'
 import type { IconName } from '../../components/Icon/icons'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
 import ConsentSheet from '../../sheets/ConsentSheet'
+import ExportSheet from '../../sheets/ExportSheet'
 import InviteSheet from '../../sheets/InviteSheet'
 import MemberSheet from '../../sheets/MemberSheet'
 import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
@@ -69,6 +70,9 @@ export default function Profile() {
   const inviteSheet = useSheet()
   // W7-B：监护人同意。入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const consentSheet = useSheet()
+  // W7-C：导出家庭数据。入口同样对所有角色可见（面板自己先确认角色），
+  // 孩子点进去看到的是「请让家长操作」，不是 403。
+  const exportSheet = useSheet()
   // W5-J：我的申请。与家长收件箱分开 —— 这里只看「我提交的」，动作是撤回。
   const myApplicationsSheet = useSheet()
   // W5-L：站内通知中心。未读数由服务端下发的整份 `unreadCount` 决定；
@@ -258,6 +262,24 @@ export default function Profile() {
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
             <View className='kp-profile__menu-divider' />
+            {/* W7-C：家庭数据导出（可携带权，04 §5）。矩阵里
+                `export_family_data` 仅家长 ALLOW —— 面板内部先确认角色，
+                孩子点进来只看到「找家长」说明。它与「监护人同意」是两件事：
+                导出不受同意状态限制，撤回同意后仍然可用。 */}
+            <View
+              className='kp-profile__menu'
+              onClick={() => exportSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#7fbf55', 34 / 255) }}
+              >
+                <Icon name='copy' size={19} color='#7fbf55' />
+              </View>
+              <Text className='kp-profile__menu-label'>导出家庭数据</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
               onClick={() => {
@@ -336,6 +358,13 @@ export default function Profile() {
           <ConsentSheet
             visible={consentSheet.visible}
             onClose={consentSheet.hide}
+          />
+        ) : null}
+        {/* W7-C：导出家庭数据弹窗（先确认角色，再拉 `GET /export`） */}
+        {exportSheet.open ? (
+          <ExportSheet
+            visible={exportSheet.visible}
+            onClose={exportSheet.hide}
           />
         ) : null}
       </View>

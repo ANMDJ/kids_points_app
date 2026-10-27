@@ -28,6 +28,7 @@ import { applyGlobalPipes } from '../src/app.setup'
 import { PrismaService } from '../src/prisma/prisma.service'
 import { PrismaRecordsRepository } from '../src/records/records.prisma.repository'
 import { RECORDS_REPOSITORY } from '../src/records/records.repository'
+import { grantConsentFor } from './support/consent-fixture'
 
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 
@@ -115,6 +116,13 @@ async function seed(): Promise<void> {
       { childId: ID.gone, userId: ID.dad, role: 'guardian', status: 'active' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：夹具必须显式给「有效同意」，
+  //   否则每个写用例都会先撞 403 CONSENT_REQUIRED（这里要测的是记一笔，不是闸门）。
+  //   `gone` 也给：组 E 要证明「已删孩子 ⇒ 404」，同意状态不该把 404 换成 403。
+  await grantConsentFor(prisma, [
+    [ID.main, ID.dad],
+    [ID.gone, ID.dad]
+  ])
   await prisma.deviceSession.createMany({
     data: [
       { deviceId: ID.devDad, childId: ID.main, userId: ID.dad, activeRole: 'guardian', expiresAt: future },

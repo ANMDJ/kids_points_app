@@ -35,6 +35,7 @@ import { applyGlobalPipes } from '../src/app.setup'
 import { PrismaService } from '../src/prisma/prisma.service'
 import { RULES_REPOSITORY } from '../src/rules/rules.repository'
 import { PrismaRulesRepository } from '../src/rules/rules.prisma.repository'
+import { grantConsentFor } from './support/consent-fixture'
 
 const RUN = randomUUID().replace(/-/g, '').slice(0, 10)
 
@@ -131,6 +132,13 @@ async function seed(): Promise<void> {
       { childId: ID.other, userId: ID.dad, role: 'guardian', status: 'active' }
     ]
   })
+  // ★ W7-A 起写端点都过 ConsentGuard：夹具显式给「有效同意」（测规则，不是闸门）。
+  //   `other` 也给：跨孩子编辑 / 删除 / 加习惯要断言「404 不泄露存在性」，
+  //   同意状态不该把那个 404 换成 403。
+  await grantConsentFor(prisma, [
+    [ID.main, ID.dad],
+    [ID.other, ID.dad]
+  ])
   await prisma.deviceSession.createMany({
     data: [
       {

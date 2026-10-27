@@ -2,6 +2,7 @@ import type {
   ApprovalInboxItemDto,
   ApprovalsPageDto,
   ConsentStateDto,
+  FamilyExportDto,
   HabitDto,
   HomeDto,
   InviteDto,
@@ -23,6 +24,7 @@ import type { ApprovalInboxItem, ApprovalsPage } from './approval'
 import { notificationApprovalId } from './notification'
 import type { NotificationItem, NotificationsPage } from './notification'
 import type {
+  FamilyExport,
   FamilyMember,
   GuardianConsent,
   Habit,
@@ -439,6 +441,34 @@ export function mapConsent(dto: ConsentStateDto, path = '$'): GuardianConsent {
     consentVersion: dto.consentVersion,
     grantedAt: dto.grantedAt,
     withdrawnAt: dto.withdrawnAt
+  }
+}
+
+// ============================================================ 家庭数据导出（W7-C）
+
+/**
+ * `FamilyExportDto` → [FamilyExport]。
+ *
+ * 这条「映射」几乎只是搬运 —— 导出文件没有枚举、没有跨字段语义，形状校验
+ * 已全部在 [FamilyExportDto] 构造时做完。这里保留独立函数只为与其它读取
+ * 保持同一个入口（调用方永远只依赖 mapper，不直接摸 DTO）。
+ *
+ * 唯一一条断言：`truncated === (truncatedSections 非空)` 已经在 DTO 里校验
+ * 过，这里**不重新计算** —— 重算等于用客户端猜测覆盖服务端事实。
+ */
+export function mapFamilyExport(dto: FamilyExportDto): FamilyExport {
+  return {
+    rawJson: dto.rawJson,
+    schemaVersion: dto.schemaVersion,
+    generator: dto.generator,
+    generatedAt: dto.generatedAt,
+    childId: dto.childId,
+    childName: dto.childName,
+    pointsBalance: dto.pointsBalance,
+    counts: { ...dto.counts },
+    totals: { ...dto.totals },
+    truncated: dto.truncated,
+    truncatedSections: [...dto.truncatedSections]
   }
 }
 

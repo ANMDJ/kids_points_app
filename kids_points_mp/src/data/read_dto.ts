@@ -688,6 +688,97 @@ export class ConsentStateDto {
   }
 }
 
+// ─────────────────────────── 家庭数据导出（W7-C） ───────────────────────────
+
+/**
+ * `GET /export` 文件的**头与摘要**（不是九个数据段）。
+ *
+ * 导出文件是给家长带走的 `.json`，客户端只取「这份文件里有什么」这一层：
+ * `schemaVersion` / `generatedAt` / `child` / `summary`。九个数据段**故意**
+ * 不解析成模型 —— 界面不消费它们，解析只会多一份必须跟着后端同步的形状。
+ *
+ * `rawJson` 是**服务端原样下发的文本**：复制 / 落盘都给家长同一份文件，
+ * 而不是按本地模型重新序列化出来的近似物。
+ *
+ * 形状校验里还有两条「诚实性」断言（后端一定满足，校验是为了契约漂移时
+ * 显式失败，而不是在界面上画出「文件完整」但实际被截断）：
+ *   · `truncated === (truncatedSections.length > 0)`
+ *   · 任何一段的条数都不为负
+ */
+export class FamilyExportDto {
+  constructor(
+    readonly rawJson: string,
+    readonly schemaVersion: number,
+    readonly generator: string,
+    readonly generatedAt: number,
+    readonly childId: string,
+    readonly childName: string,
+    readonly pointsBalance: number,
+    readonly counts: Record<string, number>,
+    readonly totals: Record<string, number>,
+    readonly truncated: boolean,
+    readonly truncatedSections: string[]
+  ) {
+    if (!Number.isInteger(schemaVersion) || schemaVersion < 1) {
+      throw ReadApiException.malformed(
+        '$.schemaVersion',
+        `文件格式版本必须是正整数，实际 ${schemaVersion}`
+      )
+    }
+    if (generator.trim() === '') {
+      throw ReadApiException.malformed('$.generator', 'generator 不能为空')
+    }
+    if (childId.trim() === '') {
+      throw ReadApiException.malformed('$.child.id', 'child.id 不能为空')
+    }
+    if (truncated && truncatedSections.length === 0) {
+      throw ReadApiException.malformed(
+        '$.summary.truncatedSections',
+        'truncated=true 时必须说明哪几段被截断'
+      )
+    }
+    if (!truncated && truncatedSections.length > 0) {
+      throw ReadApiException.malformed(
+        '$.summary.truncated',
+        'truncatedSections 非空时 truncated 必须为 true'
+      )
+    }
+  }
+
+  static fromJson(
+    raw: unknown,
+    rawJson: string,
+    path = '$'
+  ): FamilyExportDto {
+    const json = readObject(raw, path)
+    const child = readObject(json.child, `${path}.child`)
+    const summary = readObject(json.summary, `${path}.summary`)
+    return new FamilyExportDto(
+      rawJson,
+      readInt(json, 'schemaVersion', `${path}.schemaVersion`),
+      readString(json, 'generator', `${path}.generator`),
+      readDate(json, 'generatedAt', `${path}.generatedAt`),
+      readString(child, 'id', `${path}.child.id`),
+      readString(child, 'name', `${path}.child.name`),
+      readInt(child, 'pointsBalance', `${path}.child.pointsBalance`),
+      readCountMap(summary, 'counts', `${path}.summary.counts`),
+      readCountMap(summary, 'totals', `${path}.summary.totals`),
+      readBool(summary, 'truncated', `${path}.summary.truncated`),
+      readList(
+        summary,
+        'truncatedSections',
+        `${path}.summary.truncatedSections`
+      ).map((item) => {
+        if (typeof item === 'string') return item
+        throw ReadApiException.malformed(
+          `${path}.summary.truncatedSections`,
+          `期望字符串数组，实际元素 ${typeName(item)}`
+        )
+      })
+    )
+  }
+}
+
 // ───────────────────────────── 严格读取助手 ─────────────────────────────
 
 export function readObject(
@@ -791,6 +882,36 @@ export function readOptionalDate(
 ): number | null {
   if (json[key] === undefined || json[key] === null) return null
   return readDate(json, key, path)
+}
+
+/**
+ * 读一个「段名 → 条数」的字典：键保持下发顺序，值必须是非负整数。
+ *
+ * `parent[key]` 必须先是一个对象 —— `undefined` / `null` / 数组都算形状错误，
+ * 而不是「空字典」：把缺失的 `counts` 当成 0 会让面板画出「文件里有 0 条」，
+ * 那是比报错更糟的假象。
+ */
+export function readCountMap(
+  parent: Record<string, unknown>,
+  key: string,
+  path: string
+): Record<string, number> {
+  const raw = readObject(parent[key], path)
+  const result: Record<string, number> = {}
+  for (const name of Object.keys(raw)) {
+    const value = readInt(raw, name, `${path}.${name}`)
+    if (value < 0) {
+      throw ReadApiException.malformed(
+        `${path}.${name}`,
+        `条数不能为负：${value}`
+      )
+    }
+    result[name] = value
+  }
+  if (Object.keys(result).length === 0) {
+    throw ReadApiException.malformed(path, '至少要有一段')
+  }
+  return result
 }
 
 function typeName(value: unknown): string {

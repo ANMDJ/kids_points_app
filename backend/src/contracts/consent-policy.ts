@@ -69,6 +69,11 @@ export const CONSENT_EXEMPT_ACTIONS = [
   'view_notifications',
   'view_members',
   'view_consent',
+  /* ── 数据导出（W7-C）──
+     ★ 它不是写：导出不改变任何一行，而且**撤回同意后仍必须可用** ——
+       撤回的含义是「停止处理」，不是「连已经存在的数据都拿不走」。
+       把它归进写侧会让 04 §5 的可携带承诺在撤回后失效。 */
+  'export_family_data',
   /* ── 只改 UI 状态 ── */
   'read_notifications',
   /* ── 行使权利 / 恢复同意（见文件头 ③④⑤）── */

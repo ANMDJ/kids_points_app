@@ -987,3 +987,140 @@ class ConsentStateDto {
   }
 }
 
+// ─────────────────────────── 家庭数据导出（W7-C） ───────────────────────────
+
+/// `GET /export` 文件的**头与摘要**（不是九个数据段）。
+///
+/// 导出文件是给家长带走的 `.json`，客户端只取「这份文件里有什么」这一层：
+/// `schemaVersion` / `generatedAt` / `child` / `summary`。九个数据段**故意**
+/// 不解析成模型 —— 界面不消费它们，解析只会多一份必须跟着后端同步的形状。
+///
+/// `rawJson` 是**原始文本**（服务端下发的字节，不经 Dart 重新序列化）：
+/// 复制 / 落盘都应当给家长同一份文件，而不是一个字段顺序可能变化的复制品。
+///
+/// 形状校验里有两条「诚实性」断言（后端一定满足，校验是为了契约漂移时
+/// 显式失败，而不是在界面上画出「文件完整」但实际被截断）：
+///   · `truncated == truncatedSections.isNotEmpty`
+///   · 任何一段的条数都不为负
+class FamilyExportDto {
+  FamilyExportDto({
+    required this.rawJson,
+    required this.schemaVersion,
+    required this.generator,
+    required this.generatedAt,
+    required this.childId,
+    required this.childName,
+    required this.pointsBalance,
+    required this.counts,
+    required this.totals,
+    required this.truncated,
+    required this.truncatedSections,
+  });
+
+  factory FamilyExportDto.fromJson(Object? raw, {required String rawJson}) {
+    const String path = r'$';
+    final Map<String, Object?> json = readObject(raw, path);
+    final Map<String, Object?> child =
+        readObject(json['child'], '$path.child');
+    final Map<String, Object?> summary =
+        readObject(json['summary'], '$path.summary');
+    final FamilyExportDto dto = FamilyExportDto(
+      rawJson: rawJson,
+      schemaVersion: readInt(json, 'schemaVersion', '$path.schemaVersion'),
+      generator: readString(json, 'generator', '$path.generator'),
+      generatedAt: readDate(json, 'generatedAt', '$path.generatedAt'),
+      childId: readString(child, 'id', '$path.child.id'),
+      childName: readString(child, 'name', '$path.child.name'),
+      pointsBalance:
+          readInt(child, 'pointsBalance', '$path.child.pointsBalance'),
+      counts: _readCountMap(summary, 'counts', '$path.summary.counts'),
+      totals: _readCountMap(summary, 'totals', '$path.summary.totals'),
+      truncated: readBool(summary, 'truncated', '$path.summary.truncated'),
+      truncatedSections: readList(
+        summary,
+        'truncatedSections',
+        '$path.summary.truncatedSections',
+      ).map((Object? item) {
+        if (item is String) return item;
+        throw ReadApiException.malformed(
+          '$path.summary.truncatedSections',
+          detail: '期望字符串数组，实际元素 ${item.runtimeType}',
+        );
+      }).toList(growable: false),
+    );
+    dto._validateShape();
+    return dto;
+  }
+
+  /// 服务端下发的原始 JSON 文本。
+  final String rawJson;
+
+  final int schemaVersion;
+  final String generator;
+  final DateTime generatedAt;
+
+  final String childId;
+  final String childName;
+  final int pointsBalance;
+
+  /// 段名 → 本文件条数（保持后端下发顺序）。
+  final Map<String, int> counts;
+
+  /// 段名 → 库内全量条数（只有 records / approvals / auditLogs 三张表）。
+  final Map<String, int> totals;
+
+  final bool truncated;
+  final List<String> truncatedSections;
+
+  void _validateShape() {
+    if (schemaVersion < 1) {
+      throw ReadApiException.malformed(
+        r'$.schemaVersion',
+        detail: '文件格式版本必须是正整数，实际 $schemaVersion',
+      );
+    }
+    if (generator.trim().isEmpty) {
+      throw ReadApiException.malformed(r'$.generator', detail: 'generator 不能为空');
+    }
+    if (childId.trim().isEmpty) {
+      throw ReadApiException.malformed(r'$.child.id', detail: 'child.id 不能为空');
+    }
+    if (truncated && truncatedSections.isEmpty) {
+      throw ReadApiException.malformed(
+        r'$.summary.truncatedSections',
+        detail: 'truncated=true 时必须说明哪几段被截断',
+      );
+    }
+    if (!truncated && truncatedSections.isNotEmpty) {
+      throw ReadApiException.malformed(
+        r'$.summary.truncated',
+        detail: 'truncatedSections 非空时 truncated 必须为 true',
+      );
+    }
+  }
+}
+
+/// 读一个「段名 → 条数」的字典：键保持下发顺序，值必须是非负整数。
+Map<String, int> _readCountMap(
+  Map<String, Object?> parent,
+  String key,
+  String path,
+) {
+  final Map<String, Object?> raw = readObject(parent[key], path);
+  final Map<String, int> result = <String, int>{};
+  for (final MapEntry<String, Object?> entry in raw.entries) {
+    final int value = readInt(raw, entry.key, '$path.${entry.key}');
+    if (value < 0) {
+      throw ReadApiException.malformed(
+        '$path.${entry.key}',
+        detail: '条数不能为负：$value',
+      );
+    }
+    result[entry.key] = value;
+  }
+  if (result.isEmpty) {
+    throw ReadApiException.malformed(path, detail: '至少要有一段');
+  }
+  return result;
+}
+
