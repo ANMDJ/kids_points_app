@@ -1175,3 +1175,121 @@ export function dayLabel(time: number): string {
       return `${date.getMonth() + 1} 月 ${date.getDate()} 日`
   }
 }
+
+// ============================================================ 家庭数据删除（W7-D）
+
+/** 删除状态线值（与后端 `FamilyDeletionStatus` 一一对应）。 */
+export type FamilyDeletionStatusValue = 'none' | 'pending' | 'cancelled' | 'executed'
+
+/** 各表被匿名化的行数（键集合固定）。 */
+export interface FamilyDeletionRedactionCounts {
+  child: number
+  members: number
+  rules: number
+  ruleVersions: number
+  habits: number
+  wishes: number
+  records: number
+  approvals: number
+  consents: number
+  notifications: number
+}
+
+/** 执行摘要（后端原样落库、原样下发；客户端不补零、不重算）。 */
+export interface FamilyDeletionSummary {
+  coolingDays: number
+  redacted: FamilyDeletionRedactionCounts
+  /** 保留的流水条数（账本 append-only，不抹数值）。 */
+  keptRecords: number
+  /** 保留的余额。 */
+  keptPointsBalance: number
+  /** 服务端说明（原样显示）。 */
+  note: string
+}
+
+/** `GET /family-deletion` 的本地形态。 */
+export interface FamilyDeletion {
+  childId: string
+  status: FamilyDeletionStatusValue
+  requestedAt: number | null
+  scheduledFor: number | null
+  cancelledAt: number | null
+  executedAt: number | null
+  /** 距执行还有几天（服务端向上取整）；非 pending 时为 null。 */
+  daysRemaining: number | null
+  canCancel: boolean
+  summary: FamilyDeletionSummary | null
+}
+
+/** 冷却期天数 —— 与后端 `FAMILY_DELETION_COOLING_DAYS` 同口径（只用于文案）。 */
+export const familyDeletionCoolingDays = 7
+
+/** 状态 → 中文标签。 */
+export function deletionStatusLabel(deletion: FamilyDeletion): string {
+  switch (deletion.status) {
+    case 'none':
+      return '未申请删除'
+    case 'pending':
+      return '已申请删除'
+    case 'cancelled':
+      return '已撤销'
+    case 'executed':
+      return '已删除'
+  }
+}
+
+/** 段名 → 中文标签；顺序即面板显示顺序。 */
+export const deletionRedactedLabels: Record<string, string> = {
+  child: '孩子档案',
+  members: '家庭成员',
+  rules: '积分规则',
+  ruleVersions: '规则版本',
+  habits: '好习惯',
+  wishes: '心愿',
+  records: '流水里的文字',
+  approvals: '审批里的文字',
+  consents: '同意记录的 IP / UA',
+  notifications: '站内通知'
+}
+
+/** 「将于 2026-11-03 删除」/「已于 2026-11-03 删除」。 */
+export function deletionDeadlineText(deletion: FamilyDeletion): string {
+  const at =
+    deletion.status === 'executed' ? deletion.executedAt : deletion.scheduledFor
+  if (at === null) return '—'
+  const date = new Date(at)
+  const two = (value: number): string => String(value).padStart(2, '0')
+  const day = `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(
+    date.getDate()
+  )}`
+  return deletion.status === 'executed' ? `已于 ${day} 删除` : `将于 ${day} 删除`
+}
+
+/** 剩余天数文案（不读本地时钟）。 */
+export function deletionRemainingText(deletion: FamilyDeletion): string {
+  if (deletion.status !== 'pending' || deletion.daysRemaining === null) {
+    return '—'
+  }
+  if (deletion.daysRemaining <= 0) return '即将执行（等待后台任务）'
+  return `还有 ${deletion.daysRemaining} 天可以撤销`
+}
+
+/** 只列出**真的动过**的行（0 行不占位置），保留固定顺序。 */
+export function deletionSummaryRows(
+  summary: FamilyDeletionSummary
+): Array<{ key: string; label: string; count: number }> {
+  const rows: Array<{ key: string; label: string; count: number }> = []
+  for (const key of Object.keys(deletionRedactedLabels)) {
+    const count = summary.redacted[key as keyof FamilyDeletionRedactionCounts]
+    if (typeof count === 'number' && count > 0) {
+      rows.push({ key, label: deletionRedactedLabels[key], count })
+    }
+  }
+  return rows
+}
+
+/** 「保留 4 条流水与余额 7 分」。 */
+export function deletionKeptText(summary: FamilyDeletionSummary): string {
+  return `保留 ${summary.keptRecords} 条流水与余额 ${summary.keptPointsBalance} 分`
+}
+

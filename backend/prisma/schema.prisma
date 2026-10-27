@@ -130,6 +130,20 @@ enum ConsentStatus {
   withdrawn
 }
 
+/// 家庭数据删除请求的状态（W7-D，2026-10-27）。
+///
+/// ── 为什么不是「一按就删」─────────────────────────────────────────────────
+///   `pending` 是**冷却期**：家长申请后仍有 7 天可以改变主意。删除是不可逆的
+///   匿名化，误触的代价不可挽回；冷却期把「决定」与「执行」拆成两个时刻。
+///   `cancelled` 是**历史**（申请过又撤回），不是「没申请过」—— 保留它是为了让
+///   撤销这件事本身可审计，也让界面能回答「我上次是不是点过」。
+///   `executed` 是**终态**：匿名化已完成，`summary` 记录做了哪些事。
+enum FamilyDeletionStatus {
+  pending
+  cancelled
+  executed
+}
+
 /// 推送平台（03 §L3：双端目前零推送依赖）。
 enum DevicePlatform {
   weapp
@@ -182,6 +196,11 @@ enum ActionType {
   manage_consent
   /// 数据导出（W7-C）：家长导出整份家庭数据；`child` 为 DENY。
   export_family_data
+  /// 家庭数据删除（W7-D）：看删除状态 / 申请与撤回删除；`child` 均为 DENY。
+  /// ★ 两个动作都在 `contracts/consent-policy.ts` 的**豁免**集合里 ——
+  ///   撤回同意后仍必须能行使删除权（否则「撤回」等于「数据被扣住」）。
+  view_family_deletion
+  manage_family_deletion
   reset_demo_data
 }
 
@@ -211,6 +230,8 @@ model User {
   createdInviteCodes InviteCode[]        @relation("InviteCreator")
   usedInviteCodes    InviteCode[]        @relation("InviteUser")
   consents           GuardianConsent[]
+  /// 该用户作为申请人发起的家庭数据删除请求（W7-D）。
+  familyDeletionRequests FamilyDeletionRequest[] @relation("FamilyDeletionRequester")
   auditLogs          AuditLog[]
   notifications      Notification[]
 }
@@ -271,6 +292,8 @@ model Child {
   approvals          ApprovalRequest[]
   inviteCodes        InviteCode[]
   consents           GuardianConsent[]
+  /// 家庭数据删除请求（W7-D）。
+  familyDeletionRequests FamilyDeletionRequest[]
   notifications      Notification[]
   deviceSessions     DeviceSession[]
   deviceTokens       DeviceToken[]
@@ -662,6 +685,50 @@ model GuardianConsent {
   grantedBy User  @relation(fields: [grantedByUserId], references: [id], onDelete: Restrict)
 
   @@index([childId, status])
+}
+
+/// 家庭数据删除请求（W7-D，2026-10-27）。
+///
+/// ── 它记录的是「一次决定」，不是「一份数据」────────────────────────────────
+///   删除本身没有第二份表 —— 匿名化是就地改列（见
+///   `src/deletion/deletion.prisma.repository.ts`）。本表保存的是：
+///   谁在什么时候申请、冷却期到什么时候、最后是撤销了还是执行了。
+///
+/// ── 为什么冷却期是**落库的时间点**而不是「进程里的定时器」───────────────
+///   定时器在重启后消失，而「7 天后删除」的承诺必须跨重启成立。因此
+///   `scheduledFor` 是一个**可查询的截止时刻**，由 worker 扫描到期行执行。
+///
+/// ── 为什么 `summary` 是 Json ──────────────────────────────────────────────
+///   执行摘要描述的是「这一次实际匿名化了多少行 / 保留了多少流水」，
+///   它是**事发当时的证据**，不应随代码版本变化被重算。原样落库，读取时原样回放。
+model FamilyDeletionRequest {
+  id String @id @default(cuid())
+
+  childId String
+  /// 申请人（guardian）。执行后仍需保留：审计要回答「谁申请了删除」。
+  requestedByUserId String
+
+  status FamilyDeletionStatus @default(pending)
+
+  requestedAt DateTime @default(now())
+  /// 冷却期结束时刻 = `requestedAt + FAMILY_DELETION_COOLING_DAYS`。
+  scheduledFor DateTime
+
+  cancelledAt DateTime?
+  executedAt  DateTime?
+
+  /// 执行摘要：各表被匿名化的行数 / 保留的流水条数 / 余额（账本完整性证据）。
+  summary Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child       Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  requestedBy User  @relation("FamilyDeletionRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([childId, status])
+  /// worker 的扫描键：`status = pending AND scheduledFor <= now`。
+  @@index([status, scheduledFor])
 }
 
 /// 03 C11：变更审计（追加式）。

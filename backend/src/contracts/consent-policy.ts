@@ -74,6 +74,13 @@ export const CONSENT_EXEMPT_ACTIONS = [
        撤回的含义是「停止处理」，不是「连已经存在的数据都拿不走」。
        把它归进写侧会让 04 §5 的可携带承诺在撤回后失效。 */
   'export_family_data',
+  /* ── 数据删除（W7-D）──
+     ★ 删除权**不依赖**「同意生效中」：撤回同意之后仍必须能删。
+       把它归进写侧会让「撤回」变成「数据被扣住 —— 既不能用也不能删」，
+       与 02 §9.20 / 04 §5 的可删除承诺相反。
+       `manage_family_deletion` 是**行使权利**（把数据抹掉），不是新的采集。 */
+  'view_family_deletion',
+  'manage_family_deletion',
   /* ── 只改 UI 状态 ── */
   'read_notifications',
   /* ── 行使权利 / 恢复同意（见文件头 ③④⑤）── */

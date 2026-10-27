@@ -51,6 +51,19 @@ REVOKE UPDATE, DELETE ON "PointRecord"      FROM kids_points_app;
 REVOKE UPDATE, DELETE ON "PointRuleVersion" FROM kids_points_app;
 REVOKE UPDATE, DELETE ON "AuditLog"         FROM kids_points_app;
 
+-- ③.5 **列级** UPDATE 例外（W7-D，2026-10-27）：允许匿名化，不允许改数
+--     删除权（02 §9.20）要求执行时抹掉描述性文本；而 ③ 把整表 UPDATE 收走了。
+--     这两条并不矛盾 —— 行的**语义**（分数、版本号、余额）必须不可变，
+--     但「写了什么」（标题 / 条件 / 备注）必须能被抹掉。
+--     PostgreSQL 的列级授权恰好表达这件事：
+--       · 表级 UPDATE 仍然没有 ⇒ `UPDATE ... SET pointsDelta` 依旧 42501；
+--       · 这三列可以写   ⇒ `UPDATE ... SET "titleSnapshot"` 可以执行。
+--     ★ 不要把这里扩成「整表 UPDATE 再靠应用自觉」—— 那等于把 I5 交回给代码。
+GRANT UPDATE ("titleSnapshot", "conditionSnapshot", "note")
+  ON "PointRecord" TO kids_points_app;
+GRANT UPDATE (title, condition, "changeNote")
+  ON "PointRuleVersion" TO kids_points_app;
+
 -- ④ 自检：权限若不符合预期就**让迁移失败**，而不是留一句空承诺
 --    一个无法失败的检查等于没有检查（D12 / D13 的同类教训）。
 DO $$
@@ -71,6 +84,25 @@ BEGIN
 
   IF NOT has_table_privilege('kids_points_app', 'public."PointRecord"', 'INSERT') THEN
     RAISE EXCEPTION 'kids_points_app 无法 INSERT "PointRecord" —— 账本将完全写不进去';
+  END IF;
+
+  -- W7-D：列级例外必须**恰好**存在，且不能扩到语义列。
+  IF NOT has_column_privilege('kids_points_app', 'public."PointRecord"', 'titleSnapshot', 'UPDATE')
+     OR NOT has_column_privilege('kids_points_app', 'public."PointRecord"', 'conditionSnapshot', 'UPDATE')
+     OR NOT has_column_privilege('kids_points_app', 'public."PointRecord"', 'note', 'UPDATE') THEN
+    RAISE EXCEPTION '匿名化所需的 PointRecord 列级 UPDATE 未授予 —— 删除执行会整笔回滚（02 §9.20）';
+  END IF;
+
+  IF NOT has_column_privilege('kids_points_app', 'public."PointRuleVersion"', 'title', 'UPDATE')
+     OR NOT has_column_privilege('kids_points_app', 'public."PointRuleVersion"', 'condition', 'UPDATE')
+     OR NOT has_column_privilege('kids_points_app', 'public."PointRuleVersion"', 'changeNote', 'UPDATE') THEN
+    RAISE EXCEPTION '匿名化所需的 PointRuleVersion 列级 UPDATE 未授予 —— 删除执行会整笔回滚（02 §9.20）';
+  END IF;
+
+  IF has_column_privilege('kids_points_app', 'public."PointRecord"', 'pointsDelta', 'UPDATE')
+     OR has_column_privilege('kids_points_app', 'public."PointRecord"', 'balanceAfter', 'UPDATE')
+     OR has_column_privilege('kids_points_app', 'public."PointRuleVersion"', 'points', 'UPDATE') THEN
+    RAISE EXCEPTION '列级授权越界：账本**语义列**可被 UPDATE（I5 失效）';
   END IF;
 END
 $$;

@@ -3996,6 +3996,16 @@ class _FakeWriteApi implements WriteApi {
   // W5-H 成员：上面已实现真实替身（记录调用 / 可注入错误），
   // 任何意外调用都会真正走到 `WriteApi` 替身逻辑，而不是静默通过。
 
+  // W7-D：删除状态写入不在本文件的用例范围内；真调用会直接失败，
+  // 不会被当成「写成功了」。
+  @override
+  Future<FamilyDeletionStateDto> requestFamilyDeletion() =>
+      throw UnimplementedError('本文件不该申请删除家庭数据');
+
+  @override
+  Future<FamilyDeletionStateDto> cancelFamilyDeletion() =>
+      throw UnimplementedError('本文件不该撤销删除家庭数据');
+
   @override
   void close() {}
 }

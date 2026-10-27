@@ -1124,3 +1124,209 @@ Map<String, int> _readCountMap(
   return result;
 }
 
+
+// ────────────────────── 家庭数据删除（W7-D） ──────────────────────
+
+/// `GET /family-deletion` 的回包（W7-D）。
+///
+/// ── 形状校验盯着「自相矛盾」而不是「字段够不够」────────────────────────────
+///   · `pending` 必须带 `scheduledFor` / `daysRemaining`，且 `canCancel=true`：
+///     说「正在删除」却答不出「还剩几天 / 能不能撤销」，家长无从判断；
+///   · `executed` 必须带 `executedAt` 与 `summary`：没有摘要的「已删除」等于
+///     「删了什么不知道」；
+///   · 非 `executed` 带 `summary` ⇒ `malformed`（那是别人的历史拼进来了）。
+class FamilyDeletionStateDto {
+  FamilyDeletionStateDto({
+    required this.childId,
+    required this.status,
+    required this.requestedAt,
+    required this.scheduledFor,
+    required this.cancelledAt,
+    required this.executedAt,
+    required this.daysRemaining,
+    required this.canCancel,
+    required this.summary,
+  });
+
+  factory FamilyDeletionStateDto.fromJson(Object? raw) {
+    const String path = r'$';
+    final Map<String, Object?> json = readObject(raw, path);
+    final FamilyDeletionStateDto dto = FamilyDeletionStateDto(
+      childId: readString(json, 'childId', '$path.childId'),
+      status: readString(json, 'status', '$path.status'),
+      requestedAt: readOptionalDate(json, 'requestedAt', '$path.requestedAt'),
+      scheduledFor:
+          readOptionalDate(json, 'scheduledFor', '$path.scheduledFor'),
+      cancelledAt: readOptionalDate(json, 'cancelledAt', '$path.cancelledAt'),
+      executedAt: readOptionalDate(json, 'executedAt', '$path.executedAt'),
+      daysRemaining:
+          readOptionalInt(json, 'daysRemaining', '$path.daysRemaining'),
+      canCancel: readBool(json, 'canCancel', '$path.canCancel'),
+      summary: json['summary'] == null
+          ? null
+          : FamilyDeletionSummaryDto.fromJson(
+              json['summary'],
+              '$path.summary',
+            ),
+    );
+    dto._validateShape();
+    return dto;
+  }
+
+  final String childId;
+
+  /// 线值：`none` / `pending` / `cancelled` / `executed`。
+  final String status;
+  final DateTime? requestedAt;
+  final DateTime? scheduledFor;
+  final DateTime? cancelledAt;
+  final DateTime? executedAt;
+  final int? daysRemaining;
+  final bool canCancel;
+  final FamilyDeletionSummaryDto? summary;
+
+  void _validateShape() {
+    if (childId.trim().isEmpty) {
+      throw ReadApiException.malformed(r'$.childId', detail: 'childId 不能为空');
+    }
+    switch (status) {
+      case 'none':
+        if (requestedAt != null || scheduledFor != null) {
+          throw ReadApiException.malformed(
+            r'$.requestedAt',
+            detail: 'status=none 时不应带申请时间',
+          );
+        }
+        break;
+      case 'pending':
+        if (scheduledFor == null || requestedAt == null) {
+          throw ReadApiException.malformed(
+            r'$.scheduledFor',
+            detail: 'status=pending 时必须带申请时间与执行时刻',
+          );
+        }
+        if (daysRemaining == null) {
+          throw ReadApiException.malformed(
+            r'$.daysRemaining',
+            detail: 'status=pending 时必须给出剩余天数（客户端不猜）',
+          );
+        }
+        if (!canCancel) {
+          throw ReadApiException.malformed(
+            r'$.canCancel',
+            detail: 'status=pending 时应当可以撤销',
+          );
+        }
+        break;
+      case 'cancelled':
+        if (cancelledAt == null) {
+          throw ReadApiException.malformed(
+            r'$.cancelledAt',
+            detail: 'status=cancelled 时必须带撤销时间',
+          );
+        }
+        break;
+      case 'executed':
+        if (executedAt == null || summary == null) {
+          throw ReadApiException.malformed(
+            r'$.executedAt',
+            detail: 'status=executed 时必须带执行时间与摘要 —— 否则「删了什么」无从回答',
+          );
+        }
+        break;
+      default:
+        throw ReadApiException.malformed(
+          r'$.status',
+          detail: '未知删除状态：$status',
+        );
+    }
+
+    if (status != 'pending' && canCancel) {
+      throw ReadApiException.malformed(
+        r'$.canCancel',
+        detail: 'status=$status 时不可能还能撤销',
+      );
+    }
+    if (status != 'executed' && summary != null) {
+      throw ReadApiException.malformed(
+        r'$.summary',
+        detail: 'status=$status 时不应带执行摘要',
+      );
+    }
+  }
+}
+
+
+/// 执行摘要的线格式（键集合固定，缺一个就 `malformed`）。
+class FamilyDeletionSummaryDto {
+  FamilyDeletionSummaryDto({
+    required this.coolingDays,
+    required this.redacted,
+    required this.keptRecords,
+    required this.keptPointsBalance,
+    required this.note,
+  });
+
+  factory FamilyDeletionSummaryDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    final Map<String, Object?> redacted =
+        readObject(json['redacted'], '$path.redacted');
+    final Map<String, Object?> kept = readObject(json['kept'], '$path.kept');
+
+    const List<String> keys = <String>[
+      'child',
+      'members',
+      'rules',
+      'ruleVersions',
+      'habits',
+      'wishes',
+      'records',
+      'approvals',
+      'consents',
+      'notifications',
+    ];
+    final Map<String, int> counts = <String, int>{};
+    for (final String key in keys) {
+      final int value = readInt(redacted, key, '$path.redacted.$key');
+      if (value < 0) {
+        throw ReadApiException.malformed(
+          '$path.redacted.$key',
+          detail: '行数不能为负：$value',
+        );
+      }
+      counts[key] = value;
+    }
+
+    final int coolingDays = readInt(json, 'coolingDays', '$path.coolingDays');
+    if (coolingDays < 1) {
+      throw ReadApiException.malformed(
+        '$path.coolingDays',
+        detail: '冷却期天数必须是正整数：$coolingDays',
+      );
+    }
+    final int keptRecords = readInt(kept, 'records', '$path.kept.records');
+    final int keptPointsBalance =
+        readInt(kept, 'pointsBalance', '$path.kept.pointsBalance');
+    if (keptRecords < 0) {
+      throw ReadApiException.malformed(
+        '$path.kept.records',
+        detail: '保留流水条数不能为负：$keptRecords',
+      );
+    }
+
+    return FamilyDeletionSummaryDto(
+      coolingDays: coolingDays,
+      redacted: counts,
+      keptRecords: keptRecords,
+      keptPointsBalance: keptPointsBalance,
+      note: readString(json, 'note', '$path.note'),
+    );
+  }
+
+  final int coolingDays;
+  final Map<String, int> redacted;
+  final int keptRecords;
+  final int keptPointsBalance;
+  final String note;
+}
+

@@ -598,6 +598,13 @@
   color: $text-primary;
 }
 
+/* W7-D：删除面板的「确认申请删除？」标题（destructive 语义）。 */
+.kp-deletion__danger-title {
+  font-size: f2r(14);
+  font-weight: 700;
+  color: $point-spend;
+}
+
 .kp-export__total {
   font-size: f2r(12);
   font-weight: 700;

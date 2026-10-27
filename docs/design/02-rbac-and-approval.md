@@ -1000,7 +1000,7 @@ model InviteCode {
 | 9.17 | 孩子申请加分 51 分（Q15 = ±50） | 403 AMOUNT_EXCEEDS_LIMIT |
 | 9.18 | PIN 连错 5 次 | 锁定 15 分钟 |
 | 9.19 | `DeviceSession` 到期 | 角色回落 `child`（✅ W1-C：内核 `test/session-gate.test.ts` 组 C —— 含 `expiresAt === now` **边界**；真 HTTP `device-session-http.test.ts` 组 B） |
-| 9.20 | 撤回同意（`GuardianConsent`） | 全链路写入停止（✅ **W7-A 后端**：`ConsentGuard` 按 `contracts/consent-policy.ts` 的显式清单拦下 24 个写动作 —— `none` / `withdrawn` 都拒，403 `CONSENT_REQUIRED`；用例 `test/consent-http.test.ts` 组 E ＋ `test/consent-policy.test.ts` 划分完整性）；导出可下载 ❌ 未实现 |
+| 9.20 | 撤回同意（`GuardianConsent`） | 全链路写入停止（✅ **W7-A 后端**：`ConsentGuard` 按 `contracts/consent-policy.ts` 的显式清单拦下 24 个写动作 —— `none` / `withdrawn` 都拒，403 `CONSENT_REQUIRED`；用例 `test/consent-http.test.ts` 组 E ＋ `test/consent-policy.test.ts` 划分完整性）；导出可下载 ✅ **W7-C**（`GET /export`，豁免同意闸门）；删除可执行 ✅ **W7-D**（`POST /family-deletion`：7 天冷却 ＋ `confirmed: true` 二次确认 ＋ 到期就地匿名化；撤销 / 重复申请幂等；两条删除路由同样**不挂** `ConsentGuard`；真库用例 `test-db/deletion-db.dbtest.ts` 用**已撤回**的同意行跑通全链路） |
 | 9.21 | 非成员访问 | 403 MEMBER_NOT_FOUND（✅ W1-B 已有真 HTTP 用例：`membership-http.test.ts` 组 A） |
 | 9.22 | 成员级 `restrictions` 试图放宽矩阵 `DENY` | 被忽略，仍为 DENY（屏障三方向性）（✅ W1-B：内核**穷举** 25×2×6×5 ＋ HTTP 用例） |
 | 9.23 | 通知发送失败 | 账本已提交不受影响（事务边界） |

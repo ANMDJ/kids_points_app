@@ -129,6 +129,16 @@ export const PERMISSION_MATRIX = {
   //   否则「撤回」就等于「连自己的数据也拿不走」，与 04 §5 的可携带承诺相反。
   //   因此 `contracts/consent-policy.ts` 把它归入豁免集合，并由用例钉住。
   export_family_data: { guardian: 'ALLOW', child: 'DENY' },
+
+  /* ── 家庭数据删除（W7-D）────────────────────────────────── */
+  // 看删除状态 / 申请与撤回删除。`02` §9.20 的「可删除」半边。
+  // ★ 只给家长：删除会不可逆地匿名化整个家庭的描述性数据。
+  // ★ 两个动作都在 `contracts/consent-policy.ts` 的**豁免**集合里：
+  //   删除权不依赖「同意生效中」—— 撤回同意之后仍必须能删，
+  //   否则「撤回」就变成「数据被扣住，既不能用也不能删」。
+  view_family_deletion: { guardian: 'ALLOW', child: 'DENY' },
+  manage_family_deletion: { guardian: 'ALLOW', child: 'DENY' },
+
   // ← E18：生产环境永久关闭。reset_demo_data 双侧均为 DENY，
   //    且**必须**保持双侧 DENY —— 客户端"生产可重置数据"是已修的严重缺陷。
   reset_demo_data: { guardian: 'DENY', child: 'DENY' }
@@ -136,7 +146,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 38 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 40 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**

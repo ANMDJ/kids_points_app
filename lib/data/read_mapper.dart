@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/approval.dart';
 import '../models/consent.dart';
+import '../models/family_deletion.dart';
 import '../models/family_export.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
@@ -538,6 +539,43 @@ FamilyExport mapFamilyExport(FamilyExportDto dto) {
     totals: Map<String, int>.unmodifiable(dto.totals),
     truncated: dto.truncated,
     truncatedSections: List<String>.unmodifiable(dto.truncatedSections),
+  );
+}
+
+
+/// 删除状态 DTO → UI 模型（W7-D）。
+///
+/// ★ 未知状态在这里**不会**落到 `none`：DTO 已经把它抛成 `malformed`，
+///   这里只做无歧义的映射。把未知当 `none` 会让「后端加了新状态」显示成
+///   「从未申请删除」—— 最坏的一种默认值。
+FamilyDeletion mapFamilyDeletion(FamilyDeletionStateDto dto) {
+  final FamilyDeletionStatus? status =
+      familyDeletionStatusFromWire(dto.status);
+  if (status == null) {
+    throw ReadApiException.malformed(
+      r'$.status',
+      detail: '未知删除状态：${dto.status}',
+    );
+  }
+  final FamilyDeletionSummaryDto? summary = dto.summary;
+  return FamilyDeletion(
+    childId: dto.childId,
+    status: status,
+    requestedAt: dto.requestedAt,
+    scheduledFor: dto.scheduledFor,
+    cancelledAt: dto.cancelledAt,
+    executedAt: dto.executedAt,
+    daysRemaining: dto.daysRemaining,
+    canCancel: dto.canCancel,
+    summary: summary == null
+        ? null
+        : FamilyDeletionSummary(
+            coolingDays: summary.coolingDays,
+            redacted: Map<String, int>.unmodifiable(summary.redacted),
+            keptRecords: summary.keptRecords,
+            keptPointsBalance: summary.keptPointsBalance,
+            note: summary.note,
+          ),
   );
 }
 

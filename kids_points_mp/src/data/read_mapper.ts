@@ -2,6 +2,7 @@ import type {
   ApprovalInboxItemDto,
   ApprovalsPageDto,
   ConsentStateDto,
+  FamilyDeletionStateDto,
   FamilyExportDto,
   HabitDto,
   HomeDto,
@@ -24,6 +25,8 @@ import type { ApprovalInboxItem, ApprovalsPage } from './approval'
 import { notificationApprovalId } from './notification'
 import type { NotificationItem, NotificationsPage } from './notification'
 import type {
+  FamilyDeletion,
+  FamilyDeletionRedactionCounts,
   FamilyExport,
   FamilyMember,
   GuardianConsent,
@@ -520,3 +523,51 @@ export function mapNotificationsPage(
     unreadCount: dto.unreadCount
   }
 }
+
+// ============================================================ 家庭数据删除（W7-D）
+
+/**
+ * `FamilyDeletionStateDto` → [FamilyDeletion]。
+ *
+ * 状态线值在 DTO 里已经过白名单校验（未知值抛 `malformed`）；这里只做
+ * 无歧义映射。把未知状态当 `none` 会让「后端加了新状态」显示成
+ * 「从未申请删除」—— 最坏的一种默认值。
+ */
+export function mapFamilyDeletion(dto: FamilyDeletionStateDto): FamilyDeletion {
+  const summary = dto.summary
+  const redacted = summary === null ? null : summary.redacted
+  const counts: FamilyDeletionRedactionCounts = {
+    child: redacted?.child ?? 0,
+    members: redacted?.members ?? 0,
+    rules: redacted?.rules ?? 0,
+    ruleVersions: redacted?.ruleVersions ?? 0,
+    habits: redacted?.habits ?? 0,
+    wishes: redacted?.wishes ?? 0,
+    records: redacted?.records ?? 0,
+    approvals: redacted?.approvals ?? 0,
+    consents: redacted?.consents ?? 0,
+    notifications: redacted?.notifications ?? 0
+  }
+
+  return {
+    childId: dto.childId,
+    status: dto.status as FamilyDeletion['status'],
+    requestedAt: dto.requestedAt,
+    scheduledFor: dto.scheduledFor,
+    cancelledAt: dto.cancelledAt,
+    executedAt: dto.executedAt,
+    daysRemaining: dto.daysRemaining,
+    canCancel: dto.canCancel,
+    summary:
+      summary === null
+        ? null
+        : {
+            coolingDays: summary.coolingDays,
+            redacted: counts,
+            keptRecords: summary.keptRecords,
+            keptPointsBalance: summary.keptPointsBalance,
+            note: summary.note
+          }
+  }
+}
+

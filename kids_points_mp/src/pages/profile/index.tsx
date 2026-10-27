@@ -9,6 +9,7 @@ import type { IconName } from '../../components/Icon/icons'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
 import ConsentSheet from '../../sheets/ConsentSheet'
 import ExportSheet from '../../sheets/ExportSheet'
+import FamilyDeletionSheet from '../../sheets/FamilyDeletionSheet'
 import InviteSheet from '../../sheets/InviteSheet'
 import MemberSheet from '../../sheets/MemberSheet'
 import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
@@ -73,6 +74,9 @@ export default function Profile() {
   // W7-C：导出家庭数据。入口同样对所有角色可见（面板自己先确认角色），
   // 孩子点进去看到的是「请让家长操作」，不是 403。
   const exportSheet = useSheet()
+  // W7-D：删除家庭数据。入口对所有角色可见（面板自己先确认角色），
+  // 孩子点进去看到的是「只有家长可以…」，不是 403。
+  const deletionSheet = useSheet()
   // W5-J：我的申请。与家长收件箱分开 —— 这里只看「我提交的」，动作是撤回。
   const myApplicationsSheet = useSheet()
   // W5-L：站内通知中心。未读数由服务端下发的整份 `unreadCount` 决定；
@@ -280,6 +284,21 @@ export default function Profile() {
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
             <View className='kp-profile__menu-divider' />
+            {/* W7-D：家庭数据删除（可删除权，02 §9.20）。 */}
+            <View
+              className='kp-profile__menu'
+              onClick={() => deletionSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#d9534f', 34 / 255) }}
+              >
+                <Icon name='trash' size={19} color='#d9534f' />
+              </View>
+              <Text className='kp-profile__menu-label'>删除家庭数据</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
             <View
               className='kp-profile__menu'
               onClick={() => {
@@ -365,6 +384,13 @@ export default function Profile() {
           <ExportSheet
             visible={exportSheet.visible}
             onClose={exportSheet.hide}
+          />
+        ) : null}
+        {/* W7-D：删除家庭数据弹窗（先确认角色，再拉 `GET /family-deletion`） */}
+        {deletionSheet.open ? (
+          <FamilyDeletionSheet
+            visible={deletionSheet.visible}
+            onClose={deletionSheet.hide}
           />
         ) : null}
       </View>

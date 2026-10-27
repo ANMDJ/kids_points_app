@@ -3,6 +3,7 @@ import { ApprovalsModule } from './approvals/approvals.module'
 import { AuditModule } from './audit/audit.module'
 import { ChildrenModule } from './children/children.module'
 import { ConsentHttpModule } from './consent/consent-http.module'
+import { DeletionModule } from './deletion/deletion.module'
 import { DeviceSessionModule } from './device-session/device-session.module'
 import { DeviceTokensHttpModule } from './device-tokens/device-tokens-http.module'
 import { ExportModule } from './export/export.module'
@@ -82,6 +83,12 @@ import { WishesModule } from './wishes/wishes.module'
     //   ★ 它**不**经 `ConsentGuard`：导出在豁免集合里，撤回同意后仍须可用
     //   （04 §5 的可携带承诺）。
     ExportModule.register(),
+    // ★ W7-D（2026-10-27）：家庭数据删除 `/family-deletion`（guardian 专属；
+    //   child 在矩阵里为 DENY）。有库 ⇒ PrismaDeletionRepository（申请/撤销/执行
+    //   都在事务内；执行 = 就地匿名化）；无库 ⇒ 501（**绝不**回「已删除」）。
+    //   ★ 三条路由都**不**经 `ConsentGuard`：删除权在豁免集合里，撤回同意后
+    //   仍必须可用（02 §9.20 / 04 §5）。
+    DeletionModule.register(),
     ReadModule.register(),
     OnboardingModule,
     // ★ W5-G（2026-10-22）：邀请码 `POST/GET /invites`、`POST /invites/:id/revoke`、

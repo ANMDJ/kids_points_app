@@ -323,6 +323,29 @@ abstract class WriteApi {
   /// 回包 [NotificationReadDto.id] 必须等于请求的 id。
   Future<NotificationReadDto> markNotificationRead(String notificationId);
 
+  /// 申请删除家庭数据（`POST /family-deletion`，`manage_family_deletion`，W7-D）。
+  ///
+  /// 请求体**只有** `{confirmed: true}`：删除对象来自会话，冷却期由服务端政策
+  /// 决定。`confirmed` 必须是**布尔真值** —— 后端不把「没带字段」读成同意，
+  /// 客户端也不提供「默认确认」的调用方式。
+  ///
+  /// 构造幂等：已在冷却期再调仍是 200、返回**同一条**请求（`requestedAt` 不变），
+  /// 不会插出第二条冷却期，也不会重复写审计。
+  ///
+  /// 常见业务拒绝（都必须原样展示）：
+  ///   · 403 `FORBIDDEN` —— 孩子没有 `manage_family_deletion`
+  ///   · 400 `FAMILY_DELETION_NOT_CONFIRMED` —— 没带显式确认
+  ///   · 409 `FAMILY_DELETION_ALREADY_EXECUTED` —— 已经删过，不可重复
+  ///   · 404 `CHILD_NOT_FOUND` —— 孩子已删 / 不存在
+  Future<FamilyDeletionStateDto> requestFamilyDeletion();
+
+  /// 撤销待执行的删除（`POST /family-deletion/cancel`，`manage_family_deletion`）。
+  ///
+  /// **没有请求体**：撤销的只有「当前这条 pending 请求」。
+  /// 构造幂等**不成立**：没有 pending 时回 409 `FAMILY_DELETION_NOT_PENDING` ——
+  /// 那不是「本来就没申请」，而是「这个动作此刻没有对象」，界面应据此刷新状态。
+  Future<FamilyDeletionStateDto> cancelFamilyDeletion();
+
   void close() {}
 }
 
@@ -860,6 +883,44 @@ class WriteApiClient implements WriteApi {
       throw WriteApiException.malformed(
         r'$.status',
         detail: '撤回回包 status=granted —— 撤回没有生效',
+      );
+    }
+    return dto;
+  }
+
+  @override
+  Future<FamilyDeletionStateDto> requestFamilyDeletion() async {
+    // ★ 请求体只有这一个布尔真值：冷却期、孩子、操作人全部由服务端决定。
+    final Object? decoded = await _send('POST', '/family-deletion', <String, Object?>{
+      'confirmed': true,
+    });
+    final FamilyDeletionStateDto dto = _parse(
+      decoded,
+      (Object? raw, String _) => FamilyDeletionStateDto.fromJson(raw),
+    );
+    // 申请成功的回包必须是 pending：`none` 说明什么都没发生（服务端没落库），
+    // `executed` 说明它已经在删了 —— 两种都不该被界面显示成「已申请」。
+    if (dto.status != 'pending') {
+      throw WriteApiException.malformed(
+        r'$.status',
+        detail: '申请删除的回包 status=${dto.status}，期望 pending',
+      );
+    }
+    return dto;
+  }
+
+  @override
+  Future<FamilyDeletionStateDto> cancelFamilyDeletion() async {
+    final Object? decoded =
+        await _send('POST', '/family-deletion/cancel', null);
+    final FamilyDeletionStateDto dto = _parse(
+      decoded,
+      (Object? raw, String _) => FamilyDeletionStateDto.fromJson(raw),
+    );
+    if (dto.status != 'cancelled') {
+      throw WriteApiException.malformed(
+        r'$.status',
+        detail: '撤销删除的回包 status=${dto.status}，期望 cancelled',
       );
     }
     return dto;

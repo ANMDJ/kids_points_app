@@ -308,6 +308,16 @@ class ReadApiClient {
     return FamilyExportDto.fromJson(response.decoded, rawJson: response.text);
   }
 
+  /// `GET /family-deletion`：家庭数据删除状态（W7-D）。
+  ///
+  /// 返回的是**服务端事实**：有没有待执行的请求、还剩几天、删除后动了哪些表。
+  /// 客户端不读本地时钟算倒计时（设备时间可能不准），`daysRemaining` 直接用回包。
+  ///
+  /// 失败口径：401 没身份、403 不是家长（两个删除动作 child DENY）、
+  /// 501 后端没接数据库。
+  Future<FamilyDeletionStateDto> fetchFamilyDeletion() async =>
+      FamilyDeletionStateDto.fromJson(await _get('/family-deletion'));
+
   Future<Object?> _get(String path, [Map<String, String>? query]) async =>
       (await _send(path, query)).decoded;
 

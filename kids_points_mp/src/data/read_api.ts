@@ -4,6 +4,7 @@ import { ReadApiException } from './read_api_errors'
 import {
   ApprovalsPageDto,
   ConsentStateDto,
+  FamilyDeletionStateDto,
   FamilyExportDto,
   HomeDto,
   InviteListDto,
@@ -365,6 +366,19 @@ export class ReadApiClient {
   async fetchExport(): Promise<FamilyExportDto> {
     const response = await this.request('/export')
     return FamilyExportDto.fromJson(response.body, response.text)
+  }
+
+  /**
+   * 家庭数据删除状态（`GET /family-deletion`，W7-D）。
+   *
+   * 只有家长能看（`view_family_deletion` 对 child 是 DENY）：调用方先用
+   * `canManageFamilyDeletion` 判断，孩子视角不要发这个请求。
+   *
+   * 状态是**服务端事实**：`daysRemaining` 由服务端向上取整，客户端不用
+   * 本地时钟算倒计时（设备时间可能不准）。
+   */
+  async fetchFamilyDeletion(): Promise<FamilyDeletionStateDto> {
+    return FamilyDeletionStateDto.fromJson(await this.get('/family-deletion'))
   }
 
   private async get(

@@ -672,7 +672,7 @@ describe('组 F：I6 冲正只增不减', () => {
 
 // ══ 组 G：I5 —— 应用角色写得进、改不动、删不掉（**真实数据**上）══════════════
 describe('组 G：I5 账本不可变（REVOKE 生效）', () => {
-  it('对刚写入的流水：UPDATE / DELETE / Prisma update 全部被权限拒绝（42501）', async () => {
+  it('对刚写入的流水：语义列 UPDATE / DELETE / Prisma update 全部被权限拒绝（42501）', async () => {
     const childId = await makeChild('i5')
     const { recordId } = await appendOne(childId, 3, 'I5 的目标记录')
 
@@ -686,9 +686,20 @@ describe('组 G：I5 账本不可变（REVOKE 生效）', () => {
       'DELETE FROM "PointRecord"'
     )
     await expectPermissionDenied(
-      () => prisma.pointRecord.update({ where: { id: recordId }, data: { note: '被改了' } }),
+      () => prisma.pointRecord.update({ where: { id: recordId }, data: { balanceAfter: 999 } }),
       'Prisma 客户端 pointRecord.update（应用层视角）'
     )
+
+    // ★ W7-D（2026-10-27）的**列级例外**：匿名化需要抹掉描述性文本，因此
+    //   `note` / `titleSnapshot` / `conditionSnapshot` 被 900 脚本单独 GRANT UPDATE。
+    //   本断言把这条边界写成可执行事实：**可以改「写了什么」，不可以改「发生了什么」**。
+    //   若将来有人把例外扩成整表 UPDATE，上面三条会立刻变红。
+    const textOnly = await prisma.pointRecord.updateMany({
+      where: { id: '__no_such__' },
+      data: { note: '', titleSnapshot: '[已删除]' }
+    })
+    assert.equal(textOnly.count, 0, '文本列应可写（列级授权）—— 删除执行依赖它')
+
     await expectPermissionDenied(
       () => prisma.$executeRaw`UPDATE "PointRuleVersion" SET "points" = 0`,
       'UPDATE "PointRuleVersion"（历史真相之源同样不可改）'

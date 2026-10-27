@@ -919,3 +919,180 @@ function typeName(value: unknown): string {
   if (Array.isArray(value)) return 'array'
   return typeof value
 }
+
+// ─────────────────────────── 家庭数据删除（W7-D） ───────────────────────────
+
+/** 执行摘要的线格式：十个行数字段缺一个就 `malformed`。 */
+export class FamilyDeletionSummaryDto {
+  constructor(
+    readonly coolingDays: number,
+    readonly redacted: Record<string, number>,
+    readonly keptRecords: number,
+    readonly keptPointsBalance: number,
+    readonly note: string
+  ) {
+    const keys = [
+      'child',
+      'members',
+      'rules',
+      'ruleVersions',
+      'habits',
+      'wishes',
+      'records',
+      'approvals',
+      'consents',
+      'notifications'
+    ]
+    for (const key of keys) {
+      const value = redacted[key]
+      if (typeof value !== 'number') {
+        throw ReadApiException.malformed(
+          `$.summary.redacted.${key}`,
+          '摘要缺少这一类行数'
+        )
+      }
+    }
+    if (!Number.isInteger(coolingDays) || coolingDays < 1) {
+      throw ReadApiException.malformed(
+        '$.summary.coolingDays',
+        `冷却期天数必须是正整数，实际 ${coolingDays}`
+      )
+    }
+    if (!Number.isInteger(keptRecords) || keptRecords < 0) {
+      throw ReadApiException.malformed(
+        '$.summary.kept.records',
+        `保留流水条数不能为负，实际 ${keptRecords}`
+      )
+    }
+    if (note.trim() === '') {
+      throw ReadApiException.malformed('$.summary.note', 'note 不能为空')
+    }
+  }
+
+  static fromJson(raw: unknown, path = '$'): FamilyDeletionSummaryDto {
+    const json = readObject(raw, path)
+    const redacted = readObject(json.redacted, `${path}.redacted`)
+    const kept = readObject(json.kept, `${path}.kept`)
+    const counts: Record<string, number> = {}
+    for (const key of Object.keys(redacted)) {
+      const value = readInt(redacted, key, `${path}.redacted.${key}`)
+      if (value < 0) {
+        throw ReadApiException.malformed(
+          `${path}.redacted.${key}`,
+          `行数不能为负：${value}`
+        )
+      }
+      counts[key] = value
+    }
+    return new FamilyDeletionSummaryDto(
+      readInt(json, 'coolingDays', `${path}.coolingDays`),
+      counts,
+      readInt(kept, 'records', `${path}.kept.records`),
+      readInt(kept, 'pointsBalance', `${path}.kept.pointsBalance`),
+      readString(json, 'note', `${path}.note`)
+    )
+  }
+}
+
+/**
+ * `GET /family-deletion` 的回包（W7-D）。
+ *
+ * 形状校验盯着「自相矛盾」：pending 必须答得出「还剩几天 / 能不能撤销」，
+ * executed 必须带执行摘要，非 executed 带摘要则说明拼错了孩子的历史。
+ */
+export class FamilyDeletionStateDto {
+  constructor(
+    readonly childId: string,
+    readonly status: string,
+    readonly requestedAt: number | null,
+    readonly scheduledFor: number | null,
+    readonly cancelledAt: number | null,
+    readonly executedAt: number | null,
+    readonly daysRemaining: number | null,
+    readonly canCancel: boolean,
+    readonly summary: FamilyDeletionSummaryDto | null
+  ) {
+    if (childId.trim() === '') {
+      throw ReadApiException.malformed('$.childId', 'childId 不能为空')
+    }
+    switch (status) {
+      case 'none':
+        if (requestedAt !== null || scheduledFor !== null) {
+          throw ReadApiException.malformed(
+            '$.requestedAt',
+            'status=none 时不应带申请时间'
+          )
+        }
+        break
+      case 'pending':
+        if (requestedAt === null || scheduledFor === null) {
+          throw ReadApiException.malformed(
+            '$.scheduledFor',
+            'status=pending 时必须带申请时间与执行时刻'
+          )
+        }
+        if (daysRemaining === null) {
+          throw ReadApiException.malformed(
+            '$.daysRemaining',
+            'status=pending 时必须给出剩余天数（客户端不猜）'
+          )
+        }
+        if (!canCancel) {
+          throw ReadApiException.malformed(
+            '$.canCancel',
+            'status=pending 时应当可以撤销'
+          )
+        }
+        break
+      case 'cancelled':
+        if (cancelledAt === null) {
+          throw ReadApiException.malformed(
+            '$.cancelledAt',
+            'status=cancelled 时必须带撤销时间'
+          )
+        }
+        break
+      case 'executed':
+        if (executedAt === null || summary === null) {
+          throw ReadApiException.malformed(
+            '$.executedAt',
+            'status=executed 时必须带执行时间与摘要 —— 否则「删了什么」无从回答'
+          )
+        }
+        break
+      default:
+        throw ReadApiException.malformed('$.status', `未知删除状态：${status}`)
+    }
+
+    if (status !== 'pending' && canCancel) {
+      throw ReadApiException.malformed(
+        '$.canCancel',
+        `status=${status} 时不可能还能撤销`
+      )
+    }
+    if (status !== 'executed' && summary !== null) {
+      throw ReadApiException.malformed(
+        '$.summary',
+        `status=${status} 时不应带执行摘要`
+      )
+    }
+  }
+
+  static fromJson(raw: unknown, path = '$'): FamilyDeletionStateDto {
+    const json = readObject(raw, path)
+    return new FamilyDeletionStateDto(
+      readString(json, 'childId', `${path}.childId`),
+      readString(json, 'status', `${path}.status`),
+      readOptionalDate(json, 'requestedAt', `${path}.requestedAt`),
+      readOptionalDate(json, 'scheduledFor', `${path}.scheduledFor`),
+      readOptionalDate(json, 'cancelledAt', `${path}.cancelledAt`),
+      readOptionalDate(json, 'executedAt', `${path}.executedAt`),
+      readOptionalInt(json, 'daysRemaining', `${path}.daysRemaining`),
+      readBool(json, 'canCancel', `${path}.canCancel`),
+      json.summary === null || json.summary === undefined
+        ? null
+        : FamilyDeletionSummaryDto.fromJson(json.summary, `${path}.summary`)
+    )
+  }
+}
+

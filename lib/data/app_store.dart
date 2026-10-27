@@ -4,6 +4,7 @@ import '../models/approval.dart';
 import '../models/audit.dart';
 import '../models/child_profile.dart';
 import '../models/consent.dart';
+import '../models/family_deletion.dart';
 import '../models/family_export.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
@@ -220,6 +221,27 @@ class AppStore extends ChangeNotifier {
 
   /// 是否正在下载导出文件（按钮据此禁用，防连点下载出两份时间不同的文件）。
   bool _exportBusy = false;
+
+  // ─────────────────────── 家庭数据删除（W7-D，服务端） ───────────────────────
+  //
+  // 与导出同一策略：**打开删除面板时才拉**（`loadFamilyDeletion`）。
+  // 删除状态是 guardian 专属（矩阵两个动作 child DENY），塞进首页刷新
+  // 会让每个孩子每次下拉都吃一个 403。
+  //
+  // 与导出的另一个共同点：删除**不受** `ConsentGuard` 管辖 —— 撤回同意后
+  // 仍必须能删（否则「撤回」等于「数据被扣住」）。这里同样**不读** `_consent`。
+  //
+  // 状态是服务端事实（`scheduledFor` / `daysRemaining` / `summary`）：
+  // 客户端不用本地时钟算倒计时，也不重算「删了多少行」。
+  FamilyDeletion? _familyDeletion;
+  ReadStatus _deletionReadStatus = ReadStatus.idle;
+  ReadApiException? _deletionError;
+
+  /// 是否正在提交申请 / 撤销（两个按钮互斥，防双击）。
+  bool _deletionBusy = false;
+
+  /// 读状态请求的代际（与同意同一手法：旧响应不得覆盖新响应）。
+  int _deletionReadEpoch = 0;
 
   // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
   //
@@ -459,6 +481,30 @@ class AppStore extends ChangeNotifier {
   /// 所以导出面板打开时同样要先 `refreshMembers()`。
   bool get canExportFamilyData => canManageMembers;
 
+  // ─────────────────────── 家庭数据删除（W7-D，服务端） ───────────────────────
+
+  /// 最近一次拉到的删除状态；还没拉到过时为 null（**不是**「从未申请」）。
+  /// 从未申请是 `FamilyDeletionStatus.none` 那个**已解析**的对象。
+  FamilyDeletion? get familyDeletion => _familyDeletion;
+
+  /// 删除状态的加载状态（与导出 / 同意分开）。
+  ReadStatus get deletionReadStatus => _deletionReadStatus;
+
+  /// 删除状态的加载错误（403 = 当前身份没有 `view_family_deletion`，
+  /// **不能**画成「没有删除请求」—— 那会把权限问题说成数据问题）。
+  ReadApiException? get deletionError => _deletionError;
+
+  /// 是否正在提交申请 / 撤销。
+  bool get isDeletionBusy => _deletionBusy;
+
+  /// 能否申请 / 撤销删除 —— 两个动作在矩阵里都是 guardian ALLOW / child DENY，
+  /// 与成员管理同一条判据（`selfMember.role`）。
+  ///
+  /// 服务端仍是最终裁决者：这里为 true 只表示「界面可以给出按钮」，
+  /// 403 照样原样上报。依赖成员列表已拉到（`selfMember`），
+  /// 所以删除面板打开时同样要先 `refreshMembers()`。
+  bool get canManageFamilyDeletion => canManageMembers;
+
   // ─────────────────────── 站内通知（W5-L，服务端） ───────────────────────
 
   /// 通知列的**只读快照**（服务端顺序：新通知在前）。
@@ -621,6 +667,10 @@ class AppStore extends ChangeNotifier {
     _consentReadStatus = ReadStatus.idle;
     _consentError = null;
     _consentWriteBusy = false;
+    _familyDeletion = null;
+    _deletionReadStatus = ReadStatus.idle;
+    _deletionError = null;
+    _deletionBusy = false;
     _notifications.clear();
     _notificationsReadStatus = ReadStatus.idle;
     _notificationsError = null;
@@ -3171,6 +3221,131 @@ class AppStore extends ChangeNotifier {
     } finally {
       _exportBusy = false;
       if (!_disposed && api == _readApi) _notify();
+    }
+  }
+
+  // ========================================== 家庭数据删除：服务端读写（W7-D）
+
+  /// 拉取删除状态（`GET /family-deletion`）—— **打开删除面板时**调用。
+  ///
+  /// 只有家长能看（`view_family_deletion` 在矩阵里 guardian ALLOW / child DENY）；
+  /// 调用方先用 [canManageFamilyDeletion] 判断，孩子视角不要发这个请求。
+  ///
+  /// 失败**不清空**上一次成功的结果（家长可能正对着「将于 X 日删除」做决定，
+  /// 界面不该因为一次断网突然说「从未申请」）；错误经 [deletionError] 上报。
+  Future<void> loadFamilyDeletion() async {
+    final ReadApiClient? api = _readApi;
+    if (api == null || _disposed) {
+      // 预览模式没有服务端删除状态 —— 进入 ready 空态，而不是发一个只会 401 的请求。
+      _familyDeletion = null;
+      _deletionReadStatus = ReadStatus.ready;
+      _deletionError = null;
+      _notify();
+      return;
+    }
+    final int epoch = ++_deletionReadEpoch;
+    _deletionReadStatus = ReadStatus.loading;
+    _deletionError = null;
+    _notify();
+    try {
+      final FamilyDeletionStateDto dto = await api.fetchFamilyDeletion();
+      if (_disposed || api != _readApi || epoch != _deletionReadEpoch) return;
+      _familyDeletion = mapFamilyDeletion(dto);
+      _deletionReadStatus = ReadStatus.ready;
+    } on ReadApiException catch (error) {
+      if (_disposed || api != _readApi || epoch != _deletionReadEpoch) return;
+      _deletionError = error;
+      _deletionReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _readApi || epoch != _deletionReadEpoch) return;
+      _deletionError = ReadApiException.network(error);
+      _deletionReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _readApi && epoch == _deletionReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 申请删除（`POST /family-deletion`，`{confirmed: true}`）。成功返回 null。
+  ///
+  /// ★ 二次确认在**界面**完成（家长要先展开警告、再点「确认删除」）；
+  ///   这个方法的调用本身就是「已经确认过」的表达，但它仍然显式发送
+  ///   `confirmed: true` —— 服务端不接受「默认同意」，客户端也不假装它接受。
+  ///
+  /// 构造幂等：已在冷却期再调仍是 200、回同一条请求（`requestedAt` 不变），
+  /// 因此成功后直接用回包替换本地状态，不提示「已经申请过一次」。
+  Future<String?> requestFamilyDeletion() async {
+    if (!isLiveMode) return '预览模式没有真实的家庭数据，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return '只读模式：删除状态暂时写不进去（写客户端未就绪），这次没有提交到服务器。';
+    }
+    if (_deletionBusy) return '上一次删除操作正在提交中，请稍候…';
+
+    _deletionBusy = true;
+    _notify();
+    try {
+      final FamilyDeletionStateDto written = await api.requestFamilyDeletion();
+      if (_disposed) return null;
+      _familyDeletion = mapFamilyDeletion(written);
+      _deletionReadStatus = ReadStatus.ready;
+      _deletionError = null;
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 403 / 409：本地状态可能已经过时（角色被降级 / 另一台设备刚执行了删除）。
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await loadFamilyDeletion();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '删除申请已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _deletionBusy = false;
+      _notify();
+    }
+  }
+
+  /// 撤销待执行的删除（`POST /family-deletion/cancel`）。成功返回 null。
+  ///
+  /// 没有 pending 时服务端回 409 `FAMILY_DELETION_NOT_PENDING` —— 那不是
+  /// 「现在不能撤销」而是「没有可撤销的对象」；这里照实上报并刷新状态，
+  /// 让界面显示真实状态，而不是把按钮留在那里继续骗人。
+  Future<String?> cancelFamilyDeletion() async {
+    if (!isLiveMode) return '预览模式没有真实的家庭数据，这次没有提交。';
+    final WriteApi? api = _writeApi;
+    if (api == null) {
+      return '只读模式：删除状态暂时写不进去（写客户端未就绪），这次没有提交到服务器。';
+    }
+    if (_deletionBusy) return '上一次删除操作正在提交中，请稍候…';
+    final FamilyDeletion? current = _familyDeletion;
+    if (current != null && !current.canCancel) {
+      return '当前没有可以撤销的删除请求。';
+    }
+
+    _deletionBusy = true;
+    _notify();
+    try {
+      final FamilyDeletionStateDto written = await api.cancelFamilyDeletion();
+      if (_disposed) return null;
+      _familyDeletion = mapFamilyDeletion(written);
+      _deletionReadStatus = ReadStatus.ready;
+      _deletionError = null;
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await loadFamilyDeletion();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '撤销请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _deletionBusy = false;
+      _notify();
     }
   }
 

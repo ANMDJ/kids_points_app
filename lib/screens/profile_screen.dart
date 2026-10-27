@@ -10,6 +10,7 @@ import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
 import 'sheets/consent_sheet.dart';
 import 'sheets/export_sheet.dart';
+import 'sheets/family_deletion_sheet.dart';
 import 'sheets/invite_sheet.dart';
 import 'sheets/member_sheet.dart';
 import 'sheets/my_applications_sheet.dart';
@@ -256,6 +257,22 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.primaryDeep,
                     label: '导出家庭数据',
                     onTap: () => showExportSheet(context),
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.delete_forever_outlined,
+                    // W7-D：家庭数据删除（可删除权，02 §9.20）。矩阵里
+                    // `view/manage_family_deletion` 仅家长 ALLOW —— 面板内部先
+                    // 确认角色，孩子点进来只看到「找家长」说明。
+                    // 它与同意状态无关：撤回同意后仍然可以删（04 §5）。
+                    color: AppColors.pointSpend,
+                    label: '删除家庭数据',
+                    onTap: () => showFamilyDeletionSheet(context),
                   ),
                   const Divider(
                     height: 1,

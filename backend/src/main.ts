@@ -8,6 +8,7 @@ import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
 import { applyGlobalPipes, logBootstrap } from './app.setup'
+import { FamilyDeletionWorker } from './deletion/deletion.worker'
 import { PushRetryWorker } from './notifications/push-retry.worker'
 import { NotificationsReconcileWorker } from './notifications/notifications.reconcile.worker'
 import { PushRetryRetentionWorker } from './notifications/push-retry.retention.worker'
@@ -49,6 +50,11 @@ async function bootstrap(): Promise<void> {
   //   —— 与上面同一纪律：开关只在一个地方解释。
   app.get(NotificationsReconcileWorker).start()
   app.get(PushRetryRetentionWorker).start()
+
+  // ★ W7-D：家庭数据删除的执行 worker（冷却期到期后就地匿名化）。
+  //   开关只在 `resolveDeletionWorkerConfig()` 一处解释（`FAMILY_DELETION_WORKER_ENABLED`）；
+  //   无库装配下它被模块强制禁用 —— 端口本来就是 501，空转只会刷错误日志。
+  app.get(FamilyDeletionWorker).start()
 }
 
 void bootstrap()
