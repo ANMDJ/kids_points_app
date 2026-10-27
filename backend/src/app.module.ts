@@ -90,7 +90,14 @@ import { WishesModule } from './wishes/wishes.module'
     //   仍必须可用（02 §9.20 / 04 §5）。
     DeletionModule.register(),
     ReadModule.register(),
-    OnboardingModule,
+    // ★ W8-A（2026-10-27）：首启引导 `GET /onboarding`、`PATCH /onboarding/profile`、
+    //   `POST /onboarding/complete`。有库 ⇒ PrismaOnboardingRepository（**一个事务**
+    //   完成「标记 onboardedAt + 按提交顺序复制模板为 PointRule + v1 版本行 +
+    //   可选设 PIN + 写审计」）；无库 ⇒ 501（**绝不**回 `{ onboarded: false }`
+    //   冒充「还没走引导」，否则客户端会走完 6 步才在最后一步失败）。
+    //   ★ `view_onboarding` 在同意闸门**豁免**（第①步就是同意，页要先能打开）；
+    //   `apply_onboarding` 受管（第②步起采集昵称，04 §5 要求同意先于采集）。
+    OnboardingModule.register(),
     // ★ W5-G（2026-10-22）：邀请码 `POST/GET /invites`、`POST /invites/:id/revoke`、
     //   `POST /invites/accept`。有库 ⇒ PrismaInvitesRepository（条件 UPDATE 原子占位，
     //   占位 + 成员位 + 会话 + 审计同一事务）；无库 ⇒ 501（不返回空列表冒充

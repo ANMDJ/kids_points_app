@@ -189,6 +189,9 @@ enum ActionType {
   remove_member
   switch_role_mode
   edit_child_profile
+  /// 首启引导（W8-A）：读（`view_onboarding`，同意闸门**豁免** —— 第①步就是同意，
+  /// 页必须先能打开）与写（`apply_onboarding`，受同意闸门管 —— 第②步起采集昵称）。
+  view_onboarding
   apply_onboarding
   /// 合规与监护人同意（W7-A）：看 / 授予 / 撤回同意。
   /// 这两个动作是「撤回后写入停止」的豁免口（contracts/consent-policy.ts）。

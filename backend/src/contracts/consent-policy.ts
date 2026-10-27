@@ -69,6 +69,12 @@ export const CONSENT_EXEMPT_ACTIONS = [
   'view_notifications',
   'view_members',
   'view_consent',
+  /* ── 首启引导的**读**（W8-A）──
+     ★ 第①步就是「监护人同意」，所以引导页必须在**未同意时**也能打开 ——
+       否则用户看到 403 空页面，而页面上唯一能解除它的按钮都渲染不出来。
+       写侧（`apply_onboarding`）仍然受管：第②步起就采集昵称，04 §5 要求
+       同意先于采集；未同意时 `POST /onboarding/complete` ⇒ 403 CONSENT_REQUIRED。 */
+  'view_onboarding',
   /* ── 数据导出（W7-C）──
      ★ 它不是写：导出不改变任何一行，而且**撤回同意后仍必须可用** ——
        撤回的含义是「停止处理」，不是「连已经存在的数据都拿不走」。

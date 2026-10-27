@@ -1,6 +1,11 @@
 /**
  * 规则模板数据（docs/design/04 §3 / §4）
  *
+ * ★ W8-A（2026-10-27）：学段 / 关注点**不再手抄** —— `AGE_BANDS` / `FOCUS_AREAS`
+ *   直接来自服务端契约 `src/contracts/onboarding.ts`，与 DTO 校验、模板排序、
+ *   测试共用同一份取值。此前这里是第二份手抄，改一处漏一处时编译器不会说话，
+ *   症状是「引导里选了关注点，但模板排序完全没反应」。
+ *
  * ★ P2 决策（用户 2026-10-12 裁定）：**不追求 90 条**，以当前设计内容为模板开发。
  *   原计划 O1 的「90 条模板 / 2.0 人日」按此决策降级。
  *
@@ -18,6 +23,14 @@
  *   `ICONS` 的键集合、Flutter 侧 `lib/theme/app_icons.dart` 的 `appIcons` 键集合**逐字相等** ——
  *   由 `npm run icons:check`（`tools/icon-names-check.mjs`）比对：手抄漂移就红。
  */
+import {
+  AGE_BANDS,
+  FOCUS_AREAS,
+  type AgeBandName,
+  type FocusAreaName
+} from '../../src/contracts/onboarding'
+
+
 
 export const ICON_NAMES = [
   'home',
@@ -63,11 +76,11 @@ export const PALETTE = [
   '#e9834b' // pointSpend 深橙
 ] as const
 
-export const AGE_BANDS = ['preschool', 'primary_low', 'primary_high', 'junior_high'] as const
-export const FOCUS_AREAS = ['作业专注', '生活习惯', '阅读', '运动', '情绪管理', '家务'] as const
-
-export type AgeBandName = (typeof AGE_BANDS)[number]
-export type FocusAreaName = (typeof FOCUS_AREAS)[number]
+/**
+ * ★ W8-A（2026-10-27）：学段 / 关注点**不再手抄**，直接复用服务端契约（见文件头）。
+ *   唯一的取值来源是 `src/contracts/onboarding.ts`。
+ */
+export { AGE_BANDS, FOCUS_AREAS, type AgeBandName, type FocusAreaName }
 export type IconName = (typeof ICON_NAMES)[number]
 
 export interface RuleTemplateSeed {

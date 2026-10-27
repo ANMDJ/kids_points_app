@@ -109,6 +109,14 @@ export const PERMISSION_MATRIX = {
   remove_member: { guardian: 'ALLOW', child: 'DENY' },
   switch_role_mode: { guardian: 'ALLOW', child: 'ALLOW' }, // 受 PIN 保护（02 §7）
   edit_child_profile: { guardian: 'ALLOW', child: 'DENY' },
+  // 首启引导（W8-A）：**拆成读 / 写两个动作**。
+  //   `view_onboarding` 是第①步就需要的读：引导页要先能打开、能显示「监护人同意」
+  //   这一步的内容。它在 consent-policy 里**豁免**，否则未同意时会 403 空页面 ——
+  //   而页面上唯一能解除它的按钮（同意）都渲染不出来。
+  //   `apply_onboarding` 是写（草稿 + 完成），必须过同意闸门：第②步起就采集昵称，
+  //   04 §5 要求同意**先于**采集。
+  //   ★ 不复用一个动作：那会让「允许完成引导」顺带等于「允许在未同意时开始采集」。
+  view_onboarding: { guardian: 'ALLOW', child: 'DENY' },
   apply_onboarding: { guardian: 'ALLOW', child: 'DENY' },
 
   /* ── 合规与监护人同意（W7-A）────────────────────────────── */

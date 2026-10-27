@@ -1,27 +1,88 @@
-import { Module } from '@nestjs/common'
+import { DynamicModule, Module, type Type } from '@nestjs/common'
+
+import { ConsentGuard } from '../consent/consent.guard'
+import { ConsentModule } from '../consent/consent.module'
+import { DeviceSessionGuard } from '../device-session/device-session.guard'
+import { DeviceSessionModule } from '../device-session/device-session.module'
+import { MembershipModule } from '../membership/membership.module'
+import { PermissionsModule } from '../permissions/permissions.module'
+import { hasDatabaseUrl } from '../prisma/database-enabled'
+import { PrismaModule } from '../prisma/prisma.module'
+import { OnboardingController } from './onboarding.controller'
+import { PrismaOnboardingRepository } from './onboarding.prisma.repository'
+import {
+  NotImplementedOnboardingRepository,
+  ONBOARDING_REPOSITORY,
+  type OnboardingPort
+} from './onboarding.repository'
+import { OnboardingService } from './onboarding.service'
 
 /**
- * 首次引导 + 规则模板库 + 监护人同意（docs/design/04）
+ * 首启引导模块（W8-A，2026-10-27 / `docs/design/04`）。
  *
- * 为什么引导是 W0 必须项而非可选项（04 §1）：
- *   现状首启直接进首页并展示 **seed 假数据**（124 分 / 324 好习惯），
- *   新用户看到「我完成了 324 个好习惯」—— 荒谬，也是下架 seed 的核心理由（E18）。
+ * ── 它为什么存在 ──────────────────────────────────────────────────────────
+ *   现状首启直接进首页并展示 seed 假数据（124 分 / 324 好习惯）——
+ *   新用户看到「我完成了 324 个好习惯」，荒谬且必须下架（`03` E18）。
+ *   引导把「第一次打开」变成「选学段 → 选关注点 → 采纳几条约定」，
+ *   让首页的数据**全部来自用户自己刚才的选择**。
  *
- * `POST /onboarding/complete` 必须**原子**写入：
- *   Child.ageBand / focusAreas / onboardedAt + 采纳的 PointRule + PointRuleVersion v1 + AuditLog。
- *   `onboardedAt` 是引导的**权威状态**，服务端持有，前端不缓存（同 02 §7 的理由）。
+ * ── 接线 ──────────────────────────────────────────────────────────────────
+ *   `GET   /onboarding`          读状态 + 已排序模板（`view_onboarding`）
+ *   `PATCH /onboarding/profile`  学段 / 关注点草稿（`apply_onboarding`）
+ *   `POST  /onboarding/complete` 采纳模板 + 可选设置 PIN（`apply_onboarding`）
  *
- * ★ 「采纳模板 = 复制而非引用」：采纳后即与模板脱钩 ——
- *   否则平台改一条模板会**静默改动所有家庭的规则**，绝对不可接受（04 §3）。
+ * ── 为什么**不**拆成「核心 / HTTP」两个模块 ─────────────────────────────────
+ *   `ConsentModule` 之所以拆，是因为它会被十来个特性模块重复导入
+ *   （每个写端点都要 `ConsentGuard`），controller 跟着动态注册会重复挂载路由。
+ *   本模块**只被 `app.module.ts` 导入一次**，没有第二个宿主，所以单模块即可。
+ *   若将来有别的模块要复用 `OnboardingService`，再拆也不迟 —— 现在拆只是多一层。
  *
- * 同意（04 §5）：`GuardianConsent` 必须在引导第①步取得 ——
- *   儿童个人信息的同意必须在**采集之前**取得，而第②步就开始采集昵称。
- *   未勾选时 `onboarding/complete` 返回 403 CONSENT_REQUIRED。
+ * ── 世界钉死 ──────────────────────────────────────────────────────────────
+ *   有库 ⇒ `PrismaOnboardingRepository`；无库 ⇒ 501（**不**返回
+ *   `{ onboarded: false }` 冒充「这个家还没走引导」，理由见 `onboarding.repository.ts`）。
+ *   `hasDatabase` 向下传给身份 / 成员 / 同意模块，**只有一个来源**；用例必须显式传值。
  *
- * ★ P2 决策（用户 2026-10-12 裁定）：模板库**不追求 90 条**，
- *   以当前设计内容为模板开发。seed 见 prisma/seed/rule-templates.ts。
- *
- * ⚠ W0 状态：**签名占位**。验收用例见 04 §6（4.1–4.12）。
+ * ── 4 个 Guard 都要在这里实例化 ────────────────────────────────────────────
+ *   控制器上的 `@UseGuards` 在**本模块的注入器**里解析：
+ *   `DeviceSessionGuard` / `MembershipGuard` / `ConsentGuard` 都要显式列为 provider，
+ *   它们的构造依赖（`DEVICE_SESSION_REPOSITORY` / membership 端口 / `CONSENT_REPOSITORY`）
+ *   由上面导入的模块 `exports` 提供。少写一个就是启动期
+ *   `Nest can't resolve dependencies of ...`。
  */
+export function resolveOnboardingRepositoryClass(hasDatabase: boolean): Type<OnboardingPort> {
+  return hasDatabase ? PrismaOnboardingRepository : NotImplementedOnboardingRepository
+}
+
+export interface OnboardingAssemblyOptions {
+  /** `true` ⇒ 真 Prisma 适配器；`false` ⇒ 501。省略 ⇒ `hasDatabaseUrl()`。 */
+  hasDatabase?: boolean
+}
+
 @Module({})
-export class OnboardingModule {}
+export class OnboardingModule {
+  static register(options: OnboardingAssemblyOptions = {}): DynamicModule {
+    const hasDatabase = options.hasDatabase ?? hasDatabaseUrl()
+    return {
+      module: OnboardingModule,
+      imports: [
+        // 无库时**不**导入 PrismaModule：`PrismaService` 缺连接串会刻意抛错。
+        ...(hasDatabase ? [PrismaModule] : []),
+        DeviceSessionModule.register({ hasDatabase }),
+        MembershipModule.register({ hasDatabase }),
+        PermissionsModule,
+        // 同意闸门：`view_onboarding` 豁免、`apply_onboarding` 受管（见 controller 注释）。
+        ConsentModule.register({ hasDatabase })
+      ],
+      controllers: [OnboardingController],
+      providers: [
+        OnboardingService,
+        DeviceSessionGuard,
+        ConsentGuard,
+        {
+          provide: ONBOARDING_REPOSITORY,
+          useClass: resolveOnboardingRepositoryClass(hasDatabase)
+        }
+      ]
+    }
+  }
+}
