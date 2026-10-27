@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'data/app_scope.dart';
 import 'data/app_store.dart';
 import 'data/device_token_api.dart';
+import 'data/onboarding_api.dart';
 import 'data/push_token_lifecycle.dart';
 import 'data/push_token_registration.dart';
 import 'data/push_token_runtime.dart';
 import 'data/read_api.dart';
 import 'data/write_api.dart';
 import 'screens/home_shell.dart';
+import 'screens/onboarding_gate.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -33,6 +35,9 @@ void main() {
       store: AppStore(
         readApi: configured ? ReadApiClient(config: config) : null,
         writeApi: configured ? WriteApiClient(config: config) : null,
+        // W8-B：引导闸门。只在配置齐全时注入 —— 预览模式没有服务端状态，
+        // 编一个「未引导」会把人推进一个永远完不成的流程。
+        onboardingApi: configured ? OnboardingApiClient(config: config) : null,
       ),
     ),
   );
@@ -91,7 +96,9 @@ class PointsApp extends StatelessWidget {
         title: '积分小管家',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
-        home: const HomeShell(),
+        // W8-B：先过引导闸门 —— 服务端说 `onboarded: false` 就进引导，
+        // 否则（含状态未知 / 孩子身份）直接进首页外壳。
+        home: const OnboardingGate(child: HomeShell()),
       ),
     );
   }

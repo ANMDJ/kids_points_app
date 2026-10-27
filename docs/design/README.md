@@ -45,7 +45,8 @@
 | [`36-w7a-handoff.md`](./36-w7a-handoff.md) | **阶段 W7-A 交接单**（监护人同意 · 后端）：`GET /consent` / `POST /consent` / `POST /consent/withdraw` ＋ 矩阵 **37** 动作（`view_consent` / `manage_consent`，对孩子均 DENY，迁移 `20261026090000_consent_actions`）；「撤回后写入停止」落在**第四道屏障** `ConsentGuard`，判据是 `contracts/consent-policy.ts` 的**显式清单**（24 写 / 13 豁免，两个集合恰好划分全部动作，未知动作按写 fail-closed）；豁免口（`manage_consent` / `view_consent` / `withdraw_request` / `switch_role_mode`）是合规要求 —— 否则「可撤回」变成「可永久锁死」；`GuardianConsent` 授予 / 撤回在 `$transaction` + `SELECT … FOR UPDATE` 内完成（同版本重复授予不写审计、重复撤回幂等、从未授予撤回 ⇒ **409 `CONSENT_NOT_GRANTED`**）；`none`（从未同意）**同样 403**，不自动补假同意；IP / UA 只存 HMAC（无 `CONSENT_PII_SALT` ⇒ 存 `null`）；证据 = `npm test` **41 文件 / 746 条**（新增 `consent-policy` / `consent-guard` / `consent-http` / `consent-pii`）、`honesty:probe` 5 项全 PASS、`npm run ci` **CI_EXIT=0**；**L5 法务文本未定稿（版本号仍占位）、前端同意入口未建（导出已由 W7-C、删除已由 W7-D 落地）、真库并发幂等无用例** | ✅ W7-A 已收口（**仅后端**；引导第①步 UI 未做） |
 | [`37-w7c-handoff.md`](./37-w7c-handoff.md) | **阶段 W7-C 交接单**（家庭数据导出）：`GET /export` ＋ 矩阵 **38** 动作（`export_family_data`，guardian ALLOW / **child DENY**，迁移 `20261027090000_export_action`）；一份 JSON 含档案 / 成员 / 规则与版本 / 习惯 / 心愿 / 流水 / 审批 / 同意 / 审计九段，`summary` 如实给出 `counts` / `totals` / `truncated` / `truncatedSections`（`EXPORT_LIMITS`：流水 5 万、审批与审计各 5 千、小集合 2 千）；★ **不挂 `ConsentGuard`** —— 撤回同意后仍必须可用（04 §5 可携带权），清单变成 24 写 / 14 豁免；`Content-Disposition` 纯 ASCII ＋ `no-store`；无库 **501** 绝不返回空文件；双端只解析文件头与摘要、**复制服务端原文**，先 `refreshMembers()` 判角色（孩子不发请求）、单飞、失败不清空旧文件；证据 = `npm test` **43 文件 / 780 条**（`export-http` 9 ＋ `export-wiring` 23）、`flutter test` **296/296**（新增 22 条，含「刷新失败同时报错」）、小程序 `tsc` / `build:weapp` EXIT=0、`node .tmp_test/run-w7c.mjs` **12/12**（导出数据层的运行时用例：截断自洽 / `rawJson` 逐字 / 错误归一 / 单飞 / 失败保留旧文件）；**真库 `test-db/export-db.dbtest.ts` 19/19 通过（`test:db` 19 文件 / 265 用例全绿、`ci:db` EXIT=0）**（删除已由 W7-D 落地） | ✅ W7-C 已收口（后端 ＋ 双端 ＋ 真库） |
 | [`38-w7d-handoff.md`](./38-w7d-handoff.md) | **阶段 W7-D 交接单**（家庭数据删除）：`GET/POST /family-deletion` ＋ `POST /family-deletion/cancel`，矩阵 **40** 动作（`view_family_deletion` / `manage_family_deletion`，guardian ALLOW / **child DENY**，迁移 `20261027110000_family_deletion`）；申请 ⇒ `pending`（冷却 **7 天**，落库 `scheduledFor`，可撤销）⇒ worker 到期 `executed`（**同一事务**内就地匿名化：孩子昵称 / 成员 PIN / 规则与版本文字 / 流水文本 / 审批 payload / 通知 / 同意 IP·UA 抹掉，**流水数值与余额保留**，02 §5.7 I5）；`{confirmed:true}` 二次确认（缺 / `false` / 字符串都 400）；两条路由**不挂** `ConsentGuard`（撤回同意后仍必须能删，04 §5），清单 24 写 / 16 豁免；部分唯一索引保证「一个孩子最多一条 pending」；900 脚本新增**列级** UPDATE 例外（文本列可抹、分数列仍 42501）并自检；双端面板：先判角色、显示剩余天数 / 撤销 / 执行摘要、读失败不清空旧状态；证据 = `npm test` **47 文件 / 830 条**、`db:verify` ALL PASS、`test:db` **20 文件 / 287 条**、`flutter test` **315/315**、小程序 `tsc` / `build:weapp` EXIT=0、`run-w7d.mjs` **17/17**；**已知边界**：审计历史不抹（追加式）、多 worker 竞争未压测、自然人注销不在范围 | ✅ W7-D 已收口（后端 ＋ 双端 ＋ 真库） |
-| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **40 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-27 矩阵同步至 40 动作） |
+| [`39-w8b-handoff.md`](./39-w8b-handoff.md) | **阶段 W8-B 交接单**（首启引导 · 双端 UI）：Flutter `OnboardingScreen` / `OnboardingGate` ＋ 小程序 `pages/onboarding/**`、启动闸门只在 `onboarded:false` 时拦（**403 / 网络错误一律放行** —— 「不知道」≠「未引导」）、第①步同意未勾选不发请求、第③④步 `undefined` vs `null` vs `[]` 三种意图、`complete` 后**逐条**补 `Habit`（扣分约定不加、409 视为已在）、`complete` 409 一律重拉状态；新增闸门 `onboarding:check`（4 学段 / 6 关注点三处逐字同序，3 例证伪全红）；证据 = `flutter test` **338/338**、小程序 `tsc` / `build:weapp` EXIT=0、`run-w8b.mjs` **14/14**、`npm run ci` **CI_EXIT=0**；**仍未做**：切家长模式 PIN 校验端点、真机七步走查、小程序非首页入口闸门 | ✅ W8-B 已收口（**双端 UI**；真机未走查） |
+| [`../PRD.md`](../PRD.md) | **产品需求文档**（需求侧：目标与指标 / FR-01–FR-12 / 权限矩阵 **41 动作** / 数据模型摘要 / 里程碑 W0–W9 与验收门 / 阻塞项 / 决策登记 / **§15 诚实落地状态**） | ✅ 2026-10-14 入库（2026-10-27 矩阵同步至 41 动作） |
 | [`../../prototype/README.md`](../../prototype/README.md) | **微信小程序高保真原型**（双击 `prototype/index.html` 即开；自检 `node prototype/verify.mjs` → 11/11）。⚠️ 它自述的「与 `kids_points_mp` 同源」**当前无闸门**，见待办 13 | ⚠️ 已入库，**同源闸门待补** |
 
 ## 当前落地进度
@@ -116,7 +117,8 @@
 > `POST /consent/withdraw` ＋ 第四道屏障 `ConsentGuard` —— 撤回（或从未同意）后 24 个写动作
 > 一律 `403 CONSENT_REQUIRED`，清单在 `backend/src/contracts/consent-policy.ts`
 > （读路径、撤回自己的申请、**重新同意**豁免，否则「可撤回」会变成死状态）。
-> 引导第①步的勾选界面**仍未开发**，法务文本仍是占位版本（导出已由 W7-C、删除已由 W7-D 落地）；
+> 引导第①步的勾选界面由 **W8-B** 落地（Flutter / 小程序各一套七步流程），
+> 法务文本仍是占位版本（导出已由 W7-C、删除已由 W7-D 落地）；
 > 详见 [`36-w7a-handoff.md`](./36-w7a-handoff.md)。
 > **W7-C（2026-10-27）** 家庭数据导出：`GET /export`（`export_family_data`，
 > guardian ALLOW / child DENY）把这一个孩子的九段数据打成一份 JSON，
@@ -135,6 +137,26 @@
 > 「文本列可抹、`pointsDelta` / `balanceAfter` 仍被 REVOKE」（900 的列级例外）。
 > 证据：`npm test` 47 文件 / 830 条、`test:db` 20 文件 / 287 条、`flutter test` 315/315、
 > 小程序 `run-w7d.mjs` 17/17；详见 [`38-w7d-handoff.md`](./38-w7d-handoff.md)。
+> **W8-A（2026-10-27）** 首启引导**后端**：`GET /onboarding`（`view_onboarding`，**不挂**
+> `ConsentGuard` —— 未同意时引导页必须能打开）＋ `PATCH /onboarding/profile`（③④步草稿，
+> `undefined` 沿用 / `null` 清空学段 / `[]` 全不选，值未变不写库）＋
+> `POST /onboarding/complete`（`apply_onboarding`，**受管**；**非幂等**，重复 409；
+> 事务内重校验模板仍 active，缺一条 404 且零副作用；规则按提交顺序复制并各带 v1 版本行；
+> 可选 PIN 存 `scrypt$…` 自描述哈希、审计只记 `pinSet`）。矩阵 **40 → 41**，写 / 豁免
+> **24 / 17**。详见 PRD §15（W8-A 一行）。
+> **W8-B（2026-10-27）** 首启引导**双端 UI**：Flutter `OnboardingScreen`（七步）＋
+> `OnboardingGate`（启动闸门）＋ 小程序 `pages/onboarding/**`；★ 闸门只在
+> `onboarded:false` 时拦 —— **403（孩子身份）/ 网络错误一律放行**（「不知道」≠「未引导」，
+> 一次超时不该变成一场发不出请求的强制引导），「我的」页留「重试 / 继续」入口。
+> 第③④步的三种意图（未传 / `null` / `[]`）在请求体里真的不同；`complete` 之后客户端用
+> **既有**端点 `POST /point-rules/:id/habits` **逐条**补习惯（扣分约定不加 —— A1；
+> 409 视为已在；单条失败只进第⑦步的「需手动」清单）；`complete` 409 一律**重拉状态**
+> 而不是原地重试。新增闸门 `npm run onboarding:check`：4 学段 / 6 关注点在
+> 后端契约、Flutter、小程序三处**逐字同序**（3 例证伪全红）。
+> 证据：`flutter test` **338/338**（新增 23 条）、`tsc` / `build:weapp` EXIT=0、
+> `run-w8b.mjs` **14/14**、`npm run ci` **CI_EXIT=0**；
+> 仍未做：**切家长模式 PIN 校验端点**、真机七步走查、小程序非首页入口闸门。
+> 详见 [`39-w8b-handoff.md`](./39-w8b-handoff.md)。
 
 ### ✅ 已完成并验证
 

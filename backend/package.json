@@ -26,11 +26,12 @@
     "contracts:emit": "node scripts/emit-matrix.mjs",
     "templates:check": "tsx scripts/check-templates.ts",
     "icons:check": "node ../tools/icon-names-check.mjs",
+    "onboarding:check": "node ../tools/onboarding-options-check.mjs",
     "relation:check": "node ../tools/relation-kind-check.mjs",
     "restrictions:check": "tsx scripts/check-restrictions.ts",
     "honesty:probe": "node scripts/honesty-probe.mjs",
     "defects:check": "node ../tools/defect-status.mjs",
-    "ci": "npm run prisma:validate && npm run typecheck && npm run typecheck:tests && npm run typecheck:tools && npm run honesty:probe && npm run defects:check && npm run templates:check && npm run icons:check && npm run relation:check && npm run restrictions:check && npm run test && npm run test:canfail && npm run test:canfail:db && npm run build && npm run contracts:emit",
+    "ci": "npm run prisma:validate && npm run typecheck && npm run typecheck:tests && npm run typecheck:tools && npm run honesty:probe && npm run defects:check && npm run templates:check && npm run icons:check && npm run onboarding:check && npm run relation:check && npm run restrictions:check && npm run test && npm run test:canfail && npm run test:canfail:db && npm run build && npm run contracts:emit",
     "ci:db": "npm run db:verify && npm run test:db && npm run test:canfail:db"
   },
   "dependencies": {

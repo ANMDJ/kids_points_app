@@ -30,7 +30,7 @@ import type { MemberRole, MutableMemberRole } from './types'
 import { INVITE_MAX_TTL_DAYS, INVITE_MAX_USES } from './types'
 
 /** 写端点用到的 HTTP 方法（与后端 REST 语义一致，幂等哈希按真实方法算）。 */
-export type WriteMethod = 'POST' | 'PATCH' | 'DELETE'
+export type WriteMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 
 /** 写传输层的一行响应 —— 测试替身只需要造这个。 */
 export interface WriteHttpResponse {

@@ -50,6 +50,12 @@ import {
 } from './approval'
 import { createWriteApiFromEnvironment, WriteApi } from './write_api'
 import { WriteApiException } from './write_api_errors'
+import {
+  createOnboardingApiFromEnvironment,
+  OnboardingApi,
+  type OnboardingResult,
+  type OnboardingView
+} from './onboarding'
 import type { ApprovalDto, MemberRemoveDto, WrittenRecordDto } from './write_dto'
 import type {
   ActorContext,
@@ -188,6 +194,8 @@ export class AppStore {
 
   private readonly readApi: ReadApiClient | null
   private readonly writeApi: WriteApi | null
+  /** 首启引导客户端（W8-B）；为 null = 不接后端，闸门不启用。 */
+  private readonly onboardingApi: OnboardingApi | null
   private readStatusValue: ReadStatus = 'idle'
   private readErrorValue: ReadApiException | null = null
   private usingPreviewValue = true
@@ -292,6 +300,30 @@ export class AppStore {
 
   /** 是否正在提交同意 / 撤回 —— 面板据此禁用两个按钮。 */
   private consentWriteBusyValue = false
+
+  // ------------------------------------------- 首启引导（W8-B，服务端）
+  //
+  // 与同意 / 导出等「面板打开才拉」的切片**不同**：引导必须在**启动时**问一次。
+  // `Child.onboardedAt` 是权威状态（04 §3），客户端不许缓存 —— 不拉这一下，
+  // 就只能在家长已经看到空首页之后才发现「其实该走引导」。
+  //
+  // 但「拉失败」**不阻塞**应用：403（孩子身份 / 只读成员）与网络错误都会让
+  // 闸门放行到首页 —— 否则一次断网就会把整个应用锁在「正在确认引导状态」。
+  // 失败原因经 `onboardingError` 上报，「我的」页仍可手动重试 / 进入引导。
+  //
+  // 快照只存服务端事实；「第几步」是页面的临时状态，**不进 store、不落库**。
+
+  /** 最近一次成功拉到的引导快照；还没拉到过时是 null（**不是**「未完成引导」）。 */
+  private onboardingValue: OnboardingView | null = null
+  private onboardingStatusValue: ReadStatus = 'idle'
+  private onboardingErrorValue: string | null = null
+  private onboardingEpoch = 0
+  private onboardingWriteBusyValue = false
+
+  /** 最近一次「完成引导」的结果（第⑦步要显示「已采纳 N 条」）。 */
+  private lastOnboardingResultValue: OnboardingResult | null = null
+  private lastOnboardingHabitCountValue = 0
+  private lastOnboardingManualTitlesValue: string[] = []
 
   // ------------------------------------------- 家庭数据导出（W7-C，服务端）
   //
@@ -661,6 +693,53 @@ export class AppStore {
     return this.canManageMembers
   }
 
+  // ------------------------------------------------------------ 首启引导（W8-B）
+
+  /** 引导闸门是否可用（接上了引导客户端）。 */
+  get hasOnboarding(): boolean {
+    return this.onboardingApi !== null
+  }
+
+  /** 最近一次拉到的引导快照；null = 还没成功拉到（**不是**「未引导」）。 */
+  get onboarding(): OnboardingView | null {
+    return this.onboardingValue
+  }
+
+  get onboardingReadStatus(): ReadStatus {
+    return this.onboardingStatusValue
+  }
+
+  /** 拉引导状态失败的原因（403 = 当前身份没有 `view_onboarding`）。 */
+  get onboardingError(): string | null {
+    return this.onboardingErrorValue
+  }
+
+  get isOnboardingBusy(): boolean {
+    return this.onboardingWriteBusyValue
+  }
+
+  /**
+   * 是否**必须**走引导：只有服务端明确说「未完成」才为真。
+   *
+   * 状态未知（idle / loading / error）一律 false —— 把「不知道」当成
+   * 「未引导」会让一次超时变成一场无法完成的强制引导。
+   */
+  get needsOnboarding(): boolean {
+    return this.onboardingValue !== null && !this.onboardingValue.onboarded
+  }
+
+  get lastOnboardingResult(): OnboardingResult | null {
+    return this.lastOnboardingResultValue
+  }
+
+  get lastOnboardingHabitCount(): number {
+    return this.lastOnboardingHabitCountValue
+  }
+
+  get lastOnboardingManualTitles(): string[] {
+    return [...this.lastOnboardingManualTitlesValue]
+  }
+
   // ------------------------------------------------------------ 家庭数据导出（W7-C）
 
   /** 最近一次成功拉到的导出文件；还没拉到过时为 null（**不是**「没有数据」）。 */
@@ -896,10 +975,14 @@ export class AppStore {
     readApi: ReadApiClient | null = createReadApiFromEnvironment(),
     writeApi: WriteApi | null = readApi === null
       ? null
-      : createWriteApiFromEnvironment()
+      : createWriteApiFromEnvironment(),
+    onboardingApi: OnboardingApi | null = readApi === null
+      ? null
+      : createOnboardingApiFromEnvironment()
   ) {
     this.readApi = readApi
     this.writeApi = writeApi
+    this.onboardingApi = onboardingApi
     this.resetToEmpty()
   }
 
@@ -931,6 +1014,7 @@ export class AppStore {
     this.resetMembers()
     this.resetInvites()
     this.resetConsent()
+    this.resetOnboarding()
     this.resetExport()
     this.resetFamilyDeletion()
     this.resetNotifications()
@@ -955,6 +1039,7 @@ export class AppStore {
     this.resetMembers()
     this.resetInvites()
     this.resetConsent()
+    this.resetOnboarding()
     this.resetExport()
     this.resetFamilyDeletion()
     this.resetNotifications()
@@ -1015,6 +1100,18 @@ export class AppStore {
     this.consentStatusValue = 'idle'
     this.consentErrorValue = null
     this.consentWriteBusyValue = false
+  }
+
+  /** 引导切片复位（与其它切片同款：epoch 自增，作废在途响应）。 */
+  private resetOnboarding(): void {
+    this.onboardingEpoch++
+    this.onboardingValue = null
+    this.onboardingStatusValue = 'idle'
+    this.onboardingErrorValue = null
+    this.onboardingWriteBusyValue = false
+    this.lastOnboardingResultValue = null
+    this.lastOnboardingHabitCountValue = 0
+    this.lastOnboardingManualTitlesValue = []
   }
 
   /**
@@ -3489,6 +3586,205 @@ export class AppStore {
     }
   }
 
+  // ============================================ 首启引导：服务端读写（W8-B）
+
+  /** 启动时拉一次引导状态（闸门用）。重复调用只会在 idle 时触发。 */
+  ensureInitialOnboarding(): void {
+    if (!this.isLiveMode || this.onboardingStatusValue !== 'idle') return
+    void this.refreshOnboarding()
+  }
+
+  /**
+   * 拉取引导状态与模板库（`GET /onboarding`）。
+   *
+   * 失败**不清空**上一次的快照：一次断网不该把「已完成引导」说成「未引导」。
+   * 错误经 [onboardingError] 上报；闸门在「状态未知」时放行到首页。
+   */
+  async refreshOnboarding(): Promise<void> {
+    const api = this.onboardingApi
+    if (api === null) return
+
+    const epoch = ++this.onboardingEpoch
+    this.onboardingStatusValue = 'loading'
+    this.onboardingErrorValue = null
+    this.persist()
+
+    try {
+      const view = await api.fetch()
+      if (epoch !== this.onboardingEpoch) return
+      this.onboardingValue = view
+      this.onboardingStatusValue = 'ready'
+    } catch (error) {
+      if (epoch !== this.onboardingEpoch) return
+      this.onboardingErrorValue =
+        error instanceof WriteApiException
+          ? error.userMessage
+          : '读取引导状态时发生意外错误。请重试。'
+      this.onboardingStatusValue = 'error'
+    }
+    if (epoch === this.onboardingEpoch) this.persist()
+  }
+
+  /**
+   * 保存第③④步草稿（`PATCH /onboarding/profile`）。成功返回 null。
+   *
+   * 三种意图必须可分（与后端 DTO 逐字同义）：
+   *   · 什么都不传 ⇒ 不发请求；
+   *   · `ageBand: null` ⇒ 显式清空学段（`'ageBand' in input` 判定）；
+   *   · `focusAreas: []` ⇒ 「一个都不选」。
+   *
+   * 失败**不改本地快照**：让界面继续显示「上次真正落库的值」。
+   */
+  async saveOnboardingDraft(input: {
+    ageBand?: string | null
+    focusAreas?: string[]
+  }): Promise<string | null> {
+    const api = this.onboardingApi
+    if (api === null) return '当前没有接入后端，这次没有保存。'
+    if (!('ageBand' in input) && input.focusAreas === undefined) return null
+    if (this.onboardingWriteBusyValue) return '上一次保存正在提交，请稍候…'
+
+    this.onboardingWriteBusyValue = true
+    this.persist()
+    try {
+      const state = await api.saveProfile({
+        ...('ageBand' in input
+          ? { ageBand: input.ageBand as OnboardingView['ageBand'] }
+          : {}),
+        ...(input.focusAreas !== undefined
+          ? { focusAreas: input.focusAreas }
+          : {})
+      })
+      if (this.onboardingValue !== null) {
+        this.onboardingValue = {
+          ...this.onboardingValue,
+          ageBand: state.ageBand,
+          focusAreas: state.focusAreas
+        }
+      }
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 403（没同意 / 不是家长）/ 409（已完成过）：本地快照可能已过时。
+        if (error.kind === 'forbidden' || error.kind === 'conflict') {
+          await this.refreshOnboarding()
+        }
+        return error.userMessage
+      }
+      return '保存请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.onboardingWriteBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 完成引导（`POST /onboarding/complete`）：采纳模板 + 可选 PIN。成功返回 null。
+   *
+   * 与 Flutter 侧同一流程：`complete` 只把模板复制成 `PointRule`，
+   * 首页打卡用的是 `Habit` —— 因此再用**既有**端点
+   * `POST /point-rules/:id/habits` 逐条生成；扣分约定不加（A1）。
+   * 单条失败不回滚已完成引导，失败项进 `lastOnboardingManualTitles` 如实列出。
+   */
+  async completeOnboarding(input: {
+    templateSlugs: string[]
+    ageBand?: string | null
+    focusAreas?: string[]
+    parentPin?: string
+  }): Promise<string | null> {
+    const api = this.onboardingApi
+    if (api === null) return '当前没有接入后端，引导无法完成。'
+    if (this.onboardingWriteBusyValue) return '上一次提交正在保存中，请稍候…'
+
+    this.onboardingWriteBusyValue = true
+    this.persist()
+    try {
+      const result = await api.complete({
+        templateSlugs: input.templateSlugs,
+        ...('ageBand' in input
+          ? { ageBand: input.ageBand as OnboardingView['ageBand'] }
+          : {}),
+        ...(input.focusAreas !== undefined
+          ? { focusAreas: input.focusAreas }
+          : {}),
+        ...(input.parentPin !== undefined
+          ? { parentPin: input.parentPin }
+          : {})
+      })
+
+      this.lastOnboardingResultValue = result
+      this.lastOnboardingHabitCountValue = 0
+      this.lastOnboardingManualTitlesValue = []
+
+      if (this.onboardingValue === null) {
+        this.onboardingValue = {
+          childId: result.childId,
+          onboarded: true,
+          onboardedAt: result.onboardedAt,
+          ageBand: (input.ageBand as OnboardingView['ageBand']) ?? null,
+          focusAreas: input.focusAreas ?? [],
+          templates: []
+        }
+      } else {
+        this.onboardingValue = {
+          ...this.onboardingValue,
+          onboarded: true,
+          onboardedAt: result.onboardedAt
+        }
+      }
+
+      await this.attachOnboardingHabits(result.rules)
+      await this.refreshFromServer()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 409 `ONBOARDING_ALREADY_COMPLETED`：另一台设备 / 上一次请求其实成功了。
+        if (error.kind === 'conflict' || error.kind === 'forbidden') {
+          await this.refreshOnboarding()
+        }
+        return error.userMessage
+      }
+      return '完成引导的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.onboardingWriteBusyValue = false
+      this.persist()
+    }
+  }
+
+  /** 把刚采纳的规则逐条变成首页习惯（409 已在习惯里 = 成功）。 */
+  private async attachOnboardingHabits(
+    rules: OnboardingResult['rules']
+  ): Promise<void> {
+    const api = this.writeApi
+    const manual: string[] = []
+    let created = 0
+
+    for (const rule of rules) {
+      if (rule.isPenalty || api === null) {
+        manual.push(rule.title)
+        continue
+      }
+      try {
+        const dto = await api.addHabitFromRule(
+          rule.ruleId,
+          this.newIdempotencyKey('onboarding-habit')
+        )
+        this.applyHabitDto(dto)
+        created += 1
+      } catch (error) {
+        if (error instanceof WriteApiException && error.kind === 'conflict') {
+          created += 1
+          continue
+        }
+        manual.push(rule.title)
+      }
+    }
+
+    this.lastOnboardingHabitCountValue = created
+    this.lastOnboardingManualTitlesValue = manual
+    this.persist()
+  }
+
   /**
    * 下载家庭数据导出文件（`GET /export`）—— **打开导出面板时**调用。
    *
@@ -3955,6 +4251,9 @@ export function useStore(): AppStore {
   useEffect(() => store.subscribe(() => setTick((tick) => tick + 1)), [])
   useEffect(() => {
     store.ensureInitialRead()
+    // W8-B：引导闸门要在首屏就知道「做完没有」；与首页读并行发出，
+    // 不阻塞首页（`needsOnboarding` 只影响首页那次重定向）。
+    store.ensureInitialOnboarding()
   }, [])
   useDidShow(() => setTick((tick) => tick + 1))
   return store

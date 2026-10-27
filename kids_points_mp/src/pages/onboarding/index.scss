@@ -1,0 +1,325 @@
+@use '../../styles/vars.scss' as *;
+
+// 首启引导（W8-B）：固定一屏 —— 头部 + 中间滚动 + 底部主按钮。
+// 与 Flutter `OnboardingScreen` 的布局一致（GradientPage + Expanded ListView + footer）。
+.kp-onboarding {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.kp-onboarding__scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.kp-onboarding__body {
+  padding: f2r(16) f2r(20) f2r(16);
+}
+
+.kp-onboarding__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+}
+
+.kp-onboarding__loading-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-onboarding__progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kp-onboarding__step-text {
+  font-size: f2r(12.5);
+  font-weight: 700;
+  color: $text-secondary;
+}
+
+.kp-onboarding__dots {
+  display: flex;
+  align-items: center;
+}
+
+.kp-onboarding__dot {
+  width: f2r(7);
+  height: f2r(7);
+  margin-left: f2r(4);
+  border-radius: f2r(999);
+  background-color: $divider;
+
+  &.is-active {
+    background-color: $primary-deep;
+  }
+
+  &.is-current {
+    width: f2r(18);
+  }
+}
+
+.kp-onboarding__title {
+  display: block;
+  margin-top: f2r(14);
+  font-size: f2r(22);
+  line-height: 1.3;
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-onboarding__subtitle {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(13);
+  line-height: 1.55;
+  color: $text-secondary;
+}
+
+.kp-onboarding__error {
+  margin-top: f2r(12);
+  padding: f2r(11) f2r(14);
+  border-radius: f2r(14);
+  background-color: #fdf1e9;
+}
+
+.kp-onboarding__error-text {
+  font-size: f2r(12.5);
+  line-height: 1.5;
+  color: $text-primary;
+}
+
+.kp-onboarding__gap {
+  margin-top: f2r(12);
+}
+
+.kp-onboarding__welcome {
+  margin-top: f2r(16);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.kp-onboarding__emoji {
+  font-size: f2r(42);
+  line-height: 1.2;
+}
+
+.kp-onboarding__welcome-title {
+  display: block;
+  margin-top: f2r(8);
+  font-size: f2r(16);
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-onboarding__welcome-text {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(12.5);
+  line-height: 1.6;
+  color: $text-secondary;
+}
+
+.kp-onboarding__fineprint {
+  display: block;
+  margin-top: f2r(12);
+  font-size: f2r(11.5);
+  line-height: 1.6;
+  color: $text-hint;
+}
+
+.kp-onboarding__hint {
+  display: block;
+  font-size: f2r(12.5);
+  line-height: 1.5;
+  color: $text-secondary;
+}
+
+.kp-onboarding__hint-faint {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(11);
+  color: $text-hint;
+}
+
+.kp-onboarding__hint-block {
+  display: block;
+  margin-top: f2r(10);
+  font-size: f2r(11.5);
+  line-height: 1.6;
+  color: $text-hint;
+}
+
+.kp-onboarding__warn {
+  display: block;
+  margin-bottom: f2r(8);
+  font-size: f2r(11.5);
+  line-height: 1.5;
+  color: $point-spend;
+}
+
+.kp-onboarding__warn-block {
+  display: block;
+  margin-top: f2r(12);
+  font-size: f2r(11.5);
+  line-height: 1.6;
+  color: $point-spend;
+}
+
+.kp-onboarding__consent-title {
+  display: block;
+  font-size: f2r(13.5);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-onboarding__checkbox-row {
+  display: flex;
+  align-items: flex-start;
+}
+
+.kp-onboarding__checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(20);
+  height: f2r(20);
+  margin-right: f2r(8);
+  border: f2r(1.5) solid $text-hint;
+  border-radius: f2r(6);
+  box-sizing: border-box;
+
+  &.is-checked {
+    border-color: $primary-deep;
+    background-color: $primary-deep;
+  }
+}
+
+.kp-onboarding__checkbox-label {
+  flex: 1;
+  font-size: f2r(13);
+  line-height: 1.5;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.kp-onboarding__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kp-onboarding__option-title {
+  display: block;
+  font-size: f2r(14.5);
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.kp-onboarding__chips {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.kp-onboarding__chip {
+  margin: 0 f2r(10) f2r(10) 0;
+}
+
+.kp-onboarding__template {
+  display: flex;
+  align-items: flex-start;
+}
+
+.kp-onboarding__template-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: f2r(40);
+  height: f2r(40);
+  margin-right: f2r(12);
+  border-radius: f2r(12);
+}
+
+.kp-onboarding__template-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.kp-onboarding__template-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kp-onboarding__template-title {
+  font-size: f2r(14);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-onboarding__template-points {
+  margin-left: f2r(8);
+  font-size: f2r(14);
+  font-weight: 800;
+  color: $point-gain;
+
+  &.is-penalty {
+    color: $point-spend;
+  }
+}
+
+.kp-onboarding__radio {
+  width: f2r(18);
+  height: f2r(18);
+  margin-left: f2r(8);
+  margin-top: f2r(3);
+  border: f2r(1.5) solid $text-hint;
+  border-radius: f2r(999);
+  box-sizing: border-box;
+
+  &.is-selected {
+    border-color: $primary-deep;
+    background-color: $primary-deep;
+  }
+}
+
+.kp-onboarding__rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: f2r(5) 0;
+}
+
+.kp-onboarding__rule-title {
+  flex: 1;
+  font-size: f2r(13);
+  color: $text-primary;
+}
+
+.kp-onboarding__footer {
+  display: flex;
+  align-items: center;
+  padding: f2r(10) f2r(20) f2r(16);
+  border-top: f2r(1) solid $divider;
+  background-color: $page-top;
+}
+
+.kp-onboarding__back {
+  padding: f2r(8) f2r(4);
+  margin-right: f2r(8);
+}
+
+.kp-onboarding__back-text {
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-onboarding__primary {
+  flex: 1;
+}

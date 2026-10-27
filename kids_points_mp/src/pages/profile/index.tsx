@@ -110,6 +110,27 @@ export default function Profile() {
     )
   }
 
+  /**
+   * 打开首启引导（W8-B）。
+   *
+   * `needsOnboarding` ⇒ 进引导页；否则只重拉一次状态并把结论说出来
+   * （「不知道」不等于「未引导」，不能贸然把人推进一个 409 的流程）。
+   */
+  const handleOnboarding = async () => {
+    if (!store.needsOnboarding) {
+      await store.refreshOnboarding()
+      toast(
+        store.onboardingError ??
+          (store.needsOnboarding
+            ? '引导还没完成，可以点「继续首次引导」。'
+            : '引导状态已更新。')
+      )
+      return
+    }
+    void Taro.navigateTo({ url: '/pages/onboarding/index' })
+  }
+
+
   const handleReset = () => {
     if (store.isReadOnly) {
       toast(store.readOnlyWriteMessage)
@@ -251,6 +272,29 @@ export default function Profile() {
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
             <View className='kp-profile__menu-divider' />
+            {/* W8-B：引导入口。闸门在「状态未知」时放行进首页（断网 / 403），
+                这里必须留一个可重试的入口；`onboarded=false` 时是「继续首次引导」。 */}
+            {store.hasOnboarding &&
+            (store.needsOnboarding || store.onboardingError !== null) ? (
+              <>
+                <View
+                  className='kp-profile__menu'
+                  onClick={() => handleOnboarding()}
+                >
+                  <View
+                    className='kp-profile__menu-icon'
+                    style={{ backgroundColor: withAlpha('#7fbf55', 34 / 255) }}
+                  >
+                    <Icon name='star' size={19} color='#7fbf55' />
+                  </View>
+                  <Text className='kp-profile__menu-label'>
+                    {store.needsOnboarding ? '继续首次引导' : '重试读取引导状态'}
+                  </Text>
+                  <Icon name='chevronRight' size={22} color='#b6bdb0' />
+                </View>
+                <View className='kp-profile__menu-divider' />
+              </>
+            ) : null}
             {/* W7-B：监护人同意（先确认角色，再拉 `GET /consent`） */}
             <View
               className='kp-profile__menu'

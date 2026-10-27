@@ -8,6 +8,7 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
+import 'onboarding_screen.dart';
 import 'sheets/consent_sheet.dart';
 import 'sheets/export_sheet.dart';
 import 'sheets/family_deletion_sheet.dart';
@@ -231,6 +232,27 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.divider,
                     indent: 66,
                   ),
+                  if (store.hasOnboarding &&
+                      (store.needsOnboarding || store.onboardingError != null))
+                    ...<Widget>[
+                      _MenuRow(
+                        icon: Icons.auto_awesome_outlined,
+                        // W8-B：引导闸门在「状态未知」时放行进首页（断网 / 403），
+                        // 这里必须留一个可重试的入口；`onboarded=false` 时则是
+                        // 「继续首次引导」——中途退出的家长能从这里接着走（04 §6 4.12）。
+                        color: AppColors.primaryDeep,
+                        label: store.needsOnboarding
+                            ? '继续首次引导'
+                            : '重试读取引导状态',
+                        onTap: () => _openOnboarding(context, store),
+                      ),
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: AppColors.divider,
+                        indent: 66,
+                      ),
+                    ],
                   _MenuRow(
                     icon: Icons.verified_user_outlined,
                     // W7-B：监护人同意（查看 / 作出 / 撤回）。矩阵里
@@ -368,6 +390,44 @@ class ProfileScreen extends StatelessWidget {
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(content: Text(message ?? '昵称已更新')),
+    );
+  }
+
+  /// 打开首启引导（W8-B）。
+  ///
+  /// 两种入口共用一行：
+  ///   · `onboarded=false` ⇒ 进引导（从第①步重新走 —— 服务端只存学段 / 关注点，
+  ///     不存「上次走到第几步」，重走是刻意的：步骤不是权威状态）；
+  ///   · 状态未知（断网 / 403）⇒ 只重拉一次并报告结果，**不**贸然进引导。
+  Future<void> _openOnboarding(BuildContext context, AppStore store) async {
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    if (!store.needsOnboarding) {
+      await store.refreshOnboarding();
+      if (!context.mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            store.onboardingError ??
+                (store.needsOnboarding
+                    ? '引导还没完成，可以点「继续首次引导」。'
+                    : '引导状态已更新。'),
+          ),
+        ),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext routeContext) => OnboardingScreen(
+          onFinished: () {
+            // 完成之后**弹回「我的」页**（而不是切 tab）：闸门此时已经
+            // 会因为 `onboarded` 变 true 而放行，回到首页由用户自己决定。
+            Navigator.of(routeContext).pop();
+          },
+        ),
+      ),
     );
   }
 }

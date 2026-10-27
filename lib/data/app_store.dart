@@ -9,6 +9,7 @@ import '../models/family_export.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
 import '../models/member.dart';
+import '../models/onboarding.dart';
 import '../models/point_record.dart';
 import '../models/point_rule.dart';
 import '../models/rule_version.dart';
@@ -17,6 +18,9 @@ import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_icons.dart';
 import 'seed_data.dart';
+import 'onboarding_api.dart';
+import 'onboarding_dto.dart';
+import 'onboarding_mapper.dart';
 import 'read_api.dart';
 import 'read_api_errors.dart';
 import 'read_dto.dart';
@@ -60,9 +64,10 @@ class AppStore extends ChangeNotifier {
   /// 原先构造即 `_reset()` → 应用一打开就是假数据（124 分 / 324 好习惯 /
   /// “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的。
   /// seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
-  AppStore({ReadApiClient? readApi, WriteApi? writeApi})
+  AppStore({ReadApiClient? readApi, WriteApi? writeApi, OnboardingApi? onboardingApi})
       : _readApi = readApi,
-        _writeApi = writeApi {
+        _writeApi = writeApi,
+        _onboardingApi = onboardingApi {
     _resetToEmpty();
   }
 
@@ -75,6 +80,11 @@ class AppStore extends ChangeNotifier {
   /// 写 API 客户端（W4-E）；与 [_readApi] 一样只在配置齐全时注入。
   /// 它只覆盖已经上线的「打卡 / 撤销」两条写入口，其它写功能仍走只读拦截。
   final WriteApi? _writeApi;
+
+  /// 首启引导客户端（W8-B）。为 null = 不接后端（预览 / 测试夹具），
+  /// 引导闸门**不启用** —— 预览模式没有服务端状态，编一个「未引导」会把人
+  /// 推进一个永远完不成的流程。
+  final OnboardingApi? _onboardingApi;
 
   /// 一页流水条数 —— 与后端 DTO 的上限（200）同口径，50 是「首屏够用」的折中。
   static const int _recordsPageSize = 50;
@@ -271,9 +281,78 @@ class AppStore extends ChangeNotifier {
 
   /// 正在标记已读的通知 id；非 null 时该行禁用（防双击）。
   String? _busyNotificationId;
+  // ------------------------------------------- 首启引导（W8-B，服务端）
+  //
+  // 与同意 / 导出等「面板打开才拉」的切片**不同**：引导必须在**启动时**问一次。
+  // `Child.onboardedAt` 是权威状态（04 §3），客户端不许缓存 ——
+  // 不拉这一下，就只能在家长已经看到空首页之后才发现「其实该走引导」。
+  //
+  // 但「拉失败」**不阻塞**应用：403（孩子身份 / 只读成员）与网络错误都会让
+  // 闸门放行到首页 —— 否则一次断网就会把整个应用锁在「正在确认引导状态」。
+  // 失败原因经 [onboardingError] 上报，「我的」页仍可手动重试 / 进入引导。
+  //
+  // 快照只存服务端事实；「第几步」是界面的临时状态，**不进 store、不落库**
+  // （04 §3：引导只有一个权威状态）。
+
+  /// 最近一次成功拉到的引导快照；还没拉到过时是 null（**不是**「未完成引导」）。
+  OnboardingView? _onboarding;
+  ReadStatus _onboardingReadStatus = ReadStatus.idle;
+  String? _onboardingError;
+  int _onboardingReadEpoch = 0;
+
+  /// 是否正在提交草稿 / 完成引导 —— 界面据此禁用按钮（防双击重复采纳）。
+  bool _onboardingWriteBusy = false;
+
+  /// 最近一次「完成引导」的结果（第⑦步要显示「已采纳 N 条」）。
+  OnboardingResult? _lastOnboardingResult;
+
+  /// 完成引导后**成功加入今日习惯**的条数（扣分约定不会加）。
+  int _lastOnboardingHabitCount = 0;
+
+  /// 没能自动加入今日习惯的约定标题（扣分约定 / 单条失败）——
+  /// 第⑦步必须把这些**说出来**，否则家长会以为首页该有的习惯已经全在了。
+  List<String> _lastOnboardingManualTitles = <String>[];
+
+
 
   /// 是否接入了后端（与「当前是否已加载成功」是两件事）。
   bool get isLiveMode => _readApi != null;
+
+  // ----------------------------------------------------- 首启引导：只读快照
+
+  /// 引导闸门是否可用（接上了引导客户端）。
+  ///
+  /// 预览模式 / 只注入了读客户端的测试夹具里它是 false —— 闸门**不启用**，
+  /// 界面直接进首页。绝不用「本地默认未引导」把人推进一个发不出请求的流程。
+  bool get hasOnboarding => _onboardingApi != null;
+
+  /// 最近一次拉到的引导快照；null = 还没成功拉到（**不是**「未引导」）。
+  OnboardingView? get onboarding => _onboarding;
+
+  ReadStatus get onboardingReadStatus => _onboardingReadStatus;
+
+  /// 拉引导状态失败的原因（403 = 当前身份没有 `view_onboarding`，通常是孩子设备）。
+  String? get onboardingError => _onboardingError;
+
+  /// 是否正在提交引导草稿 / 完成引导。
+  bool get isOnboardingBusy => _onboardingWriteBusy;
+
+  /// 是否**必须**走引导：服务端明确说「未完成」。
+  ///
+  /// ★ 只有拿到 `onboarded: false` 才为 true。状态未知（idle / loading / error）
+  ///   一律 false —— 把「不知道」当成「未引导」会让一次超时变成一场强制引导。
+  bool get needsOnboarding => _onboarding?.onboarded == false;
+
+  /// 最近一次完成引导的结果；没完成过是 null。
+  OnboardingResult? get lastOnboardingResult => _lastOnboardingResult;
+
+  /// 完成引导后成功加入今日习惯的条数。
+  int get lastOnboardingHabitCount => _lastOnboardingHabitCount;
+
+  /// 需要家长之后在「积分规则」页手动加入习惯的约定标题。
+  List<String> get lastOnboardingManualTitles =>
+      List<String>.unmodifiable(_lastOnboardingManualTitles);
+
 
   /// live 模式下是否已接上写端点（W4-E：只覆盖打卡 / 撤销）。
   bool get usesServerWrites => _readApi != null && _writeApi != null;
@@ -678,6 +757,13 @@ class AppStore extends ChangeNotifier {
     _notificationsHasMore = false;
     _unreadNotificationCount = 0;
     _busyNotificationId = null;
+    _onboarding = null;
+    _onboardingReadStatus = ReadStatus.idle;
+    _onboardingError = null;
+    _onboardingWriteBusy = false;
+    _lastOnboardingResult = null;
+    _lastOnboardingHabitCount = 0;
+    _lastOnboardingManualTitles = <String>[];
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -1132,6 +1218,7 @@ class AppStore extends ChangeNotifier {
     _disposed = true;
     _readApi?.close();
     _writeApi?.close();
+    _onboardingApi?.close();
     super.dispose();
   }
 
@@ -3170,6 +3257,222 @@ class AppStore extends ChangeNotifier {
       _notify();
     }
   }
+
+  // ============================================ 首启引导：服务端读写（W8-B）
+
+  /// 拉取引导状态与模板库（`GET /onboarding`）—— **启动时**调用一次。
+  ///
+  /// 与同意 / 导出不同，它不是「打开面板才拉」：`onboardedAt` 是权威状态，
+  /// 客户端不缓存（`04` §3）。闸门（`OnboardingGate`）靠它决定进首页还是进引导。
+  ///
+  /// 失败**不清空**上一次的快照：一次断网不该把「已完成引导」说成「未引导」，
+  /// 也不该让已经走完的流程重新出现。错误经 [onboardingError] 上报，
+  /// 闸门在「状态未知」时放行到首页（宁可少拦一次，也不要把应用锁死）。
+  Future<void> refreshOnboarding() async {
+    final OnboardingApi? api = _onboardingApi;
+    if (api == null || _disposed) return;
+    final int epoch = ++_onboardingReadEpoch;
+    _onboardingReadStatus = ReadStatus.loading;
+    _onboardingError = null;
+    _notify();
+    try {
+      final OnboardingViewDto dto = await api.fetch();
+      if (_disposed || api != _onboardingApi || epoch != _onboardingReadEpoch) {
+        return;
+      }
+      _onboarding = mapOnboardingView(dto);
+      _onboardingReadStatus = ReadStatus.ready;
+    } on WriteApiException catch (error) {
+      if (_disposed || api != _onboardingApi || epoch != _onboardingReadEpoch) {
+        return;
+      }
+      _onboardingError = error.userMessage;
+      _onboardingReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _onboardingApi || epoch != _onboardingReadEpoch) {
+        return;
+      }
+      _onboardingError = '读取引导状态时发生意外错误。请重试。';
+      _onboardingReadStatus = ReadStatus.error;
+    } finally {
+      if (!_disposed && api == _onboardingApi && epoch == _onboardingReadEpoch) {
+        _notify();
+      }
+    }
+  }
+
+  /// 保存第③④步的草稿（`PATCH /onboarding/profile`）。成功返回 null。
+  ///
+  /// 三种意图必须可分（与后端 DTO 逐字同义）：
+  ///   · 都不传                ⇒ 什么都没改（本地直接返回 null，**不发请求**）；
+  ///   · `clearAgeBand = true` ⇒ 显式清空学段；
+  ///   · `focusAreas = []`     ⇒ 「一个都不选」。
+  ///
+  /// 失败时**不改本地快照**：让界面继续显示「上次真正落库的值」，
+  /// 家长可以重试；把失败当成成功会把第⑤步的排序解释成另一套。
+  Future<String?> saveOnboardingDraft({
+    AgeBand? ageBand,
+    bool clearAgeBand = false,
+    List<String>? focusAreas,
+  }) async {
+    final OnboardingApi? api = _onboardingApi;
+    if (api == null) return '当前没有接入后端，这次没有保存。';
+    if (!clearAgeBand && ageBand == null && focusAreas == null) return null;
+    if (_onboardingWriteBusy) return '上一次保存正在提交，请稍候…';
+
+    _onboardingWriteBusy = true;
+    _notify();
+    try {
+      final OnboardingStateDto dto = await api.saveProfile(
+        ageBand: ageBand,
+        clearAgeBand: clearAgeBand,
+        focusAreas: focusAreas,
+      );
+      if (_disposed) return null;
+      final OnboardingStateDraft draft = mapOnboardingState(dto);
+      final OnboardingView? current = _onboarding;
+      if (current == null) {
+        // 没有模板快照时无法合并（第⑤步会一条约定都画不出来）—— 重拉一次整体状态。
+        await refreshOnboarding();
+      } else {
+        _onboarding = current.withDraft(
+          ageBand: draft.ageBand,
+          clearAgeBand: draft.ageBand == null,
+          focusAreas: draft.focusAreas,
+        );
+      }
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 403（没同意 / 不是家长）/ 409（已经完成过）：本地快照可能已过时。
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshOnboarding();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '保存请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _onboardingWriteBusy = false;
+      _notify();
+    }
+  }
+
+  /// 完成引导（`POST /onboarding/complete`）：采纳模板 + 可选 PIN。成功返回 null。
+  ///
+  /// ── 为什么还要逐个「加入今日习惯」 ──────────────────────────────────────────
+  ///   `complete` 只把模板复制成 `PointRule`（`04` §3「复制而非引用」），
+  ///   而首页打卡用的是 `Habit`。`04` §6 4.3 要求「首页出现 3 个习惯」——
+  ///   因此这里用**既有**端点 `POST /point-rules/:id/habits` 逐条生成，
+  ///   扣分约定按 A1 的规则**不加**（它本来也不该成为孩子主动打卡的习惯）。
+  ///   单条失败不回滚已完成引导：把已成功的规则说成没成功才是更大的谎。
+  ///
+  /// ── 为什么最后要 `refreshFromServer()` ──────────────────────────────────────
+  ///   首页的余额 / 习惯 / 规则全部来自服务端快照；引导刚建了 N 条规则与若干习惯，
+  ///   不刷新就会进到一个「已完成引导但首页还是空的」页面。
+  Future<String?> completeOnboarding({
+    required List<String> templateSlugs,
+    AgeBand? ageBand,
+    List<String>? focusAreas,
+    String? parentPin,
+  }) async {
+    final OnboardingApi? api = _onboardingApi;
+    if (api == null) return '当前没有接入后端，引导无法完成。';
+    if (_onboardingWriteBusy) return '上一次提交正在保存中，请稍候…';
+
+    _onboardingWriteBusy = true;
+    _notify();
+    try {
+      final OnboardingResultDto dto = await api.complete(
+        templateSlugs: templateSlugs,
+        ageBand: ageBand,
+        focusAreas: focusAreas,
+        parentPin: parentPin,
+      );
+      if (_disposed) return null;
+      final OnboardingResult result = mapOnboardingResult(dto);
+      _lastOnboardingResult = result;
+      _lastOnboardingHabitCount = 0;
+      _lastOnboardingManualTitles = <String>[];
+
+      final OnboardingView? current = _onboarding;
+      _onboarding = current == null
+          ? OnboardingView(
+              childId: result.childId,
+              onboarded: true,
+              onboardedAt: result.onboardedAt,
+              ageBand: ageBand,
+              focusAreas: focusAreas ?? const <String>[],
+              templates: const <RuleTemplate>[],
+            )
+          : current
+              .markCompleted(result.onboardedAt)
+              .withDraft(ageBand: ageBand, focusAreas: focusAreas);
+
+      await _attachOnboardingHabits(result.rules);
+      if (!_disposed) await refreshFromServer();
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 409 `ONBOARDING_ALREADY_COMPLETED`：另一台设备 / 上一次请求其实成功了。
+      // 拉一次真状态，让闸门按服务端事实放行，而不是把用户卡在引导里重试。
+      if (error.kind == WriteFailureKind.conflict ||
+          error.kind == WriteFailureKind.forbidden) {
+        await refreshOnboarding();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '完成引导的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _onboardingWriteBusy = false;
+      _notify();
+    }
+  }
+
+  /// 把刚采纳的规则逐条变成首页习惯。
+  ///
+  /// 409 `HABIT_ALREADY_EXISTS` 视为**已在习惯里**（可能是重试 / 另一台设备刚加过），
+  /// 计成功；扣分约定与其它失败进 [lastOnboardingManualTitles]，由第⑦步如实列出。
+  Future<void> _attachOnboardingHabits(
+    List<OnboardingCreatedRule> rules,
+  ) async {
+    final WriteApi? api = _writeApi;
+    final List<String> manual = <String>[];
+    int created = 0;
+    for (final OnboardingCreatedRule rule in rules) {
+      if (rule.isPenalty) {
+        // A1：扣分规则不能变成「孩子打卡加分」的习惯，服务端也会拒绝。
+        manual.add(rule.title);
+        continue;
+      }
+      if (api == null) {
+        manual.add(rule.title);
+        continue;
+      }
+      try {
+        final HabitDto dto = await api.addHabitFromRule(
+          rule.ruleId,
+          idempotencyKey: _newIdempotencyKey('onboarding-habit'),
+        );
+        if (_disposed) return;
+        _applyHabitDto(dto);
+        created++;
+      } on WriteApiException catch (error) {
+        if (error.kind == WriteFailureKind.conflict) {
+          // 已经在习惯里 —— 对家长来说结果一样，不列进「需要手动处理」。
+          created++;
+          continue;
+        }
+        manual.add(rule.title);
+      } catch (error) {
+        manual.add(rule.title);
+      }
+    }
+    _lastOnboardingHabitCount = created;
+    _lastOnboardingManualTitles = manual;
+    _notify();
+  }
+
 
   // ========================================== 家庭数据导出：服务端读取（W7-C）
 

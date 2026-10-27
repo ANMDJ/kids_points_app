@@ -1,5 +1,6 @@
 import { View, Text } from '@tarojs/components'
-import { stopPullDownRefresh, usePullDownRefresh } from '@tarojs/taro'
+import { redirectTo, stopPullDownRefresh, usePullDownRefresh } from '@tarojs/taro'
+import { useEffect } from 'react'
 
 import AppBottomNav from '../../components/AppBottomNav'
 import GradientPage from '../../components/GradientPage'
@@ -21,6 +22,14 @@ import './index.scss'
 export default function Home() {
   const store = useStore()
   const sheet = useSheet()
+
+  // W8-B：引导闸门。只有服务端明确说 `onboarded: false` 才重定向
+  // （`needsOnboarding` 在状态未知 / 拉取失败时是 false —— 一次超时不该把人
+  // 锁进一个完不成的引导）。`redirectTo` 让页面栈只留一层，与底部导航同策略。
+  useEffect(() => {
+    if (!store.needsOnboarding) return
+    void redirectTo({ url: '/pages/onboarding/index' })
+  }, [store.needsOnboarding])
 
   // 与 Flutter 首页一致：下拉是新数据入口；失败时由 ReadStatusBanner 显示原因，
   // 已有内容保留（store 内部保证），这里只负责收起原生下拉动画。
