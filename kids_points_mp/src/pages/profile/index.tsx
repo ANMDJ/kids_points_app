@@ -14,12 +14,14 @@ import InviteSheet from '../../sheets/InviteSheet'
 import MemberSheet from '../../sheets/MemberSheet'
 import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
 import NotificationsSheet from '../../sheets/NotificationsSheet'
+import ParentModeSheet from '../../sheets/ParentModeSheet'
 import TrashSheet from '../../sheets/TrashSheet'
 import { ALLOW_DEMO_RESET, useStore } from '../../data/store'
 import { notificationBadgeText } from '../../data/notification'
 import { withAlpha } from '../../utils/color'
 import { pushPage, switchTab } from '../../utils/nav'
-import { prompt, toast } from '../../utils/toast'
+import { prompt, toast, confirm } from '../../utils/toast'
+import { useAuthGate } from '../../utils/useAuthGate'
 import { useSheet } from '../../utils/useSheet'
 import './index.scss'
 
@@ -59,6 +61,9 @@ function StatColumn({ value, label }: { value: number; label: string }) {
 /** 我的：孩子档案 + 好习惯 / 奖励次数战绩 + 积分记录 / 积分规则入口。 */
 export default function Profile() {
   const store = useStore()
+
+  // W9-B：登录闸门（详见 `utils/useAuthGate.ts`）。
+  useAuthGate()
   // 修 C9：回收站入口固定在“我的”页（两端同一处）—— 打开的是底部弹窗，
   // 不新增路由，恢复 / 彻底删除各一条路径。
   const trashSheet = useSheet()
@@ -69,6 +74,10 @@ export default function Profile() {
   // W5-I：邀请码面板自己先确认角色（`invite_member` 仅家长 ALLOW），
   // 所以入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const inviteSheet = useSheet()
+  // W8-C：家长模式。矩阵里 `switch_role_mode` 对孩子**也是** ALLOW —— PIN 才是
+  // 那道门，所以这一行在孩子设备上同样显示：家长可以把手机接过去自己输 PIN，
+  // 不必让孩子「先登出再登录」。
+  const parentModeSheet = useSheet()
   // W7-B：监护人同意。入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const consentSheet = useSheet()
   // W7-C：导出家庭数据。入口同样对所有角色可见（面板自己先确认角色），
@@ -130,6 +139,24 @@ export default function Profile() {
     void Taro.navigateTo({ url: '/pages/onboarding/index' })
   }
 
+
+  /**
+   * 退出登录（W9-B）。
+   *
+   * 顺序是「先问服务端再清本地」：`logout()` 会 `POST /auth/logout` 撤销 token，
+   * 即使这一步失败，本地也照样清空（`store.logout()` 内部保证），返回的文案
+   * 只是「服务端没确认撤销」的提醒 —— 不能因为网络问题就让人登不出去。
+   */
+  const handleLogout = async () => {
+    const ok = await confirm(
+      '退出后需要重新微信登录才能看到积分数据。',
+      '退出登录',
+      '退出'
+    )
+    if (!ok) return
+    const message = await store.logout()
+    toast(message ?? '已退出登录')
+  }
 
   const handleReset = () => {
     if (store.isReadOnly) {
@@ -272,6 +299,30 @@ export default function Profile() {
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
             <View className='kp-profile__menu-divider' />
+            {/* W8-C：家长模式（PIN 换 5 分钟家长权限）。矩阵里 `switch_role_mode`
+                对孩子**也是** ALLOW —— PIN 才是那道门，所以孩子设备上同样显示。
+                `hasParentMode` 为假（预览模式 / 未配后端）时整行不渲染：点开只会
+                看到一句「没接后端」，不如不给入口。 */}
+            {store.hasParentMode ? (
+              <>
+                <View
+                  className='kp-profile__menu'
+                  onClick={() => parentModeSheet.show()}
+                >
+                  <View
+                    className='kp-profile__menu-icon'
+                    style={{ backgroundColor: withAlpha('#6aa84f', 34 / 255) }}
+                  >
+                    <Icon name='check' size={19} color='#6aa84f' />
+                  </View>
+                  <Text className='kp-profile__menu-label'>
+                    {store.isParentMode ? '家长模式 · 已开启' : '家长模式'}
+                  </Text>
+                  <Icon name='chevronRight' size={22} color='#b6bdb0' />
+                </View>
+                <View className='kp-profile__menu-divider' />
+              </>
+            ) : null}
             {/* W8-B：引导入口。闸门在「状态未知」时放行进首页（断网 / 403），
                 这里必须留一个可重试的入口；`onboarded=false` 时是「继续首次引导」。 */}
             {store.hasOnboarding &&
@@ -364,6 +415,26 @@ export default function Profile() {
               </Text>
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
+            {/* W9-B：退出登录。只在真的有会话时出现 —— 预览模式没有 token，
+                「退出」无从谈起；`.kp-profile__menu-divider` 必须留在卡片内。 */}
+            {store.isAuthenticated ? (
+              <>
+                <View className='kp-profile__menu-divider' />
+                <View className='kp-profile__menu' onClick={handleLogout}>
+                  <View
+                    className='kp-profile__menu-icon'
+                    style={{ backgroundColor: withAlpha('#d9534f', 34 / 255) }}
+                  >
+                    <Icon name='close' size={19} color='#d9534f' />
+                  </View>
+                  <Text className='kp-profile__menu-label'>退出登录</Text>
+                  <Text className='kp-profile__menu-account'>
+                    {store.accountLabel}
+                  </Text>
+                  <Icon name='chevronRight' size={22} color='#b6bdb0' />
+                </View>
+              </>
+            ) : null}
           </AppCard>
         </View>
 
@@ -414,6 +485,14 @@ export default function Profile() {
           <InviteSheet
             visible={inviteSheet.visible}
             onClose={inviteSheet.hide}
+          />
+        ) : null}
+        {/* W8-C：家长模式弹窗。打开时才拉 `GET /auth/parent-mode`；
+            明文 PIN 只活在这个组件的 state 里，关闭即卸载。 */}
+        {parentModeSheet.open ? (
+          <ParentModeSheet
+            visible={parentModeSheet.visible}
+            onClose={parentModeSheet.hide}
           />
         ) : null}
         {/* W7-B：监护人同意弹窗（先确认角色，再拉 `GET /consent`） */}

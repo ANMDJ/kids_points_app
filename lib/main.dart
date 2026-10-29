@@ -4,6 +4,7 @@ import 'data/app_scope.dart';
 import 'data/app_store.dart';
 import 'data/device_token_api.dart';
 import 'data/onboarding_api.dart';
+import 'data/parent_mode_api.dart';
 import 'data/push_token_lifecycle.dart';
 import 'data/push_token_registration.dart';
 import 'data/push_token_runtime.dart';
@@ -38,6 +39,9 @@ void main() {
         // W8-B：引导闸门。只在配置齐全时注入 —— 预览模式没有服务端状态，
         // 编一个「未引导」会把人推进一个永远完不成的流程。
         onboardingApi: configured ? OnboardingApiClient(config: config) : null,
+        // W8-C：切家长模式 + 设 / 改家长 PIN。同样只在配置齐全时注入 ——
+        // 预览模式没有会话、没有 PIN，画一个点了必然失败的入口比不画更糟。
+        parentModeApi: configured ? ParentModeApiClient(config: config) : null,
       ),
     ),
   );

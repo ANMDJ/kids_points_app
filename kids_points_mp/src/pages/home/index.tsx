@@ -15,6 +15,7 @@ import { useStore } from '../../data/store'
 import type { Habit } from '../../data/types'
 import { toast } from '../../utils/toast'
 import { switchTab } from '../../utils/nav'
+import { useAuthGate } from '../../utils/useAuthGate'
 import { useSheet } from '../../utils/useSheet'
 import './index.scss'
 
@@ -22,6 +23,10 @@ import './index.scss'
 export default function Home() {
   const store = useStore()
   const sheet = useSheet()
+
+  // W9-B：登录闸门。会话没就绪时 **先** 离开这一屏 —— 下面任何渲染都可能
+  // 把"还没确认身份"的数据画成用户的积分。
+  useAuthGate()
 
   // W8-B：引导闸门。只有服务端明确说 `onboarded: false` 才重定向
   // （`needsOnboarding` 在状态未知 / 拉取失败时是 false —— 一次超时不该把人

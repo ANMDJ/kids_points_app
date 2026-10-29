@@ -51,10 +51,10 @@ test('划分完整性：每个矩阵动作**恰好**落在写侧或豁免侧（�
   assert.deepEqual(unknownClassifiedActions(), [], '分类表里出现了矩阵没有的动作（拼错 / 动作被删）')
 })
 
-test('规模：41 个动作 = 24 写 + 17 豁免（数字变了必须同时改 PRD 与用例）', () => {
-  assert.equal(ALL_ACTIONS.length, 41)
+test('规模：42 个动作 = 24 写 + 18 豁免（数字变了必须同时改 PRD 与用例）', () => {
+  assert.equal(ALL_ACTIONS.length, 42)
   assert.equal(CONSENT_GATED_ACTIONS.length, 24)
-  assert.equal(CONSENT_EXEMPT_ACTIONS.length, 17)
+  assert.equal(CONSENT_EXEMPT_ACTIONS.length, 18)
   assert.equal(
     CONSENT_GATED_ACTIONS.length + CONSENT_EXEMPT_ACTIONS.length,
     ALL_ACTIONS.length,

@@ -4,11 +4,13 @@
 //   —— 实测踩到，见 docs/design/06-w0-report.md §2。
 import 'dotenv/config'
 
+import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
 import { applyGlobalPipes, logBootstrap } from './app.setup'
 import { FamilyDeletionWorker } from './deletion/deletion.worker'
+import { assertAuthBootConfig } from './identity/auth-config'
 import { PushRetryWorker } from './notifications/push-retry.worker'
 import { NotificationsReconcileWorker } from './notifications/notifications.reconcile.worker'
 import { PushRetryRetentionWorker } from './notifications/push-retry.retention.worker'
@@ -25,6 +27,13 @@ import { PushRetryRetentionWorker } from './notifications/push-retry.retention.w
  * 免得「测试里搭的 app」与「真实启动的 app」是两份配置（见 app.setup.ts 的说明）。
  */
 async function bootstrap(): Promise<void> {
+  // ★ W9-A（`40` §9.4）：认证层的启动自检，**必须在建 app 之前**。
+  //   它只判会成为**洞**的配置：生产环境开着 `AUTH_DEVICE_ID_FALLBACK=1`
+  //   （把客户端自报的 `x-kp-device-id` 当凭据用）⇒ 抛错，进程不该起来。
+  //   放在 `NestFactory.create` 之前而不是之后：起得来的 app 会先监听端口，
+  //   而"先对公网开放、再因为配置崩掉"这一段正是配置错误最贵的时候。
+  assertAuthBootConfig()
+
   const app = await NestFactory.create(AppModule)
 
   // 关闭 Nest 的隐式 200 —— 审批创建必须显式返回 202（见 02 §9.3）。
@@ -57,5 +66,13 @@ async function bootstrap(): Promise<void> {
   app.get(FamilyDeletionWorker).start()
 }
 
-void bootstrap()
+// ★ W9-A：启动失败的**显式**退出。没有这段时，`assertAuthBootConfig()` 抛出的
+//   `AuthBootConfigError` 会变成一个未处理的 Promise rejection —— Node 会退出
+//   （非 0），但日志里是"unhandled rejection"堆栈，运维看不出那句话是**配置判据**，
+//   而不是"服务器坏了"。这里把它显式打成一行人话 + 退出码 1。
+void bootstrap().catch((error: unknown) => {
+  const detail = error instanceof Error ? error.message : String(error)
+  Logger.error(`启动失败，进程退出：${detail}`, undefined, 'Bootstrap')
+  process.exitCode = 1
+})
 

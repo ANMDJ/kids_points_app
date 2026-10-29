@@ -189,6 +189,9 @@ enum ActionType {
   remove_member
   switch_role_mode
   edit_child_profile
+  /// 家长 PIN 的设置 / 修改（W8-C，02 §7）。只给家长；同意闸门**豁免**
+  /// （PIN 是家长自己的凭据，且它是"没 PIN ⇒ 进不了家长模式 ⇒ 无法重新同意"的出口）。
+  manage_parent_pin
   /// 首启引导（W8-A）：读（`view_onboarding`，同意闸门**豁免** —— 第①步就是同意，
   /// 页必须先能打开）与写（`apply_onboarding`，受同意闸门管 —— 第②步起采集昵称）。
   view_onboarding
@@ -225,6 +228,8 @@ model User {
   relations          UserChildRelation[]
   members            ChildMember[]
   deviceSessions     DeviceSession[]
+  /// 认证会话（W9-A，2026-10-29 / `40` §5）：**"你是谁"**，与 DeviceSession 分工。
+  authSessions       AuthSession[]
   deviceTokens       DeviceToken[]
   changedVersions    PointRuleVersion[]
   operatedRecords    PointRecord[]       @relation("RecordOperator")
@@ -360,6 +365,55 @@ model DeviceSession {
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([deviceId, childId])
+  @@index([expiresAt])
+}
+
+/// 认证会话（W9-A，2026-10-29 / `docs/design/40-login-and-session-design.md` §5）。
+///
+/// ── 它回答的问题与 `DeviceSession` **不同** ────────────────────────────────────
+///   · 本表：**"你是谁"**（微信 `code2session` → openId → 这个人）。跨设备、跨孩子。
+///   · `DeviceSession`：**"你在这台设备的这个孩子上是什么角色"**（含 5 分钟家长模式窗口）。
+///   合并它们的代价已经在 W8-C 付过一次：同一列 `expiresAt` 既是"邀请码给的 30 天身份"
+///   又是"PIN 换来的 5 分钟家长模式"，`parentModeSourceOf()` 只能靠算术猜来源。
+///
+/// ── 凭据形态：不透明随机 token（**不是 JWT**，理由见 `40` §4）──────────────
+///   明文形如 `kps_<base64url(32B)>`，**只在登录响应里出现一次，绝不落库**；
+///   库里只存 `sha256(明文)` 的 64 位十六进制。撤销本来就要查库，JWT 的无状态优势归零。
+///
+/// ── 为什么 `method` 是 String 而不是 PG 枚举 ─────────────────────────────────
+///   `RelationKind` 的教训：枚举值要在三处逐字一致（schema / 迁移 / 注释），
+///   还要一条 `npm run relation:check`。`method` 只有两个值、只被服务端写、
+///   **永不参与权限判定** ⇒ 用 `String` + 应用层白名单（读到白名单外的值 ⇒ **500 形状错**，
+///   与 `session.gate.ts#INVALID_SESSION_ROLE` 同一口径）。
+model AuthSession {
+  id     String @id @default(cuid())
+  userId String
+
+  /// `sha256(token)` 的十六进制（64 字符）。★ 与 `ChildMember.pinHash` 的 scrypt 不同：
+  /// token 有 256 bit 熵，慢哈希是负收益（每个请求多 30ms CPU）。
+  tokenHash String @unique
+
+  /// 认证方式白名单：`wechat_mp` | `dev_seed`（后者仅非生产）。
+  method String
+
+  /// 签发时客户端自报的设备标识：**只进审计，不参与任何判定**（`40` §5.1 第 2 条）。
+  /// ★ 它是客户端生成的稳定 id，不是凭据；凭据只有 `tokenHash`。
+  deviceId String?
+
+  issuedAt DateTime @default(now())
+  /// 只回答"这台设备还活着吗"（运营/审计），**不参与过期判定**。
+  /// ⚠️ 顺手拿它延长 `expiresAt` 是本设计最容易发生的退化 —— 那会变成滑动窗口，
+  ///    手机丢了之后凭据无限期活着（`40` §4.3）。
+  lastSeenAt DateTime @default(now())
+  /// 绝对到期（7 天）：**不因使用而延长**。
+  expiresAt DateTime
+
+  revokedAt     DateTime?
+  revokedReason String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
   @@index([expiresAt])
 }
 

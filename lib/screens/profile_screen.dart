@@ -16,6 +16,7 @@ import 'sheets/invite_sheet.dart';
 import 'sheets/member_sheet.dart';
 import 'sheets/my_applications_sheet.dart';
 import 'sheets/notifications_sheet.dart';
+import 'sheets/parent_mode_sheet.dart';
 import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
@@ -232,6 +233,24 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.divider,
                     indent: 66,
                   ),
+                  if (store.hasParentMode) ...<Widget>[
+                    _MenuRow(
+                      icon: Icons.admin_panel_settings_outlined,
+                      // W8-C：切家长模式（PIN 换 5 分钟）。矩阵里
+                      // `switch_role_mode` 对孩子**也是** ALLOW —— PIN 才是那道门，
+                      // 所以这一行在孩子设备上同样要显示：家长可以把手机接过去
+                      // 自己输 PIN，不必让孩子"先登出再登录"。
+                      color: AppColors.primaryDeep,
+                      label: store.isParentMode ? '家长模式 · 已开启' : '家长模式',
+                      onTap: () => showParentModeSheet(context),
+                    ),
+                    const Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: AppColors.divider,
+                      indent: 66,
+                    ),
+                  ],
                   if (store.hasOnboarding &&
                       (store.needsOnboarding || store.onboardingError != null))
                     ...<Widget>[

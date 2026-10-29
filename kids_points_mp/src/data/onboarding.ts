@@ -1,4 +1,8 @@
 import {
+  kAuthorizationHeader,
+  sharedAuthTokens
+} from './auth_token_holder'
+import {
   ReadApiConfig,
   kChildIdHeader,
   kDeviceIdHeader,
@@ -448,9 +452,12 @@ export class OnboardingApiClient implements OnboardingApi {
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      [kDeviceIdHeader]: this.config.deviceId.trim(),
-      [kChildIdHeader]: this.config.childId.trim()
+      [kDeviceIdHeader]: this.config.effectiveDeviceId,
+      [kChildIdHeader]: this.config.effectiveChildId
     }
+    // W9-A：引导期三条路由同样要 Bearer（`POST /onboarding/*` 都在登录之后）。
+    const authorization = sharedAuthTokens.authorizationHeader()
+    if (authorization !== null) headers[kAuthorizationHeader] = authorization
     // GET 绝不声明 Content-Type：严格后端会拒绝「GET 带 JSON 空体」。
     if (body !== null) {
       headers['Content-Type'] = 'application/json; charset=utf-8'

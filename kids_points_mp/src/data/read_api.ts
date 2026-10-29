@@ -1,5 +1,10 @@
 import { request } from '@tarojs/taro'
 
+import {
+  kAuthorizationHeader,
+  sharedAuthTokens
+} from './auth_token_holder'
+import { sharedDeviceContext } from './runtime_identity'
 import { ReadApiException } from './read_api_errors'
 import {
   ApprovalsPageDto,
@@ -84,7 +89,27 @@ export class ReadApiConfig {
     )
   }
 
-  /** 三项都齐才接后端 —— 少一项就退回预览数据，**绝不**发一个会 401 的请求。 */
+  /**
+   * 这次请求实际要发的 deviceId。
+   *
+   * ★ 运行期（登录后）优先：编译期值只是"没登录时也能连本地后端"的调试通道，
+   *   登录成功后必须被服务端下发的事实覆盖（`runtime_identity.ts` 文件头）。
+   */
+  get effectiveDeviceId(): string {
+    return sharedDeviceContext.deviceId() ?? this.deviceId.trim()
+  }
+
+  /** 这次请求实际要发的 childId（同上：运行期 > 编译期）。 */
+  get effectiveChildId(): string {
+    return sharedDeviceContext.childId() ?? this.childId.trim()
+  }
+
+  /**
+   * 三项都齐才接后端 —— 少一项就退回预览数据，**绝不**发一个会 401 的请求。
+   *
+   * W9-B：`deviceId` / `childId` 可以由**登录链路**在运行期提供，
+   * 此时编译期那两项可以留空（新用户本来就不可能预先知道 childId）。
+   */
   get isConfigured(): boolean {
     return this.validationError === null
   }
@@ -101,11 +126,17 @@ export class ReadApiConfig {
     if (!/^https?:\/\/[^/\s]+/i.test(base)) {
       return `TARO_APP_KP_API_BASE_URL 不是合法的 http(s) 地址：${base}。`
     }
-    if (this.deviceId.trim() === '') {
-      return '未配置 TARO_APP_KP_DEVICE_ID：请求需要设备身份（401 之前就拦下）。'
+    if (this.effectiveDeviceId === '') {
+      return (
+        '还没有设备标识：请先登录（登录链路会自动生成并持久化一个），' +
+        '或在 .env.local 配 TARO_APP_KP_DEVICE_ID 做本地调试。'
+      )
     }
-    if (this.childId.trim() === '') {
-      return '未配置 TARO_APP_KP_CHILD_ID：请求必须指明操作哪个孩子。'
+    if (this.effectiveChildId === '') {
+      return (
+        '还没有当前孩子：请先登录（`GET /auth/session` 会给出 childId），' +
+        '或在 .env.local 配 TARO_APP_KP_CHILD_ID 做本地调试。'
+      )
     }
     return null
   }
@@ -408,9 +439,14 @@ export class ReadApiClient {
     const uri = this.config.uri(path, query)
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      [kDeviceIdHeader]: this.config.deviceId.trim(),
-      [kChildIdHeader]: this.config.childId.trim()
+      [kDeviceIdHeader]: this.config.effectiveDeviceId,
+      [kChildIdHeader]: this.config.effectiveChildId
     }
+    // W9-A：登录之后每个请求都要带 Bearer（`40` §10.1）。
+    // 没登录（预览模式 / 还没走登录链路）时持有者是空的 ⇒ 一个头都不加，
+    // 既有行为逐字不变。
+    const authorization = sharedAuthTokens.authorizationHeader()
+    if (authorization !== null) headers[kAuthorizationHeader] = authorization
 
     let response: ReadHttpResponse
     try {

@@ -822,13 +822,15 @@ describe('生产闸门与 decide 边界', () => {
     port.rows.clear()
   })
 
-  it('身份：`NODE_ENV=production` → 503（临时角色头**禁止**上生产）', async () => {
+  // ★ W9-A：原本断言 503 —— 那时设备头就是凭据；现在凭据是 Bearer token，
+  //   生产环境没有 token ⇒ 401 UNAUTHENTICATED（判定**仍**在读库之前）。
+  it('身份：`NODE_ENV=production` 且没有 Bearer → 401（设备头**不再**是凭据）', async () => {
     const saved = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'
     try {
       const r = await send(url, '/approvals', { body: { action: 'redeem' }, headers: GUARDIAN })
-      assert.equal(r.status, 503, '生产环境竟接受了客户端自报的角色 —— 那就是提权后门')
-      assert.equal(r.body.code, 'IDENTITY_NOT_IMPLEMENTED')
+      assert.equal(r.status, 401, '生产环境竟接受了客户端自报的设备头 —— 那就是提权后门')
+      assert.equal(r.body.code, 'UNAUTHENTICATED')
       assert.equal(port.calls.length, 0)
     } finally {
       if (saved === undefined) delete process.env.NODE_ENV

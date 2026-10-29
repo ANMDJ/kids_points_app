@@ -27,6 +27,10 @@ export interface SoftTextFieldProps {
   maxLines?: number
   /** 数字键盘（积分值等） */
   digit?: boolean
+  /** 密码输入（家长 PIN）：内容以圆点显示 */
+  password?: boolean
+  /** 最大输入长度；不传则沿用平台默认（140），**不改**既有输入框的行为 */
+  maxLength?: number
   className?: string
 }
 
@@ -37,6 +41,8 @@ export function SoftTextField({
   hint,
   maxLines = 1,
   digit = false,
+  password = false,
+  maxLength,
   className = ''
 }: SoftTextFieldProps) {
   const shared = {
@@ -63,6 +69,8 @@ export function SoftTextField({
     <Input
       {...shared}
       type={digit ? 'number' : 'text'}
+      password={password}
+      {...(maxLength !== undefined ? { maxlength: maxLength } : {})}
       onInput={(event) => onChange(event.detail.value)}
     />
   )

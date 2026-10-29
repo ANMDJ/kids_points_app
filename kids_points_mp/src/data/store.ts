@@ -56,7 +56,30 @@ import {
   type OnboardingResult,
   type OnboardingView
 } from './onboarding'
+import {
+  createParentModeApiFromEnvironment,
+  isParentModePinBacked,
+  isParentModeSessionBacked,
+  isParentPinLockedAt,
+  parentModeRemainingSeconds,
+  parentPinLockSecondsAt,
+  PARENT_MODE_UNKNOWN,
+  ParentPinLockException,
+  validateParentPin,
+  type ParentMode,
+  type ParentModeApi,
+  type ParentPinResult
+} from './parent_mode'
 import type { ApprovalDto, MemberRemoveDto, WrittenRecordDto } from './write_dto'
+import {
+  AuthSessionMachine,
+  createAuthSessionMachine,
+  messageOf,
+  type AuthLoginReason,
+  type AuthRestoreResult
+} from './auth_session'
+import type { AuthUser, ChildMembership } from './auth_dto'
+import { sharedDeviceContext } from './runtime_identity'
 import type {
   ActorContext,
   AuditAction,
@@ -71,6 +94,7 @@ import type {
   Habit,
   HabitView,
   IconOption,
+  MemberRole,
   MutableMemberRole,
   PointRecord,
   PointRule,
@@ -136,6 +160,22 @@ export const ALLOW_DEMO_RESET = demoResetAllowed()
 export type ReadStatus = 'idle' | 'loading' | 'loadingMore' | 'ready' | 'error'
 
 /**
+ * 登录闸门的六个状态（W9-B）。
+ *
+ * `preview` 不是错误：没配后端时应用必须能照常跑本地预览（`40` §10.1 规矩三），
+ * 所以它和 `ready` 一样**允许进主页**；区别只在 `usingPreview === true`。
+ */
+export type AuthGateKind =
+  | 'idle' // 还没开始问（首帧）
+  | 'restoring' // 在问 GET /auth/session
+  | 'preview' // 没接后端：本地预览，不发登录请求
+  | 'needs_login' // 未登录 / token 被拒 / 账号停用
+  | 'needs_bootstrap' // 已登录，但这个账号还没有孩子档案
+  | 'needs_child_selection' // 多个孩子，需要选一个
+  | 'ready' // 会话就绪，可进主页
+  | 'unreachable' // 网络 / 服务端问题：**保 token**，只给重试
+
+/**
  * 应用状态中心：积分余额、习惯、心愿、流水、规则。
  *
  * 与 Flutter 版 lib/data/app_store.dart 一一对应，模块级单例，
@@ -192,16 +232,50 @@ export class AppStore {
   /** 一页流水条数 —— 与后端 DTO 上限（200）同口径，50 是「首屏够用」的折中。 */
   private static readonly recordsPageSize = 50
 
-  private readonly readApi: ReadApiClient | null
-  private readonly writeApi: WriteApi | null
+  private readApi: ReadApiClient | null
+  private writeApi: WriteApi | null
   /** 首启引导客户端（W8-B）；为 null = 不接后端，闸门不启用。 */
-  private readonly onboardingApi: OnboardingApi | null
+  private onboardingApi: OnboardingApi | null
+  /** 家长模式客户端（W8-C）；为 null = 不接后端，「我的」页不显示入口。 */
+  private parentModeApi: ParentModeApi | null
   private readStatusValue: ReadStatus = 'idle'
   private readErrorValue: ReadApiException | null = null
   private usingPreviewValue = true
   private moreAvailable = false
   private nextCursorValue: string | null = null
   private recordFilterValue: RecordCategory | null = null
+
+  // =============================================== 登录 / 会话闸门（W9-B）
+  //
+  // 为什么状态在 store 而不是页面：
+  //   同一个"要不要去登录页"的判断被 4 个 tab 页共用（首页 / 心愿 / 审批 /
+  //   我的）。放在页面里就会变成 4 份各自为政的 useEffect：谁先跑完谁说了算，
+  //   刷新一下又重来一遍。store 只有一份，且 `ensureAuthRestored()` 幂等。
+  //
+  // 为什么存 `kind` 而不是几个布尔：
+  //   `restoring` / `needs_login` / `needs_bootstrap` / `needs_child_selection`
+  //   / `ready` / `unreachable` 六个分支的界面动作**完全不同**（见
+  //   `auth_session.ts` 里 `AuthRestoreResult` 的注释）。压成 `loggedIn: boolean`
+  //   会把"网络断了"和"从没登录过"画成同一屏，而这两件事的处理方式相反：
+  //   前者**不能**清 token、**不能**跳登录页。
+
+  private readonly authMachine: AuthSessionMachine
+  private authKindValue: AuthGateKind = 'idle'
+  /** 一句可展示的话（`needs_login` 的文案由 `reason` 决定，这里只是补充说明）。 */
+  private authMessageValue = ''
+  private authReasonValue: AuthLoginReason | null = null
+  private authUserValue: AuthUser | null = null
+  private authMembershipValue: ChildMembership | null = null
+  /** 这条**设备会话**的绝对到期（epoch ms）；0 = 不知道。 */
+  private authSessionExpiresAtValue = 0
+  /** `needs_child_selection` 时可选的成员位（首版限 1 个孩子，正常为空）。 */
+  private authChildrenValue: readonly ChildMembership[] = []
+  /** `restore()` / `login()` 在途（登录按钮据此禁用，防连点两次 wx.login）。 */
+  private authBusyValue = false
+  /** 静默重登（`retryOnce`）在途 —— 与用户主动登录分开，界面不必显示 loading。 */
+  private authReloginInFlight = false
+  /** 已发起过恢复：防止 4 个页面同时挂载时打出 4 次 `GET /auth/session`。 */
+  private authRestoreStarted = false
 
   // ------------------------------------------------- 审批收件箱（W5-D）
   // 与 Flutter `AppStore` 同构；**独立**的一套状态（不复用流水的
@@ -324,6 +398,35 @@ export class AppStore {
   private lastOnboardingResultValue: OnboardingResult | null = null
   private lastOnboardingHabitCountValue = 0
   private lastOnboardingManualTitlesValue: string[] = []
+
+  // ------------------------------------------- 家长模式 ＋ 家长 PIN（W8-C）
+  //
+  // 这里存的是**服务端事实**：`activeRole` / `expiresAt` / `pinConfigured`。
+  // 界面上的「还剩 4:57」不是状态字段，而是每次重绘时用
+  // `parentModeRemainingSeconds(now)` 从绝对时刻现算的 —— 本地不放倒计时整数，
+  // 就不会出现「小程序切后台 3 分钟后回来，UI 还说剩 4 分半」。
+  //
+  // 与同意 / 导出等切片一样「打开即拉」：家长模式只在「我的」页点开面板时才
+  // 需要，塞进 `refreshFromServer` 会让每个孩子的首页都多付一次请求。
+  //
+  // `parentModeValue === null` 表示「还没拉到」（**不是**「不在家长模式」），
+  // 界面据此不显示「还剩 5 次」这类会误导的引导。
+
+  /** 最近一次拉到的家长模式快照；null = 还没拉过。 */
+  private parentModeValue: ParentMode | null = null
+  private parentModeStatusValue: ReadStatus = 'idle'
+  private parentModeErrorValue: string | null = null
+  /** 作废在途的读响应（切账号 / 演示重置）。 */
+  private parentModeEpoch = 0
+
+  /** 进 / 出家长模式在途（防连点：连点两次会消耗两次 PIN 校验）。 */
+  private parentModeBusyValue = false
+  /** 设 / 改 PIN 在途。 */
+  private parentPinBusyValue = false
+  /** 最近一次设 / 改 PIN 的结果（面板据此说「已修改」还是「已设置」）。 */
+  private lastParentPinResultValue: ParentPinResult | null = null
+  /** 最近一次 429 告诉我们「还要等多少秒」（仅用于把文案说具体）。 */
+  private parentPinLockSecondsValue = 0
 
   // ------------------------------------------- 家庭数据导出（W7-C，服务端）
   //
@@ -740,6 +843,90 @@ export class AppStore {
     return [...this.lastOnboardingManualTitlesValue]
   }
 
+  // ---------------------------------------------------- 家长模式（W8-C）
+  //
+  // 「还剩几下」全部是**函数**而不是字段：界面每帧现算，绝不本地自减。
+
+  /** 是否接入了家长模式客户端（预览模式不显示这个入口）。 */
+  get hasParentMode(): boolean {
+    return this.parentModeApi !== null
+  }
+
+  /** 最近一次拉到的家长模式快照；null = 还没拉过（**不是**「不在家长模式」）。 */
+  get parentMode(): ParentMode | null {
+    return this.parentModeValue
+  }
+
+  /** 服务端判定的「这台设备此刻是不是家长模式」。 */
+  get isParentMode(): boolean {
+    return this.parentModeValue?.parentMode ?? false
+  }
+
+  /**
+   * 当前的家长权限是**登录会话自带**的吗（邀请码加入的家长设备）。
+   *
+   * 这种快照的 `remainingSeconds` 是 30 天，界面**不该**画倒计时
+   * （会渲染成 `43200:00`），这句话就是那个判断的唯一依据。
+   */
+  get isParentModeSessionBacked(): boolean {
+    return isParentModeSessionBacked(this.parentModeValue)
+  }
+
+  /** 当前的家长权限是**PIN 换来的 5 分钟**吗（只有这种才有倒计时）。 */
+  get isParentModePinBacked(): boolean {
+    return isParentModePinBacked(this.parentModeValue)
+  }
+
+  get parentModeReadStatus(): ReadStatus {
+    return this.parentModeStatusValue
+  }
+
+  get parentModeError(): string | null {
+    return this.parentModeErrorValue
+  }
+
+  /** 是否已经设过家长 PIN —— 决定按钮写「输入 PIN」还是「先设置 PIN」。 */
+  get isParentPinConfigured(): boolean {
+    return this.parentModeValue?.pinConfigured ?? false
+  }
+
+  /** 剩余可尝试次数（5 = 一次都没错；0 = 已锁定）。 */
+  get parentPinRemainingAttempts(): number {
+    return this.parentModeValue?.remainingAttempts ?? 5
+  }
+
+  /** 是否处于 PIN 锁定中（锁定期间后端不跑 scrypt，客户端不该再发请求）。 */
+  isParentPinLockedAt(now: number): boolean {
+    return isParentPinLockedAt(this.parentModeValue, now)
+  }
+
+  /**
+   * 锁定还剩几秒（0 = 未锁定）。优先用服务端快照里的 `lockedUntil`，
+   * 其次用最近一次 429 的 `retryAfterSeconds`（快照可能还没刷新）。
+   */
+  parentPinLockSecondsAt(now: number): number {
+    const fromSnapshot = parentPinLockSecondsAt(this.parentModeValue, now)
+    if (fromSnapshot > 0) return fromSnapshot
+    return this.parentPinLockSecondsValue
+  }
+
+  get isParentModeBusy(): boolean {
+    return this.parentModeBusyValue
+  }
+
+  get isParentPinBusy(): boolean {
+    return this.parentPinBusyValue
+  }
+
+  get lastParentPinResult(): ParentPinResult | null {
+    return this.lastParentPinResultValue
+  }
+
+  /** 家长模式还剩几秒（0 = 不在家长模式 / 已到期）。 */
+  parentModeRemainingSeconds(now: number): number {
+    return parentModeRemainingSeconds(this.parentModeValue, now)
+  }
+
   // ------------------------------------------------------------ 家庭数据导出（W7-C）
 
   /** 最近一次成功拉到的导出文件；还没拉到过时为 null（**不是**「没有数据」）。 */
@@ -831,6 +1018,349 @@ export class AppStore {
 
   get recordFilter(): RecordCategory | null {
     return this.recordFilterValue
+  }
+
+  // =============================================== 登录 / 会话闸门（W9-B）
+
+  /** 闸门当前状态（页面只需 `switch` 这一个字段）。 */
+  get authState(): AuthGateKind {
+    return this.authKindValue
+  }
+
+  /** 补充说明（`needs_login` 的具体原因 / 断网提示）。 */
+  get authMessage(): string {
+    return this.authMessageValue
+  }
+
+  /** 为什么必须重新登录；只有 `needs_login` 时有值。 */
+  get authReason(): AuthLoginReason | null {
+    return this.authReasonValue
+  }
+
+  /** 服务端下发的账号信息（`GET /auth/session` 的 `user`）；未就绪时 null。 */
+  get authUser(): AuthUser | null {
+    return this.authUserValue
+  }
+
+  /** 这台设备当前绑定的孩子成员位；未就绪时 null。 */
+  get currentChild(): ChildMembership | null {
+    return this.authMembershipValue
+  }
+
+  /** 这条设备会话的绝对到期（epoch ms）；0 = 不知道。 */
+  get sessionExpiresAt(): number {
+    return this.authSessionExpiresAtValue
+  }
+
+  /** 多孩子时可选列表（首版限 1 个，正常是空数组）。 */
+  get loginCandidates(): readonly ChildMembership[] {
+    return this.authChildrenValue
+  }
+
+  /** 登录 / 建档案 / 选孩子在途（按钮据此禁用，防连点两次 `wx.login`）。 */
+  get isAuthBusy(): boolean {
+    return this.authBusyValue
+  }
+
+  /** 登录链路接上后端了吗（false ⇒ 预览模式，永远不会跳登录页）。 */
+  get hasAuthBackend(): boolean {
+    return this.authMachine.isConfigured
+  }
+
+  /**
+   * 是否有一个**被服务端确认过**的会话。
+   *
+   * 不看 `currentToken()` 单方面说"有 token 就算登录"：token 可能刚被拒，
+   * 而闸门状态才是"这次 `GET /auth/session` 到底怎么答的"。
+   */
+  get isAuthenticated(): boolean {
+    return this.authKindValue === 'ready'
+  }
+
+  /** 能不能进主页：`ready` 与 `preview` 都行（预览是本地开发状态，不是错误）。 */
+  get canEnterApp(): boolean {
+    return this.authKindValue === 'ready' || this.authKindValue === 'preview'
+  }
+
+  /** 闸门要不要把用户推去登录页。 */
+  get needsLogin(): boolean {
+    return this.authKindValue === 'needs_login'
+  }
+
+  /**
+   * 一句"我是谁"（「我的」页顶部用）。
+   *
+   * 昵称可能为空（新账号没填），此时退回孩子名；都没有就说"当前账号"，
+   * **不要**编一个"家长"出来 —— 这台设备的角色是 [deviceRole]。
+   */
+  get accountLabel(): string {
+    const displayName = this.authUserValue?.displayName ?? ''
+    if (displayName.trim() !== '') return displayName.trim()
+    const childName = this.authMembershipValue?.name ?? ''
+    if (childName.trim() !== '') return childName.trim()
+    return '当前账号'
+  }
+
+  /** 这台设备现在是什么角色（服务端 `DeviceSession.activeRole`）。 */
+  get deviceRole(): MemberRole | null {
+    return this.authMembershipValue?.role ?? null
+  }
+
+  /**
+   * 启动闸门：问一次"我是谁"（幂等）。
+   *
+   * 由 [useStore] 在每个页面挂载时调用 —— 四个 tab 页都会调，但这里
+   * `authRestoreStarted` 保证只发一次 `GET /auth/session`。
+   */
+  ensureAuthRestored(): void {
+    if (!this.authMachine.isConfigured) {
+      if (this.authKindValue !== 'preview') {
+        this.authKindValue = 'preview'
+        this.authMessageValue = '没有配置登录后端：当前使用本地预览数据。'
+        this.persist()
+      }
+      return
+    }
+    if (this.authRestoreStarted) return
+    this.authRestoreStarted = true
+    this.authKindValue = 'restoring'
+    this.authMessageValue = ''
+    this.authReasonValue = null
+    this.persist()
+    void this.runAuthRequest(() => this.authMachine.restore())
+  }
+
+  /** 「重试」按钮：断网后重新问一次（不清 token、不重复登录）。 */
+  retryAuth(): void {
+    if (!this.authMachine.isConfigured) return
+    if (this.authBusyValue) return
+    this.authRestoreStarted = false
+    this.ensureAuthRestored()
+  }
+
+  /**
+   * `wx.login()` → `POST /auth/login` → 闸门。
+   *
+   * 返回 null 表示已经就绪（调用方跳主页）；否则是**可以直接展示**的失败文案。
+   */
+  async login(): Promise<string | null> {
+    if (!this.authMachine.isConfigured) return '没有配置登录后端，无法登录。'
+    if (this.authBusyValue) return null
+    await this.runAuthRequest(async () => this.authMachine.login())
+    return this.authKindValue === 'needs_login' ? this.authMessageValue : null
+  }
+
+  /**
+   * `POST /children`：同意并建立第一个孩子（`needs_bootstrap` 那一步）。
+   *
+   * `accepted` 恒为 true —— 界面上**勾选了**才会调到这里；编排器另有
+   * "没勾选就不发请求"的硬拦截，两层一致。
+   */
+  async bootstrapChild(): Promise<string | null> {
+    if (!this.authMachine.isConfigured) return '没有配置登录后端，无法建立档案。'
+    if (this.authBusyValue) return null
+    await this.runAuthRequest(async () =>
+      this.authMachine.bootstrapChild({ accepted: true })
+    )
+    return this.authKindValue === 'needs_bootstrap' ? this.authMessageValue : null
+  }
+
+  /** 多孩子时选一个（首版限 1 个孩子，正常走不到）。 */
+  async selectChild(childId: string): Promise<string | null> {
+    if (!this.authMachine.isConfigured) return '没有配置登录后端。'
+    if (this.authBusyValue) return null
+    await this.runAuthRequest(async () => this.authMachine.selectChild(childId))
+    return this.canEnterApp ? null : this.authMessageValue
+  }
+
+  /**
+   * 退出登录。
+   *
+   * ★ 本地**先清**（编排器保证）：没网的地方也必须能退出去。返回值如实说明
+   *   服务端有没有确认撤销 —— 不假装"已彻底登出"。
+   *
+   * ★ 退出后把四个客户端也丢掉：`childId` 已经没了，留着它们只会让任何
+   *   遗留的刷新去发一个 `CLIENT_NOT_CONFIGURED` 的请求（登录页不该出现
+   *   业务错误条）。下次登录成功会重新建。
+   */
+  async logout(): Promise<string | null> {
+    if (this.authBusyValue) return null
+    this.authBusyValue = true
+    this.persist()
+    let revoked = true
+    try {
+      const result = await this.authMachine.logout()
+      revoked = result.revoked
+    } finally {
+      this.authBusyValue = false
+      this.authRestoreStarted = false
+      this.clearSessionFacts()
+      this.authKindValue = 'needs_login'
+      this.authReasonValue = 'no_token'
+      this.authMessageValue = '已经退出登录。'
+      this.readApi = null
+      this.writeApi = null
+      this.onboardingApi = null
+      this.parentModeApi = null
+      this.readStatusValue = 'idle'
+      this.readErrorValue = null
+      this.usingPreviewValue = true
+      this.resetToEmpty()
+      this.persist()
+    }
+    return revoked
+      ? null
+      : '已经在本地退出，但服务端没有确认撤销（可能没网）：那条会话会到期自然失效。'
+  }
+
+  /** 一次恢复 / 登录的公共外壳：忙碌标记 + 异常兜底 + 结果落状态。 */
+  private async runAuthRequest(
+    operation: () => Promise<AuthRestoreResult>
+  ): Promise<void> {
+    this.authBusyValue = true
+    this.persist()
+    try {
+      this.applyAuthResult(await operation())
+    } catch (error) {
+      // 编排器只在「不是登录侧异常」时抛（属于编码错误 / 依赖缺失）。
+      // 也绝不能变成白屏：如实说"流程出错"并给出重试入口。
+      this.authKindValue = 'unreachable'
+      this.authMessageValue =
+        error instanceof Error
+          ? `登录流程出错：${error.message}`
+          : '登录流程出错，请重试。'
+      this.persist()
+    } finally {
+      this.authBusyValue = false
+      this.persist()
+    }
+  }
+
+  /** `AuthRestoreResult` → 闸门状态（六个分支逐一落位，不合并）。 */
+  private applyAuthResult(result: AuthRestoreResult): void {
+    switch (result.kind) {
+      case 'preview':
+        this.authKindValue = 'preview'
+        this.authReasonValue = null
+        this.authMessageValue = result.message
+        break
+      case 'needs_login':
+        this.authKindValue = 'needs_login'
+        this.authReasonValue = result.reason
+        this.authMessageValue = result.message
+        this.clearSessionFacts()
+        break
+      case 'needs_bootstrap':
+        // 已登录（token 有效），但服务端说这个账号一个孩子都没有：
+        // childId 无从谈起，运行期身份只能清空 —— 否则下一步会带着
+        // 上一个账号的孩子去发 `POST /children`。
+        this.authKindValue = 'needs_bootstrap'
+        this.authReasonValue = null
+        this.authMessageValue = '这个账号还没有孩子的档案。'
+        this.authUserValue = result.session.user
+        this.authMembershipValue = null
+        this.authChildrenValue = []
+        this.authSessionExpiresAtValue = 0
+        sharedDeviceContext.clearChild()
+        break
+      case 'needs_child_selection':
+        this.authKindValue = 'needs_child_selection'
+        this.authReasonValue = null
+        this.authMessageValue = result.message
+        this.authMembershipValue = null
+        this.authChildrenValue = result.children.slice()
+        sharedDeviceContext.clearChild()
+        break
+      case 'ready':
+        this.applyReadySession(result)
+        break
+      case 'unreachable':
+        // ★ 保 token、保 childId：断网不是掉登录，重试一次往往就好了。
+        this.authKindValue = 'unreachable'
+        this.authMessageValue = result.message
+        break
+    }
+    this.persist()
+  }
+
+  /** `ready`：装身份 → 补建客户端 → 立刻拉首页数据。 */
+  private applyReadySession(
+    result: Extract<AuthRestoreResult, { kind: 'ready' }>
+  ): void {
+    this.authKindValue = 'ready'
+    this.authReasonValue = null
+    this.authMessageValue = ''
+    this.authUserValue = result.session.user
+    this.authMembershipValue = result.membership
+    this.authChildrenValue = result.session.children.slice()
+    this.authSessionExpiresAtValue = result.sessionExpiresAt
+
+    // ★ 顺序不能反：客户端在构造时（`readApi === null`）还没拿到 childId，
+    //   必须先装身份再补建，否则新客户端会因为"没有当前孩子"而不敢发请求。
+    sharedDeviceContext.apply({
+      deviceId: this.authMachine.currentDeviceId(),
+      childId: result.membership.childId
+    })
+    this.profile = {
+      ...this.profile,
+      childId: result.membership.childId,
+      name: result.membership.name || this.profile.name
+    }
+    this.ensureTransportClients()
+
+    // 首屏数据：登录成功后**立刻**拉一次，而不是等首页 `useDidShow` ——
+    // 登录页跳主页时首页已经挂载过，`ensureInitialRead` 的 idle 守卫
+    // 未必还会触发。
+    void this.pullAfterAuth()
+  }
+
+  /**
+   * 登录成功后补建四个客户端。
+   *
+   * 构造时若已按编译期三项配好（开发期手工复现老流程），这里**不动**它们 ——
+   * 它们本来就会带上 `Authorization`（token 是请求时现读的）。
+   */
+  private ensureTransportClients(): void {
+    if (this.readApi !== null) return
+    const readApi = createReadApiFromEnvironment()
+    if (readApi === null) return
+    this.readApi = readApi
+    this.writeApi = createWriteApiFromEnvironment()
+    this.onboardingApi = createOnboardingApiFromEnvironment()
+    this.parentModeApi = createParentModeApiFromEnvironment()
+    // 客户端换了，旧状态一律作废（否则 `ensureInitialRead` 会因为
+    // 已经不在 idle 而永远不再拉）。
+    this.readStatusValue = 'idle'
+    this.readErrorValue = null
+    this.onboardingValue = null
+    this.onboardingStatusValue = 'idle'
+    this.onboardingErrorValue = null
+    this.persist()
+  }
+
+  /** 登录后的首屏拉取：首页 + 流水，再问引导状态（首页闸门要用）。 */
+  private async pullAfterAuth(): Promise<void> {
+    if (this.readApi === null) return
+    await this.refreshFromServer()
+    this.ensureInitialOnboarding()
+  }
+
+  /** 会话被服务端否掉：清身份，让闸门画登录页。 */
+  private handleLoginRequired(reason: AuthLoginReason, message: string): void {
+    this.authKindValue = 'needs_login'
+    this.authReasonValue = reason
+    this.authMessageValue = message
+    this.clearSessionFacts()
+    this.persist()
+  }
+
+  /** 清掉"当前会话是谁"的全部事实（不动 deviceId：它不是凭据）。 */
+  private clearSessionFacts(): void {
+    this.authUserValue = null
+    this.authMembershipValue = null
+    this.authSessionExpiresAtValue = 0
+    this.authChildrenValue = []
+    sharedDeviceContext.clearChild()
   }
 
   // ------------------------------------------------- 审批收件箱（W5-D）
@@ -978,11 +1508,21 @@ export class AppStore {
       : createWriteApiFromEnvironment(),
     onboardingApi: OnboardingApi | null = readApi === null
       ? null
-      : createOnboardingApiFromEnvironment()
+      : createOnboardingApiFromEnvironment(),
+    parentModeApi: ParentModeApi | null = readApi === null
+      ? null
+      : createParentModeApiFromEnvironment(),
+    /**
+     * 登录编排器（W9-B）。用例注入一个「假 api + 内存 token + 假 wx 端口」的实例；
+     * 传 `null` 表示按编译期环境自己造（与上面四个客户端同一手法）。
+     */
+    authMachine: AuthSessionMachine | null = null
   ) {
     this.readApi = readApi
     this.writeApi = writeApi
     this.onboardingApi = onboardingApi
+    this.parentModeApi = parentModeApi
+    this.authMachine = authMachine ?? createAuthSessionMachine()
     this.resetToEmpty()
   }
 
@@ -1015,6 +1555,7 @@ export class AppStore {
     this.resetInvites()
     this.resetConsent()
     this.resetOnboarding()
+    this.resetParentMode()
     this.resetExport()
     this.resetFamilyDeletion()
     this.resetNotifications()
@@ -1040,6 +1581,7 @@ export class AppStore {
     this.resetInvites()
     this.resetConsent()
     this.resetOnboarding()
+    this.resetParentMode()
     this.resetExport()
     this.resetFamilyDeletion()
     this.resetNotifications()
@@ -1112,6 +1654,24 @@ export class AppStore {
     this.lastOnboardingResultValue = null
     this.lastOnboardingHabitCountValue = 0
     this.lastOnboardingManualTitlesValue = []
+  }
+
+  /**
+   * 家长模式切片复位（切账号 / 恢复正常数据 / 演示重置时调用）。
+   *
+   * 不清的话：换到另一个孩子后打开面板，会先看到**上一个家庭**的
+   * 「家长模式 · 还剩 3:12」—— 那台设备的会话已经不在了，界面却在替它作证。
+   * `epoch` 自增同时作废在途的读响应。
+   */
+  private resetParentMode(): void {
+    this.parentModeEpoch++
+    this.parentModeValue = null
+    this.parentModeStatusValue = 'idle'
+    this.parentModeErrorValue = null
+    this.parentModeBusyValue = false
+    this.parentPinBusyValue = false
+    this.lastParentPinResultValue = null
+    this.parentPinLockSecondsValue = 0
   }
 
   /**
@@ -1205,26 +1765,71 @@ export class AppStore {
     this.readErrorValue = null
     this.persist()
 
+    // ★ W9-B「401 分流」：只有**真有一个服务端会话**时才走 `retryOnce`。
+    //   预览模式下持有者是空的，直接进 `retryOnce` 会被判成 `no_token`
+    //   并跳登录页 —— 那会把"没配后端的本地开发"变成一场登录，与
+    //   `40` §10.1 规矩三相反。
+    const canRelogin =
+      this.authMachine.isConfigured &&
+      this.authMachine.currentToken() !== null &&
+      this.authKindValue === 'ready'
+
     try {
-      const [homeDto, pageDto] = await Promise.all([
-        api.fetchHome(),
-        api.fetchRecords({
-          category: this.recordFilterValue,
-          limit: AppStore.recordsPageSize
-        })
-      ])
+      const fetched = canRelogin
+        ? await this.authMachine.retryOnce(async () => this.fetchHomeAndRecords(api))
+        : { kind: 'ok' as const, value: await this.fetchHomeAndRecords(api) }
+
       if (epoch !== this.readEpoch) return
 
-      this.applyHomeSnapshot(mapHome(homeDto))
-      this.applyRecordsPage(mapRecordsPage(pageDto), false)
+      if (fetched.kind === 'login_required') {
+        // 重登一次仍被拒 / 连 token 都没了：不再画"读取失败"，
+        // 直接把闸门推到登录页（错误条留给登录页说清楚）。
+        this.handleLoginRequired(fetched.reason, fetched.message)
+        this.readErrorValue = null
+        this.readStatusValue = 'error'
+        this.persist()
+        return
+      }
+
+      this.applyHomeSnapshot(mapHome(fetched.value.homeDto))
+      this.applyRecordsPage(mapRecordsPage(fetched.value.pageDto), false)
       this.usingPreviewValue = false
       this.readStatusValue = 'ready'
     } catch (error) {
       if (epoch !== this.readEpoch) return
-      this.readErrorValue = toReadApiException(error)
+      const exception = toReadApiException(error)
+      // W9-B：业务请求被 401 否掉 ≠ 「读取失败」。
+      //   `TOKEN_EXPIRED` 已经在 `retryOnce` 里静默重登过（重登仍失败会走上面
+      //   的 `login_required` 分支）；能落到这里的 401 只剩 `TOKEN_INVALID` /
+      //   `UNAUTHENTICATED` —— 这条会话再也不会成功，闸门必须去登录页，
+      //   而不是让首页挂着一条没有出口的「设备身份无效」错误条。
+      //   预览模式（没配后端）不跳：那种 401 是编译期身份的问题，不是登录问题。
+      if (this.authMachine.isConfigured && exception.statusCode === 401) {
+        this.handleLoginRequired('token_rejected', exception.userMessage)
+        this.readErrorValue = null
+        this.readStatusValue = 'error'
+        this.persist()
+        return
+      }
+      this.readErrorValue = exception
       this.readStatusValue = 'error'
     }
     this.persist()
+  }
+
+  /** 首页快照 + 第一页流水（两个请求并发，任何一个失败都算这次刷新失败）。 */
+  private async fetchHomeAndRecords(api: ReadApiClient): Promise<{
+    homeDto: Awaited<ReturnType<ReadApiClient['fetchHome']>>
+    pageDto: Awaited<ReturnType<ReadApiClient['fetchRecords']>>
+  }> {
+    const [homeDto, pageDto] = await Promise.all([
+      api.fetchHome(),
+      api.fetchRecords({
+        category: this.recordFilterValue,
+        limit: AppStore.recordsPageSize
+      })
+    ])
+    return { homeDto, pageDto }
   }
 
   /**
@@ -1764,7 +2369,28 @@ export class AppStore {
    */
   ensureInitialRead(): void {
     if (!this.isLiveMode || this.readStatusValue !== 'idle') return
+    if (!this.authGateOpenForReads()) return
     void this.refreshFromServer()
+  }
+
+  /**
+   * 业务读请求现在可以发了吗（W9-B）。
+   *
+   * 闸门还没答案时发读请求有两种坏结果：没 token ⇒ 401「未登录」；
+   * 有 token 但没 childId ⇒ 400。两种都会把"正在登录"画成"读取失败"，
+   * 所以 `restoring` / `needs_*` 期间一律不发 —— 等 `ready` 时由
+   * `pullAfterAuth()` 补一次，或由页面在 `ready` 后调 `ensureInitialRead()`。
+   *
+   * `preview`（没配后端）与 `unreachable`（断网）**放行**：前者是本地开发，
+   * 后者要允许用户看到上一次的数据而不是空白。
+   */
+  private authGateOpenForReads(): boolean {
+    if (!this.authMachine.isConfigured) return true
+    return (
+      this.authKindValue === 'ready' ||
+      this.authKindValue === 'preview' ||
+      this.authKindValue === 'unreachable'
+    )
   }
 
   /** 服务端快照覆盖本地列表（软删状态一律来自服务端：active）。 */
@@ -3591,6 +4217,7 @@ export class AppStore {
   /** 启动时拉一次引导状态（闸门用）。重复调用只会在 idle 时触发。 */
   ensureInitialOnboarding(): void {
     if (!this.isLiveMode || this.onboardingStatusValue !== 'idle') return
+    if (!this.authGateOpenForReads()) return
     void this.refreshOnboarding()
   }
 
@@ -4196,6 +4823,220 @@ export class AppStore {
   checkedCountTodayOfRule(rule: PointRule, now: number = Date.now()): number {
     return checkedCountTodayByRule(this.records, rule.id, now)
   }
+  // ---------------------------------------------------------- 家长模式（W8-C）
+
+  /**
+   * 拉当前家长模式状态（`GET /auth/parent-mode`）。
+   *
+   * 打开面板时调用；应用冷启动**不**调用 —— 孩子每天打开小程序都多发一次请求
+   * 没有收益，而入口在「我的」页，点开时再问一次就够。
+   *
+   * 失败**不清空**上一次成功的快照：家长可能刚看到「还剩 4:12」，一次超时把
+   * 倒计时抹成空白，会让人以为模式已经掉了。
+   */
+  async refreshParentMode(): Promise<void> {
+    const api = this.parentModeApi
+    if (api === null) {
+      this.parentModeStatusValue = 'ready'
+      this.parentModeErrorValue = null
+      this.persist()
+      return
+    }
+
+    const epoch = ++this.parentModeEpoch
+    this.parentModeStatusValue = 'loading'
+    this.parentModeErrorValue = null
+    this.persist()
+
+    try {
+      const mode = await api.fetch()
+      if (epoch !== this.parentModeEpoch) return
+      this.applyParentMode(mode)
+      this.parentModeStatusValue = 'ready'
+      this.parentModeErrorValue = null
+    } catch (error) {
+      if (epoch !== this.parentModeEpoch) return
+      this.parentModeErrorValue =
+        error instanceof WriteApiException
+          ? error.userMessage
+          : '读取家长模式状态时发生意外错误。请重试。'
+      this.parentModeStatusValue = 'error'
+    }
+    if (epoch === this.parentModeEpoch) this.persist()
+  }
+
+  /**
+   * 用 PIN 进入家长模式（`POST /auth/parent-mode`）。成功返回 null。
+   *
+   * ── 三类失败必须分开说 ────────────────────────────────────────────────────
+   *   · 格式错 ⇒ 本地就拒（后端 `400` 且**不计次**，手滑不该消耗尝试机会）；
+   *   · 值不对 ⇒ `403` + `remainingAttempts` 已递减，文案要带「还剩 N 次」；
+   *   · 锁定   ⇒ `429` + `retryAfterSeconds`，文案要带「还要等多久」。
+   *   把三者都说成「切换失败」会让家长反复乱试，最后把自己锁 15 分钟。
+   *
+   * 成功后**只更新家长模式快照**，不整体刷新首页：角色切换改变的是「哪些入口
+   * 可写」，首页数据（余额 / 习惯）与角色无关，多刷一次只会多一次失败机会。
+   */
+  async enterParentMode(pin: string): Promise<string | null> {
+    const api = this.parentModeApi
+    if (api === null) return '当前没有接入后端，无法切换家长模式。'
+    if (this.parentModeBusyValue) return '正在切换，请稍候…'
+
+    const trimmed = pin.trim()
+    if (trimmed === '') return '请输入家长 PIN。'
+    const invalid = validateParentPin(trimmed)
+    if (invalid !== null) return invalid
+
+    this.parentModeBusyValue = true
+    this.parentModeErrorValue = null
+    this.persist()
+    try {
+      const mode = await api.enter(trimmed)
+      this.applyParentMode(mode)
+      this.parentModeStatusValue = 'ready'
+      this.parentPinLockSecondsValue = 0
+      return null
+    } catch (error) {
+      if (error instanceof ParentPinLockException) {
+        this.parentPinLockSecondsValue = error.retryAfterSeconds
+        // 锁定是**服务端事实**（成员级计数），本地快照可能还是旧的 —— 拉一次把
+        // `lockedUntil` / `remainingAttempts` 对齐，重开面板就不用再试错。
+        await this.refreshParentMode()
+        return error.userMessage
+      }
+      if (error instanceof WriteApiException) {
+        if (error.kind === 'forbidden' || error.kind === 'unauthenticated') {
+          // 403 `PARENT_PIN_INVALID` 已经改了服务端的失败计数；
+          // 401 说明会话没了 —— 两种都该重新对齐快照。
+          await this.refreshParentMode()
+        }
+        return error.userMessage
+      }
+      return '切换家长模式的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.parentModeBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 主动退出家长模式（`DELETE /auth/parent-mode`）。成功返回 null。
+   *
+   * **不需要 PIN**：降级永远允许（`02` §7）—— 孩子拿着手机时，家长必须能
+   * 立刻把权限收回去。也因此这是**幂等**的：本来就不在家长模式时也回 200，
+   * 界面不该把它当失败（那只是在重复一件已经成立的事）。
+   *
+   * 锁定期间同样可用：`429` 只拦「进」，不拦「出」。
+   */
+  async exitParentMode(): Promise<string | null> {
+    const api = this.parentModeApi
+    if (api === null) return '当前没有接入后端，无法退出家长模式。'
+    if (this.parentModeBusyValue) return '正在切换，请稍候…'
+
+    this.parentModeBusyValue = true
+    this.parentModeErrorValue = null
+    this.persist()
+    try {
+      const mode = await api.exit()
+      this.applyParentMode(mode)
+      this.parentModeStatusValue = 'ready'
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 401：会话已经不在了 —— 那本来就不是家长模式了，拉一次说真话。
+        if (error.kind === 'unauthenticated') {
+          await this.refreshParentMode()
+        }
+        return error.userMessage
+      }
+      return '退出家长模式的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.parentModeBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 首次设置 / 修改家长 PIN（`POST /auth/parent-pin`）。成功返回 null。
+   *
+   * ── 为什么改 PIN 需要 `currentPin` ────────────────────────────────────────
+   *   否则任何拿到已解锁手机的孩子都能把 PIN 改掉，5 分钟家长模式就形同虚设。
+   *   这也解释了为什么这个端点在矩阵里是 `manage_parent_pin`（**child DENY**）：
+   *   孩子模式会话里改 PIN 一律 403，必须先拿 PIN 进家长模式再改。
+   *
+   * `currentPin === undefined` ⇒ 「服务端还没有 PIN」（首次设置）。若其实已有
+   * PIN，后端回 `400`（`PARENT_PIN_CURRENT_REQUIRED`），这里把文案原样交出。
+   */
+  async setParentPin(input: {
+    pin: string
+    currentPin?: string
+  }): Promise<string | null> {
+    const api = this.parentModeApi
+    if (api === null) return '当前没有接入后端，无法保存家长 PIN。'
+    if (this.parentPinBusyValue) return '上一次保存正在提交，请稍候…'
+
+    const trimmed = input.pin.trim()
+    if (trimmed === '') return '请输入新的家长 PIN。'
+    const invalid = validateParentPin(trimmed)
+    if (invalid !== null) return invalid
+    if (input.currentPin !== undefined && input.currentPin.trim() === '') {
+      return '请输入当前家长 PIN。'
+    }
+
+    this.parentPinBusyValue = true
+    this.parentModeErrorValue = null
+    this.persist()
+    try {
+      const result = await api.setPin({
+        pin: trimmed,
+        ...(input.currentPin !== undefined
+          ? { currentPin: input.currentPin.trim() }
+          : {})
+      })
+      this.lastParentPinResultValue = result
+      // 只改**这几个**字段：PIN 变了不代表角色 / TTL 变了。
+      this.parentModeValue = {
+        ...(this.parentModeValue ?? PARENT_MODE_UNKNOWN),
+        pinConfigured: result.pinConfigured,
+        remainingAttempts: result.remainingAttempts,
+        lockedUntil: null
+      }
+      this.parentPinLockSecondsValue = 0
+      this.parentModeStatusValue = 'ready'
+      return null
+    } catch (error) {
+      if (error instanceof ParentPinLockException) {
+        this.parentPinLockSecondsValue = error.retryAfterSeconds
+        await this.refreshParentMode()
+        return error.userMessage
+      }
+      if (error instanceof WriteApiException) {
+        // 403（旧 PIN 错，已计次）/ 400（缺 currentPin）/ 409 都改变了服务端事实。
+        if (
+          error.kind === 'forbidden' ||
+          error.kind === 'badRequest' ||
+          error.kind === 'conflict'
+        ) {
+          await this.refreshParentMode()
+        }
+        return error.userMessage
+      }
+      return '保存家长 PIN 的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.parentPinBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 把快照落进 store —— 三处调用共用，免得哪一处漏掉字段，
+   * 出现「模式已进、pinConfigured 还是旧值」。
+   */
+  private applyParentMode(mode: ParentMode): void {
+    this.parentModeValue = mode
+    if (!mode.parentMode) this.parentPinLockSecondsValue = 0
+  }
+
   // -------------------------------------------------------------- 内部工具
 
   private newId(prefix: string): string {
@@ -4250,6 +5091,10 @@ export function useStore(): AppStore {
   const [, setTick] = useState(0)
   useEffect(() => store.subscribe(() => setTick((tick) => tick + 1)), [])
   useEffect(() => {
+    // W9-B：先问"我是谁"（幂等，四个 tab 页各调一次也只发一次请求）。
+    // 它必须排在 `ensureInitialRead` 之前 —— 登录成功前 `readApi` 还是 null，
+    // 读请求根本发不出去（也不会发）。
+    store.ensureAuthRestored()
     store.ensureInitialRead()
     // W8-B：引导闸门要在首屏就知道「做完没有」；与首页读并行发出，
     // 不阻塞首页（`needsOnboarding` 只影响首页那次重定向）。

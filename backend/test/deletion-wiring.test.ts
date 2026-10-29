@@ -129,9 +129,9 @@ describe('路由：「路径 / 方法 / 动作」三处必须同时对上', () =
   })
 })
 
-describe('契约：41 动作；两个删除动作 guardian ALLOW / child DENY，且都是同意豁免', () => {
-  it('规模：41 个动作（数字变了必须同时改 PRD §7 与用例）', () => {
-    assert.equal(ALL_ACTIONS.length, 41)
+describe('契约：42 动作；两个删除动作 guardian ALLOW / child DENY，且都是同意豁免', () => {
+  it('规模：42 个动作（数字变了必须同时改 PRD §7 与用例）', () => {
+    assert.equal(ALL_ACTIONS.length, 42)
   })
 
   it('判定：查看 / 申请删除只给家长', () => {

@@ -475,8 +475,8 @@ describe('组 D：无库装配下身份层 fail-closed（NotImplementedDeviceSes
   })
 })
 
-// ── 组 E：生产闸门 ⇒ 503（凭据仍可伪造，不许上线）────────────────────────────
-describe('组 E：NODE_ENV=production ⇒ 503 IDENTITY_NOT_IMPLEMENTED', () => {
+// ── 组 E：生产环境没有 Bearer ⇒ 401（凭据必须是 token，不是设备标识）──────────
+describe('组 E：NODE_ENV=production ⇒ 401 UNAUTHENTICATED（无 token 的设备头不再算身份）', () => {
   let app!: INestApplication
   let url = ''
 
@@ -487,20 +487,26 @@ describe('组 E：NODE_ENV=production ⇒ 503 IDENTITY_NOT_IMPLEMENTED', () => {
     await app.close()
   })
 
-  it('★ 生产环境直接 503：角色已由服务端确立，但 `x-kp-device-id` 可被伪造 ⇒ 这套口径禁止上线', async () => {
+  // ★ W9-A（2026-10-29）：这里原本断言 `503 IDENTITY_NOT_IMPLEMENTED` ——
+  //   那时 `x-kp-device-id` 就是凭据，而它可被伪造（谁都能报别人的 deviceId），
+  //   所以生产只能整体拒服务。现在凭据是 Bearer token（`AuthGuard` → `AuthSession`），
+  //   设备头降级成**选择器**，并由 `DeviceSessionGuard` 做**同源校验**
+  //   （会话行的 userId 必须等于登录身份的 userId）⇒ 闸门从"整条路下线"
+  //   换成"没有登录身份就 401"。
+  it('★ 生产环境且没有 Authorization ⇒ 401：设备头不再是凭据', async () => {
     const previous = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'
     try {
       const r = await send(url, '/probe/whoami', GUARDIAN)
-      assert.equal(r.status, 503)
-      assert.equal(r.body.code, 'IDENTITY_NOT_IMPLEMENTED')
+      assert.equal(r.status, 401, '生产环境把 `x-kp-device-id` 当成了身份 —— 那就是提权后门')
+      assert.equal(r.body.code, 'UNAUTHENTICATED')
     } finally {
       if (previous === undefined) delete process.env.NODE_ENV
       else process.env.NODE_ENV = previous
     }
   })
 
-  it('对照：非生产环境同一请求 200（证明上面那条 503 真的来自环境闸门）', async () => {
+  it('对照：非生产环境同一请求 200（双读期旧路径仍可用，证明上面那条 401 真的来自环境判据）', async () => {
     assert.equal((await send(url, '/probe/whoami', GUARDIAN)).status, 200)
   })
 })

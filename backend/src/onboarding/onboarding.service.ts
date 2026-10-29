@@ -2,7 +2,7 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common'
 
 import type { CompleteOnboardingDto } from './dto/complete-onboarding.dto'
 import type { SaveOnboardingProfileDto } from './dto/save-onboarding-profile.dto'
-import { hashPin } from './pin-hash'
+import { hashPin } from '../common/pin-hash'
 import {
   isPinFormatValid,
   mergeProfile,

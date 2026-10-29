@@ -1,6 +1,10 @@
 import { request } from '@tarojs/taro'
 
 import {
+  kAuthorizationHeader,
+  sharedAuthTokens
+} from './auth_token_holder'
+import {
   ReadApiConfig,
   kChildIdHeader,
   kDeviceIdHeader,
@@ -728,7 +732,7 @@ export class WriteApiClient implements WriteApi {
       { name: trimmed },
       (raw) => {
         const dto = this.parseChildProfile(raw)
-        const sessionChildId = this.config.childId.trim()
+        const sessionChildId = this.config.effectiveChildId
         if (dto.childId !== sessionChildId) {
           throw WriteApiException.malformed(
             '$.childId',
@@ -1078,9 +1082,13 @@ export class WriteApiClient implements WriteApi {
     const uri = this.config.uri(path)
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      [kDeviceIdHeader]: this.config.deviceId.trim(),
-      [kChildIdHeader]: this.config.childId.trim()
+      [kDeviceIdHeader]: this.config.effectiveDeviceId,
+      [kChildIdHeader]: this.config.effectiveChildId
     }
+    // W9-A：登录之后每个写请求也要带 Bearer（`40` §10.1）。
+    // 持有者为空时一个头都不加 ⇒ 预览模式的既有行为逐字不变。
+    const authorization = sharedAuthTokens.authorizationHeader()
+    if (authorization !== null) headers[kAuthorizationHeader] = authorization
     // 没有请求体就不声明 Content-Type：DELETE 带空 JSON 会被严格后端拒掉。
     if (body !== null) {
       headers['Content-Type'] = 'application/json; charset=utf-8'

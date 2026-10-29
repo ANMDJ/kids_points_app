@@ -9,6 +9,14 @@ export const TAB_PAGES = [
 ]
 
 /**
+ * 登录页（W9-B）。
+ *
+ * 不是 tab 页：用 `redirectTo` 进入，页面栈始终只有一层（与 `switchTab`
+ * 同策略）—— 用户从登录页按返回键时不会回到一个没有身份的首页。
+ */
+export const LOGIN_PAGE = '/pages/login/index'
+
+/**
  * 切换底部导航页。
  *
  * 用 redirectTo 而不是 navigateTo：小程序 tab 栏不是原生的，

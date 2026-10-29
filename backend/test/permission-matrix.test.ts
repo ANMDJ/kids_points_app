@@ -25,9 +25,9 @@ import {
 const VERDICTS: Verdict[] = ['ALLOW', 'REQUIRE_APPROVAL', 'DENY']
 const ROLES: Role[] = ['guardian', 'child']
 
-test('规模与唯一性：41 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
-  assert.equal(ALL_ACTIONS.length, 41)
-  assert.equal(new Set(ALL_ACTIONS).size, 41, '动作键有重复')
+test('规模与唯一性：42 个动作，且无重复（与 PRD §7 / contracts JSON 同规模）', () => {
+  assert.equal(ALL_ACTIONS.length, 42)
+  assert.equal(new Set(ALL_ACTIONS).size, 42, '动作键有重复')
 })
 
 test('W7-C 数据导出：家长可导、孩子不可导（一次带走全家，不能挂在孩子可用的读动作上）', () => {

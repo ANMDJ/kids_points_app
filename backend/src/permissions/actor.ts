@@ -1,4 +1,5 @@
 import type { Role, Verdict } from '../contracts/permission-matrix'
+import type { AuthMethod } from '../identity/auth-session.gate'
 import type { Membership } from '../membership/membership.gate'
 
 /**
@@ -47,8 +48,36 @@ export interface Actor {
  *   （根本走不到业务层）。保留这个字段，是为了让将来「确实需要审批的端点」
  *   能读到 `REQUIRE_APPROVAL` 并据此建 `ApprovalRequest`（02 §3 屏障二）。
  */
+/**
+ * **登录身份**（W9-A，2026-10-29）—— 由 `AuthGuard` 从 Bearer token 解析出来。
+ *
+ * ── 它与 `Actor` 的关系（一句话分清）────────────────────────────────────────
+ *   · `kpAuth`（本类型）：**你是谁**（`AuthSession.userId`），跨设备、跨孩子、不含角色；
+ *   · `kpActor`（`Actor`）：**你在这台设备的这个孩子上是什么角色**（`DeviceSession`）。
+ *   `Actor.userId` 必须等于 `kpAuth.userId` —— 这条同源校验在 `DeviceSessionGuard`
+ *   里做（`40` §9.2）：`DeviceSession` 行上的 `userId` 与 token 不符 ⇒ 401
+ *   `SESSION_NOT_FOUND`。**没有这条校验，"设备 id 换一个就能冒充别人"那个洞还在。**
+ *
+ * ── `tokenHash` 为什么挂在请求上 ───────────────────────────────────────────
+ *   `POST /auth/logout` 要撤销"**这一条**会话"，撤销的键就是 `tokenHash`（唯一索引）。
+ *   它是**哈希**不是明文：明文 token 从头到尾**不进请求对象** ——
+ *   Guard 解析完立刻只保留哈希，下游拿不到明文（`40` §11.2）。
+ */
+export interface AuthenticatedIdentity {
+  userId: string
+  /** `AuthSession.id`（审计用；撤销仍以 `tokenHash` 为准）。 */
+  sessionId: string
+  /** `sha256(明文)` —— 只在退出登录时用来定位那一行。**绝不**写日志。 */
+  tokenHash: string
+  method: AuthMethod
+  /** 绝对到期时刻（**不滑动**，`40` §4.3）。 */
+  expiresAt: Date
+}
+
 export interface RequestWithActor {
   headers: Record<string, string | string[] | undefined>
+  /** **登录身份**（`AuthGuard` 写入）。缺失 = 走双读期旧路径（仅非生产）。 */
+  kpAuth?: AuthenticatedIdentity
   kpActor?: Actor
   kpChildId?: string
   kpMember?: Membership

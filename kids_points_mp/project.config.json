@@ -2,7 +2,7 @@
   "miniprogramRoot": "dist/",
   "projectname": "kids_points_mp",
   "description": "积分小管家 - 儿童习惯打卡与积分奖励",
-  "appid": "touristappid",
+  "appid": "wx40666b1cbd5907c0",
   "setting": {
     "urlCheck": false,
     "es6": false,

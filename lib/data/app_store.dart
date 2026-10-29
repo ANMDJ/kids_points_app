@@ -10,6 +10,7 @@ import '../models/habit.dart';
 import '../models/invite.dart';
 import '../models/member.dart';
 import '../models/onboarding.dart';
+import '../models/parent_mode.dart';
 import '../models/point_record.dart';
 import '../models/point_rule.dart';
 import '../models/rule_version.dart';
@@ -21,6 +22,9 @@ import 'seed_data.dart';
 import 'onboarding_api.dart';
 import 'onboarding_dto.dart';
 import 'onboarding_mapper.dart';
+import 'parent_mode_api.dart';
+import 'parent_mode_dto.dart';
+import 'parent_mode_mapper.dart';
 import 'read_api.dart';
 import 'read_api_errors.dart';
 import 'read_dto.dart';
@@ -64,10 +68,15 @@ class AppStore extends ChangeNotifier {
   /// 原先构造即 `_reset()` → 应用一打开就是假数据（124 分 / 324 好习惯 /
   /// “萌新铲屎官的小可爱”）：新用户看到“我完成了 324 个好习惯”是荒谬的。
   /// seed 自此只作**测试夹具**，由 [resetToSeed] 显式载入。
-  AppStore({ReadApiClient? readApi, WriteApi? writeApi, OnboardingApi? onboardingApi})
-      : _readApi = readApi,
+  AppStore({
+    ReadApiClient? readApi,
+    WriteApi? writeApi,
+    OnboardingApi? onboardingApi,
+    ParentModeApi? parentModeApi,
+  })  : _readApi = readApi,
         _writeApi = writeApi,
-        _onboardingApi = onboardingApi {
+        _onboardingApi = onboardingApi,
+        _parentModeApi = parentModeApi {
     _resetToEmpty();
   }
 
@@ -85,6 +94,11 @@ class AppStore extends ChangeNotifier {
   /// 引导闸门**不启用** —— 预览模式没有服务端状态，编一个「未引导」会把人
   /// 推进一个永远完不成的流程。
   final OnboardingApi? _onboardingApi;
+
+  /// 家长模式客户端（W8-C）。为 null = 不接后端（预览 / 测试夹具）：
+  /// 「我的」页那行入口**不显示**，因为本地没有 PIN 也没有会话 TTL，
+  /// 画一个点了只会失败的按钮比不画更糟。
+  final ParentModeApi? _parentModeApi;
 
   /// 一页流水条数 —— 与后端 DTO 的上限（200）同口径，50 是「首屏够用」的折中。
   static const int _recordsPageSize = 50;
@@ -352,6 +366,80 @@ class AppStore extends ChangeNotifier {
   /// 需要家长之后在「积分规则」页手动加入习惯的约定标题。
   List<String> get lastOnboardingManualTitles =>
       List<String>.unmodifiable(_lastOnboardingManualTitles);
+
+  // ──────────────────── 家长模式 ＋ 家长 PIN（W8-C） ────────────────────
+  //
+  // 这里存的是**服务端事实**：`activeRole` / `parentModeExpiresAt` / `pinConfigured`。
+  // 界面上的「还剩 4:57」不是状态字段，而是每次重建时用
+  // [parentModeRemainingSeconds] 从绝对时刻现算的 —— 本地不放倒计时整数，
+  // 就不会出现「App 切后台 3 分钟后回来，UI 还说剩 4 分半」。
+  //
+  // 与同意 / 导出等切片一样「打开即拉」：家长模式只在「我的」页点开面板时才需要，
+  // 塞进 `refreshFromServer` 会让每个孩子的首页都多付一次请求。
+
+  ParentMode? _parentMode;
+  ReadStatus _parentModeReadStatus = ReadStatus.idle;
+  String? _parentModeError;
+
+  /// 进 / 出家长模式在途（防连点：连点两次会消耗两次 PIN 校验）。
+  bool _parentModeBusy = false;
+
+  /// 设 / 改 PIN 在途。
+  bool _parentPinBusy = false;
+
+  /// 最近一次设 / 改 PIN 的结果（面板据此说「已修改」还是「已设置」）。
+  ParentPinResult? _lastParentPinResult;
+
+  /// 最近一次 429 告诉我们「还要等多少秒」（仅用于把文案说具体）。
+  int _parentPinLockSeconds = 0;
+
+  /// 是否接入了家长模式客户端（预览模式不显示这个入口）。
+  bool get hasParentMode => _parentModeApi != null;
+
+  /// 最近一次拉到的家长模式快照；null = 还没拉过（**不是**「不在家长模式」）。
+  ParentMode? get parentMode => _parentMode;
+
+  /// 服务端判定的「这台设备此刻是不是家长模式」。
+  bool get isParentMode => _parentMode?.parentMode ?? false;
+
+  /// 当前的家长权限是**登录会话自带**的（邀请码加入的家长设备），不是 PIN 换的
+  /// 5 分钟。界面据此不显示倒计时（那个 30 天会被渲染成 `43200:00`）。
+  bool get isParentModeSessionBacked => _parentMode?.isSessionBacked ?? false;
+
+  /// 当前的家长权限是**PIN 换来的 5 分钟**（只有这种才有倒计时）。
+  bool get isParentModePinBacked => _parentMode?.isPinBacked ?? false;
+
+  ReadStatus get parentModeReadStatus => _parentModeReadStatus;
+  String? get parentModeError => _parentModeError;
+
+  /// 是否已经设过家长 PIN —— 决定按钮写「输入 PIN」还是「先设置 PIN」。
+  bool get isParentPinConfigured => _parentMode?.pinConfigured ?? false;
+
+  /// 剩余可尝试次数（5 = 一次都没错；0 = 已锁定）。
+  int get parentPinRemainingAttempts => _parentMode?.remainingAttempts ?? 5;
+
+  /// 是否处于 PIN 锁定中（锁定期间后端不跑 scrypt，客户端不该再发请求）。
+  bool isParentPinLockedAt(DateTime now) =>
+      _parentMode?.isLockedAt(now) ?? false;
+
+  /// 锁定还剩几秒（0 = 未锁定）。优先用服务端快照里的 `lockedUntil`，
+  /// 其次用最近一次 429 的 `retryAfterSeconds`（快照可能还没刷新）。
+  int parentPinLockSecondsAt(DateTime now) {
+    final int fromSnapshot = _parentMode?.lockSecondsAt(now) ?? 0;
+    if (fromSnapshot > 0) return fromSnapshot;
+    return _parentPinLockSeconds;
+  }
+
+  bool get isParentModeBusy => _parentModeBusy;
+  bool get isParentPinBusy => _parentPinBusy;
+  ParentPinResult? get lastParentPinResult => _lastParentPinResult;
+
+  /// 家长模式还剩几秒（0 = 不在家长模式 / 已到期）。
+  ///
+  /// 界面每帧都用它，而不是自减一个整数：手机时间不准、后台挂起都会让
+  /// 自减的倒计时说谎，而服务端给的 [ParentMode.expiresAt] 是绝对时刻。
+  int parentModeRemainingSeconds(DateTime now) =>
+      _parentMode?.remainingSecondsAt(now) ?? 0;
 
 
   /// live 模式下是否已接上写端点（W4-E：只覆盖打卡 / 撤销）。
@@ -764,6 +852,13 @@ class AppStore extends ChangeNotifier {
     _lastOnboardingResult = null;
     _lastOnboardingHabitCount = 0;
     _lastOnboardingManualTitles = <String>[];
+    _parentMode = null;
+    _parentModeReadStatus = ReadStatus.idle;
+    _parentModeError = null;
+    _parentModeBusy = false;
+    _parentPinBusy = false;
+    _lastParentPinResult = null;
+    _parentPinLockSeconds = 0;
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -1219,6 +1314,7 @@ class AppStore extends ChangeNotifier {
     _readApi?.close();
     _writeApi?.close();
     _onboardingApi?.close();
+    _parentModeApi?.close();
     super.dispose();
   }
 
@@ -3955,6 +4051,206 @@ class AppStore extends ChangeNotifier {
   /// 直接复用 [checkedCountTodayByRule] 的同一口径，别在页面里另算一遍。
   int checkedCountTodayOfRule(PointRule rule, {DateTime? now}) =>
       checkedCountTodayByRule(records, rule.id, now: now);
+
+  // ==================================== 家长模式 ＋ 家长 PIN（W8-C）
+
+  /// 拉当前家长模式状态（`GET /auth/parent-mode`）。
+  ///
+  /// 打开面板时调用；App 冷启动**不**调用 —— 孩子每天打开 App 都多发一次请求
+  /// 没有收益，而入口在「我的」页，点开时再问一次就够。
+  ///
+  /// 失败**不清空**上一次成功的快照：家长可能刚看到「还剩 4:12」，
+  /// 一次超时把倒计时抹成空白，会让人以为模式已经掉了。
+  Future<void> refreshParentMode() async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null || _disposed) {
+      _parentModeReadStatus = ReadStatus.ready;
+      _parentModeError = null;
+      _notify();
+      return;
+    }
+    _parentModeReadStatus = ReadStatus.loading;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentModeDto dto = await api.fetch();
+      if (_disposed || api != _parentModeApi) return;
+      _applyParentModeDto(dto);
+      _parentModeReadStatus = ReadStatus.ready;
+      _parentModeError = null;
+    } on WriteApiException catch (error) {
+      if (_disposed || api != _parentModeApi) return;
+      _parentModeError = error.userMessage;
+      _parentModeReadStatus = ReadStatus.error;
+    } catch (error) {
+      if (_disposed || api != _parentModeApi) return;
+      _parentModeError = '读取家长模式状态时发生意外错误。请重试。';
+      _parentModeReadStatus = ReadStatus.error;
+    }
+    _notify();
+  }
+
+  /// 用 PIN 进入家长模式（`POST /auth/parent-mode`）。成功返回 null。
+  ///
+  /// ── 三类失败必须分开说 ──────────────────────────────────────────────────────
+  ///   · 格式错 ⇒ 本地就拒（后端 `400` 且**不计次**，手滑不该消耗尝试机会）；
+  ///   · 值不对 ⇒ `403` + `remainingAttempts` 已递减，文案要带「还剩 N 次」；
+  ///   · 锁定   ⇒ `429` + `retryAfterSeconds`，文案要带「还要等多久」。
+  ///   把三者都说成「切换失败」会让家长反复乱试，最后把自己锁 15 分钟。
+  ///
+  /// 成功后**只更新家长模式快照**，不整体刷新首页：角色切换改变的是「哪些入口
+  /// 可写」，首页数据（余额 / 习惯）与角色无关，多刷一次只会多一次失败机会。
+  Future<String?> enterParentMode(String pin) async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法切换家长模式。';
+    if (_parentModeBusy) return '正在切换，请稍候…';
+    final String trimmed = pin.trim();
+    if (trimmed.isEmpty) return '请输入家长 PIN。';
+    final String? invalid = validateParentPin(trimmed);
+    if (invalid != null) return invalid;
+
+    _parentModeBusy = true;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentModeDto dto = await api.enter(trimmed);
+      if (_disposed) return null;
+      _applyParentModeDto(dto);
+      _parentModeReadStatus = ReadStatus.ready;
+      _parentPinLockSeconds = 0;
+      return null;
+    } on ParentPinLockException catch (error) {
+      if (_disposed) return error.userMessage;
+      _parentPinLockSeconds = error.retryAfterSeconds;
+      // 锁定是**服务端事实**（成员级计数），本地快照可能还是旧的 —— 拉一次把
+      // `lockedUntil` / `remainingAttempts` 对齐，重开面板就不用再试错。
+      await refreshParentMode();
+      return error.userMessage;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.unauthenticated) {
+        // 403 `PARENT_PIN_INVALID` 已经改了服务端的失败计数；
+        // 401 说明会话没了 —— 两种都该重新对齐快照。
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '切换家长模式的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _parentModeBusy = false;
+      _notify();
+    }
+  }
+
+  /// 主动退出家长模式（`DELETE /auth/parent-mode`）。成功返回 null。
+  ///
+  /// **不需要 PIN**：降级永远允许（`02` §7）—— 孩子拿着手机时，家长必须能
+  /// 立刻把权限收回去。也因此这是**幂等**的：本来就不在家长模式时也回 200，
+  /// 界面不该把它当失败（那只是在重复一件已经成立的事）。
+  ///
+  /// 锁定期间同样可用：`429` 只拦「进」，不拦「出」。
+  Future<String?> exitParentMode() async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法退出家长模式。';
+    if (_parentModeBusy) return '正在切换，请稍候…';
+
+    _parentModeBusy = true;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentModeDto dto = await api.exit();
+      if (_disposed) return null;
+      _applyParentModeDto(dto);
+      _parentModeReadStatus = ReadStatus.ready;
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 401：会话已经不在了 —— 那本来就不是家长模式了，拉一次说真话。
+      if (error.kind == WriteFailureKind.unauthenticated) {
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '退出家长模式的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _parentModeBusy = false;
+      _notify();
+    }
+  }
+
+  /// 首次设置 / 修改家长 PIN（`POST /auth/parent-pin`）。成功返回 null。
+  ///
+  /// ── 为什么改 PIN 需要 `currentPin` ──────────────────────────────────────────
+  ///   否则任何拿到已解锁手机的孩子都能把 PIN 改掉，5 分钟家长模式就形同虚设。
+  ///   这也解释了为什么这个端点在矩阵里是 `manage_parent_pin`（**child DENY**）：
+  ///   孩子模式会话里改 PIN 一律 403，必须先拿 PIN 进家长模式再改。
+  ///
+  /// `currentPin` 为 null ⇒ 「服务端还没有 PIN」（首次设置）。若其实已有 PIN，
+  /// 后端回 `400`（`PARENT_PIN_CURRENT_REQUIRED`），这里把文案原样交出去。
+  Future<String?> setParentPin({
+    required String pin,
+    String? currentPin,
+  }) async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法保存家长 PIN。';
+    if (_parentPinBusy) return '上一次保存正在提交，请稍候…';
+
+    final String trimmed = pin.trim();
+    if (trimmed.isEmpty) return '请输入新的家长 PIN。';
+    final String? invalid = validateParentPin(trimmed);
+    if (invalid != null) return invalid;
+    if (currentPin != null && currentPin.trim().isEmpty) {
+      return '请输入当前家长 PIN。';
+    }
+
+    _parentPinBusy = true;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentPinDto dto = await api.setPin(
+        pin: trimmed,
+        currentPin: currentPin?.trim(),
+      );
+      if (_disposed) return null;
+      _lastParentPinResult = mapParentPinResult(dto);
+      // 只改**这几个**字段：PIN 变了不代表角色 / TTL 变了。
+      _parentMode = (_parentMode ?? ParentMode.unknown).copyWith(
+        pinConfigured: dto.pinConfigured,
+        remainingAttempts: dto.remainingAttempts,
+        clearLockedUntil: true,
+      );
+      _parentPinLockSeconds = 0;
+      _parentModeReadStatus = ReadStatus.ready;
+      return null;
+    } on ParentPinLockException catch (error) {
+      if (_disposed) return error.userMessage;
+      _parentPinLockSeconds = error.retryAfterSeconds;
+      await refreshParentMode();
+      return error.userMessage;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 403（旧 PIN 错，已计次）/ 400（缺 currentPin）/ 409 都改变了服务端事实。
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.badRequest ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '保存家长 PIN 的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _parentPinBusy = false;
+      _notify();
+    }
+  }
+
+  /// 把 DTO 落进快照 —— 三处调用共用，免得哪一处漏掉字段，
+  /// 出现「模式已进、pinConfigured 还是旧值」。
+  void _applyParentModeDto(ParentModeDto dto) {
+    _parentMode = mapParentMode(dto);
+    if (!dto.parentMode) _parentPinLockSeconds = 0;
+  }
 
   // ------------------------------------------------------------ 内部工具
 

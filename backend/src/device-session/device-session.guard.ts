@@ -2,12 +2,13 @@ import {
   Inject,
   Injectable,
   InternalServerErrorException,
-  ServiceUnavailableException,
+  Logger,
   UnauthorizedException,
   type CanActivate,
   type ExecutionContext
 } from '@nestjs/common'
 
+import { deviceIdFallbackEnabled } from '../identity/auth-config'
 import type { RequestWithActor } from '../permissions/actor'
 import { DEVICE_SESSION_REPOSITORY, type DeviceSessionPort } from './device-session.repository'
 import { resolveSession, SessionRowShapeError, toSessionActor } from './session.gate'
@@ -16,8 +17,11 @@ import { resolveSession, SessionRowShapeError, toSessionActor } from './session.
  * ★ W1-C（2026-10-15）：**设备凭据**的临时替身。
  *
  * 最终设计里，客户端出示的是**登录后拿到的会话凭据**（微信 `code2session` → openId →
- * 会话 token，`02` §7 / §1）。而 L2（小程序主体认证 + 正式 AppID）**仍是阻塞项**
- * （`project.config.json` 还是 `touristappid`，见 `05` §6），登录链路今天无法落地。
+ * 会话 token，`02` §7 / §1）。**L2 已于 2026-10-29 解除**：正式 AppID 进了
+ * `project.config.json`，AppSecret 进了 `backend/.env`（不入库），凭据有效性用
+ * `sns/jscode2session` 的 `40029`（有效）/ `40125`（secret 错）当场验过 ——
+ * 也就是说这条链路的**外部前置已具备**。但**登录端点本身仍未写**
+ * （`WECHAT_MP_*` 在 `backend/src` 里零引用），所以本 Guard 今天仍只认 `x-kp-device-id`。
  * 故此处先让客户端出示 `deviceId`，由服务端去查**这台设备在这份档案上的会话**。
  *
  * ★★ 它比 W1-A/W1-B 的三个头强在哪（**这是本阶段的全部意义**）：
@@ -25,11 +29,11 @@ import { resolveSession, SessionRowShapeError, toSessionActor } from './session.
  *     · 客户端**不再被允许自报 userId**（`x-kp-user-id`）—— 身份由会话行给出。
  *   即：**"我是谁 / 我是什么角色"从"客户端说"变成了"服务端查"。**
  *
- * ★★ 它**还没解决**什么（不许粉饰 —— 见守卫里的生产闸门）：
- *    `deviceId` 本身**没有可验证性**：谁都能报一个别人的 deviceId。
- *    所以这一层目前是「**身份由服务端确立**，但**设备凭据尚未认证**」——
- *    真正的解药是 L2 之后的会话 token（签名/一次性）。在那之前，
- *    `NODE_ENV=production` 一律 **503**，禁止这套口径上线。
+ * ★★ 它**还没解决**什么 → ✅ **W9-A（2026-10-29）已解决**（见下）：`deviceId` 本身
+ *    没有可验证性，所以它**不能**是凭据。现在凭据是 `AuthGuard` 解析出的
+ *    Bearer token（`request.kpAuth`），`deviceId` 被降级成**选择器**；
+ *    并且本 Guard 增加了**同源校验**（会话行的 userId 必须等于登录身份的 userId），
+ *    否则"知道别人的 deviceId"就等于"以那个家长的身份操作"。
  */
 export const DEVICE_ID_HEADER = 'x-kp-device-id'
 
@@ -74,12 +78,9 @@ export const CHILD_ID_HEADER = 'x-kp-child-id'
  *   ③ **会话行形状坏（角色不在枚举内 / expiresAt 解析不出 / childId 不同源）⇒ 500** ——
  *      那是**数据/实现**问题，不是权限问题。混报成 403 会让"库里存了个非法角色"
  *      被当成"这个人没权限"排查很久（D3b 与屏障一同一条纪律）。
- *   ④ **`NODE_ENV === 'production'` ⇒ 503 `IDENTITY_NOT_IMPLEMENTED`** ——
- *      ★ 这条**故意保留**：角色/身份已经由服务端确立了，但**设备凭据仍不可验证**
- *      （`x-kp-device-id` 可以被随便伪造 ⇒ 直接冒充别人的会话）。
- *      所以"身份层已完成"这句话**现在还不能说**；能说的是"角色不再由客户端自选"。
- *      真正的解药是 L2（正式 AppID）之后的会话 token，届时应把这条闸门换成
- *      "凭据无效 ⇒ 401"，并同步改 `approvals-http.test.ts` 的那条用例。
+ *   ④ **没有登录身份 ⇒ 401**（W9-A 起）：双读期之外的调用方必须先过 `AuthGuard`。
+ *      本 Guard 仍自己判一次 `deviceIdFallbackEnabled()`（见守卫里 (0) 那段）——
+ *      生产恒 false，所以"上游一定先拦"这个假设失效时也只是 401，不是提权。
  *
  * ── 顺序（与 02 §3 一致）────────────────────────────────────────────────
  *   Nest 的 Guard 顺序是「全局 → 控制器 → 同一层级按数组顺序」，
@@ -93,9 +94,11 @@ export const CHILD_ID_HEADER = 'x-kp-child-id'
  *   · **PIN 切换**（`02` §7 / §9.18「连错 5 次锁 15 分钟」）**未实现** ——
  *     没有"切到家长模式"的端点，`ChildMember.pinHash` / `pinLockedUntil` 目前无人使用；
  *   · 会话查询的**真 Prisma 适配器** ✅ 已落地（W2-D，见 `device-session.prisma.repository.ts`，
- *     由 `DeviceSessionModule.register()` 在有库时绑定）—— 但随之而来的诚实标注是：
- *     `x-kp-device-id` 仍**没有可验证性**（谁都能报别人的 deviceId），所以生产 503 那条闸门
- *     继续保留 —— **"能查库了"不等于"没人能冒充了"**。
+ *     由 `DeviceSessionModule.register()` 在有库时绑定）。**W9-A 补上了可验证性**：
+ *     凭据是 Bearer token（`kpAuth`），`deviceId` 只是选择器，且**同源校验**保证
+ *     会话行的 userId 必须等于登录身份 —— 于是"报别人的 deviceId"不再能冒充。
+ *     ⇒ 旧的 `NODE_ENV=production ⇒ 503 IDENTITY_NOT_IMPLEMENTED` 闸门**已删除**
+ *       （它挡的正是"deviceId 当凭据"，而现在它不当凭据了）。
  */
 @Injectable()
 export class DeviceSessionGuard implements CanActivate {
@@ -104,16 +107,23 @@ export class DeviceSessionGuard implements CanActivate {
   constructor(@Inject(DEVICE_SESSION_REPOSITORY) private readonly port: DeviceSessionPort) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    if (process.env.NODE_ENV === 'production') {
-      throw new ServiceUnavailableException({
-        code: 'IDENTITY_NOT_IMPLEMENTED',
+    const req = context.switchToHttp().getRequest<RequestWithActor>()
+    const auth = req.kpAuth
+
+    // ★ (0) **没有登录身份**（W9-A 起的新分支）：`AuthGuard` 只在双读期放行到
+    //   这里（生产/旁路关闭时它已经 401 了），所以走到这一格一定是"旧客户端"。
+    //   再判一次 `deviceIdFallbackEnabled()` 而不是信任上游：本 Guard 也被
+    //   `test/**` 直接调用，而"上游一定会先拦"这类假设在重构后不成立时
+    //   就是提权（`x-kp-device-id` 可伪造）。生产恒 false。
+    if (auth === undefined && !deviceIdFallbackEnabled()) {
+      throw new UnauthorizedException({
+        code: 'UNAUTHENTICATED',
         message:
-          '身份层的**凭据**尚未可验证：角色的服务端确立已落地（DeviceSession），' +
-          '但设备凭据（x-kp-device-id）可被伪造 —— 因此生产环境禁用这套口径（见 device-session.guard.ts）。'
+          '这个请求没有登录身份：请先登录（Authorization: Bearer <token>），' +
+          `再带上 ${DEVICE_ID_HEADER}（设备标识）与 ${CHILD_ID_HEADER}（在哪个孩子的档案上）。`
       })
     }
 
-    const req = context.switchToHttp().getRequest<RequestWithActor>()
     const deviceId = singleHeader(req, DEVICE_ID_HEADER)
     const childId = singleHeader(req, CHILD_ID_HEADER)
     if (deviceId === undefined || childId === undefined) {
@@ -149,11 +159,33 @@ export class DeviceSessionGuard implements CanActivate {
       throw err
     }
 
+    // ★ 同源校验（W9-A，`40` §9.5 第 3 条）：会话行里的 userId 必须**就是**
+    //   登录身份里的 userId。少了这一行，任何人只要知道"某个孩子的 deviceId"
+    //   （它出现在 URL 之外的请求头里，会出现在日志/截图中）就能以那个设备上
+    //   **当前那个家长**的身份操作 —— 而 Bearer token 只是让他"有个身份"，
+    //   并不会让设备键指向他自己。
+    //   报 401 `SESSION_NOT_FOUND`（与"查不到会话"同一个码）：对攻击者不区分
+    //   "这个设备被别人登录着"和"这个设备没有会话"，避免把设备归属当探针。
+    if (auth !== undefined && resolved.actor.userId !== auth.userId) {
+      this.logger.warn(
+        `设备 ${deviceId} 在孩子 ${childId} 的会话属于用户 ${resolved.actor.userId}，` +
+          `而当前登录身份是 ${auth.userId} —— 拒绝（同源校验）。`
+      )
+      throw new UnauthorizedException({
+        code: 'SESSION_NOT_FOUND',
+        message:
+          `设备 ${deviceId} 在孩子 ${childId} 的档案上没有**属于你**的有效会话。` +
+          '请先调用 POST /auth/child-session 在这台设备上开启会话。'
+      })
+    }
+
     // ★ 这两个字段是三道屏障的**共同输入**，且都来自服务端（不来自请求头）。
     req.kpActor = resolved.actor
     req.kpChildId = resolved.childId
     return true
   }
+
+  private readonly logger = new Logger(DeviceSessionGuard.name)
 }
 
 /**

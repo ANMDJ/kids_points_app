@@ -23,6 +23,11 @@ import { ALL_ACTIONS, type ActionType } from './permission-matrix'
  *      就是「可撤回但不可恢复」的死状态（合规上不成立）；
  *   ⑤ `switch_role_mode`：切家长模式本身不写儿童数据；而它是家长**进入恢复同意界面**
  *      的路径 —— 拦住它同样会制造死锁。
+ *   ⑥ `manage_parent_pin`（W8-C）：PIN 是**家长自己的凭据**（`ChildMember.pinHash`），
+ *      不是新的儿童数据采集；且它是同一条死锁的另一半 —— "没有 PIN 就进不了家长模式，
+ *      进不了家长模式就没法重新同意"。若把它归进写侧，撤回同意后家长连补设 PIN 都做不到。
+ *      ★ 注意方向：豁免的是**家长设置自己的 PIN**，孩子的 `manage_parent_pin` 在矩阵里
+ *      仍是 DENY —— 豁免只影响同意闸门，从不放宽角色判定。
  */
 export const CONSENT_GATED_ACTIONS = [
   /* ── 打卡 / 记一笔 ── */
@@ -89,10 +94,11 @@ export const CONSENT_EXEMPT_ACTIONS = [
   'manage_family_deletion',
   /* ── 只改 UI 状态 ── */
   'read_notifications',
-  /* ── 行使权利 / 恢复同意（见文件头 ③④⑤）── */
+  /* ── 行使权利 / 恢复同意（见文件头 ③④⑤⑥）── */
   'withdraw_request',
   'manage_consent',
-  'switch_role_mode'
+  'switch_role_mode',
+  'manage_parent_pin'
 ] as const satisfies readonly ActionType[]
 
 const GATED = new Set<string>(CONSENT_GATED_ACTIONS)

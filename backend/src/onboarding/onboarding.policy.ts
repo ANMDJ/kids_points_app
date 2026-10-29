@@ -119,17 +119,17 @@ export function normalizeTemplateSlugs(input: readonly string[]): string[] {
 }
 
 /**
- * 第⑥步的 PIN 格式（2–6 位数字；`04` §2 写的是 4–6，这里放宽到 2 会破坏约定，
- * 故按**规格**取 4–6）。
+ * 家长 PIN 的格式规则 **现在住在 `common/pin-format.ts`**（W8-C 搬家）。
  *
- * 为什么在 service 再判一次：DTO 用 `@Matches` 拦的是 HTTP 入口；
- * service 是唯一业务判据（将来 Agent 入口也调它）。两处同源、同正则常量。
+ * 这里保留 re-export 的唯一理由是**调用点不动**：`dto/complete-onboarding.dto.ts`
+ * 与 `test/onboarding-policy.test.ts` 一直是从本文件取 `PIN_PATTERN` /
+ * `isPinFormatValid` 的，搬家的目的是让 `auth/`（切家长模式）与 `onboarding/`
+ * 共用同一份正则，而不是为了让每个 import 都改一遍。
+ *
+ * ★ 新增代码请直接 `import { isPinFormatValid } from '../common/pin-format'`。
  */
-export const PIN_PATTERN = /^\d{4,6}$/
+export { PIN_PATTERN, isPinFormatValid } from '../common/pin-format'
 
-export function isPinFormatValid(pin: string): boolean {
-  return PIN_PATTERN.test(pin)
-}
 
 /**
  * 合并「本次提交」与「已落库的中间状态」（`04` §6 用例 4.12）。

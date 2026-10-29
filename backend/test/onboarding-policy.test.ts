@@ -49,7 +49,7 @@ import {
   hashPin,
   pinAuditValue,
   verifyPin
-} from '../src/onboarding/pin-hash'
+} from '../src/common/pin-hash'
 
 function row(slug: string, overrides: Partial<RuleTemplateRow> = {}): RuleTemplateRow {
   return {

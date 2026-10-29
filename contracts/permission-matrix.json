@@ -2,7 +2,7 @@
   "$schema": "generated — 请勿手工编辑",
   "generatedFrom": "backend/src/contracts/permission-matrix.ts",
   "authority": "HTTP Guard 与 Agent action-dispatcher 消费本文件，权限定义只能存在于唯一事实源",
-  "actionCount": 41,
+  "actionCount": 42,
   "verdictSeverity": {
     "ALLOW": 0,
     "REQUIRE_APPROVAL": 1,
@@ -41,6 +41,7 @@
     "invite_member",
     "remove_member",
     "switch_role_mode",
+    "manage_parent_pin",
     "edit_child_profile",
     "view_onboarding",
     "apply_onboarding",
@@ -179,6 +180,10 @@
     "switch_role_mode": {
       "guardian": "ALLOW",
       "child": "ALLOW"
+    },
+    "manage_parent_pin": {
+      "guardian": "ALLOW",
+      "child": "DENY"
     },
     "edit_child_profile": {
       "guardian": "ALLOW",

@@ -12,6 +12,7 @@ import type { ApprovalInboxItem } from '../../data/approval'
 import { useViewport } from '../../utils/layout'
 import { switchTab } from '../../utils/nav'
 import { confirm, toast } from '../../utils/toast'
+import { useAuthGate } from '../../utils/useAuthGate'
 import { designToPx } from '../../utils/unit'
 import './index.scss'
 
@@ -32,6 +33,9 @@ const NAV_HEIGHT = 64
  */
 export default function Approvals() {
   const store = useStore()
+
+  // W9-B：登录闸门（详见 `utils/useAuthGate.ts`）。
+  useAuthGate()
   const viewport = useViewport()
   const [refreshing, setRefreshing] = useState(false)
 

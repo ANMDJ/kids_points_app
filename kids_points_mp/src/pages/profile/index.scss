@@ -136,6 +136,18 @@
   color: $text-primary;
 }
 
+// 「退出登录」右侧的账号标识：说明退的是哪个身份（一台设备可能换过账号）。
+.kp-profile__menu-account {
+  flex: none;
+  max-width: f2r(96);
+  margin-right: f2r(6);
+  font-size: f2r(11.5);
+  color: $text-hint;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 // Divider(indent: 66)：左侧缩进对齐到文字
 .kp-profile__menu-divider {
   height: 1px;

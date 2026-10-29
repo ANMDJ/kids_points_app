@@ -15,6 +15,7 @@ import { useViewport } from '../../utils/layout'
 import { switchTab } from '../../utils/nav'
 import { confirm, toast } from '../../utils/toast'
 import { DESIGN_WIDTH, designToPx } from '../../utils/unit'
+import { useAuthGate } from '../../utils/useAuthGate'
 import { useSheet } from '../../utils/useSheet'
 import './index.scss'
 
@@ -45,6 +46,9 @@ const GRID_GAP = 14
  */
 export default function Wishlist() {
   const store = useStore()
+
+  // W9-B：登录闸门（详见 `utils/useAuthGate.ts`）。
+  useAuthGate()
   const sheet = useSheet()
   const viewport = useViewport()
 

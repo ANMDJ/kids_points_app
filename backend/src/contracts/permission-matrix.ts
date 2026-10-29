@@ -108,6 +108,15 @@ export const PERMISSION_MATRIX = {
   invite_member: { guardian: 'ALLOW', child: 'DENY' },
   remove_member: { guardian: 'ALLOW', child: 'DENY' },
   switch_role_mode: { guardian: 'ALLOW', child: 'ALLOW' }, // 受 PIN 保护（02 §7）
+  // 家长 PIN 的**设置 / 修改**（W8-C，02 §7）：只给家长。
+  //   ★ 为什么不并进 `switch_role_mode`：那个动作是"用 PIN 换 5 分钟家长模式"，
+  //     **孩子也必须能做**（否则孩子拿着手机无法把家长叫来输 PIN）。
+  //     而设置 / 修改 PIN 是"定义那把钥匙"，只能由家长本人做 ——
+  //     合并会让孩子的每一次"我想切家长模式"都附带一次"允许改 PIN"。
+  //   ★ 它在 `contracts/consent-policy.ts` 里是**豁免**动作：PIN 是家长自己的
+  //     凭据（写在 `ChildMember.pinHash`），不是新的儿童数据采集；而它是
+  //     "没 PIN ⇒ 进不了家长模式 ⇒ 无法重新同意"这条死锁的出口（见文件头 ⑥）。
+  manage_parent_pin: { guardian: 'ALLOW', child: 'DENY' },
   edit_child_profile: { guardian: 'ALLOW', child: 'DENY' },
   // 首启引导（W8-A）：**拆成读 / 写两个动作**。
   //   `view_onboarding` 是第①步就需要的读：引导页要先能打开、能显示「监护人同意」
@@ -154,7 +163,7 @@ export const PERMISSION_MATRIX = {
 
 export type ActionType = keyof typeof PERMISSION_MATRIX
 
-/** 40 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
+/** 42 个 ActionType —— 与 Prisma `enum ActionType` 必须逐一对应。 */
 export const ALL_ACTIONS = Object.keys(PERMISSION_MATRIX) as ActionType[]
 
 /**

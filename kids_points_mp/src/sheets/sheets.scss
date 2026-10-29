@@ -958,3 +958,74 @@
 }
 
 
+
+// ───────────────────────────────────────────── 家长模式（W8-C）
+// 三块：状态提示 / 倒计时卡片 / PIN 折叠区。判定全在 store（服务端事实），
+// 这里只管排版与配色 —— 「是不是家长模式」不在样式里做第二套判断。
+.kp-parent-mode__hint {
+  padding: f2r(4) 0;
+}
+
+.kp-parent-mode__hint-text {
+  display: block;
+  font-size: f2r(12);
+  line-height: 1.5;
+  color: $text-secondary;
+}
+
+/* 锁定 / 读失败 / 错误：必须比普通说明更显眼，否则会被当成背景文字跳过。 */
+.kp-parent-mode__hint-text.is-danger {
+  color: $point-spend;
+}
+
+.kp-parent-mode__timer-row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-parent-mode__timer-text {
+  margin-left: f2r(10);
+  font-size: f2r(14);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-parent-mode__toggle {
+  display: flex;
+  align-items: center;
+  margin-top: f2r(6);
+  padding: f2r(8) 0;
+}
+
+.kp-parent-mode__toggle:active {
+  opacity: 0.7;
+}
+
+.kp-parent-mode__toggle.is-disabled {
+  opacity: 0.5;
+}
+
+.kp-parent-mode__toggle.is-disabled:active {
+  opacity: 0.5;
+}
+
+.kp-parent-mode__toggle-text {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $primary-text;
+}
+
+/* 收起时朝右、展开时朝下 —— 只转图标，不另做一份「展开态」图标。 */
+.kp-parent-mode__chevron {
+  margin-left: f2r(4);
+  transition: transform 0.15s ease;
+}
+
+.kp-parent-mode__chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.kp-parent-mode__save {
+  margin-left: auto;
+  width: f2r(150);
+}

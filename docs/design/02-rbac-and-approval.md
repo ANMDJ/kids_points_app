@@ -100,7 +100,8 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   change_member_role:     { guardian: 'ALLOW', child: 'DENY'  },
   invite_member:          { guardian: 'ALLOW', child: 'DENY'  },
   remove_member:          { guardian: 'ALLOW', child: 'DENY'  },
-  switch_role_mode:       { guardian: 'ALLOW', child: 'ALLOW' },  // 受 PIN 保护
+  switch_role_mode:       { guardian: 'ALLOW', child: 'ALLOW' },  // 受 PIN 保护（W8-C：`POST /auth/parent-mode`）
+  manage_parent_pin:      { guardian: 'ALLOW', child: 'DENY'  },  // W8-C：设 / 改 PIN（改需 currentPin）
   edit_child_profile:     { guardian: 'ALLOW', child: 'DENY'  },
   apply_onboarding:       { guardian: 'ALLOW', child: 'DENY'  },  // 见 04
   reset_demo_data:        { guardian: 'DENY',  child: 'DENY'  }   // ← E18：生产永久关闭
@@ -284,6 +285,9 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
 - ⚠️ **会话刷新（§7「每次 guardian 操作刷新 TTL」）未实现**：本 Guard **只读**
   （刷新要**写库** —— W2-D 只交付了**读路径**，写路径仍未落地）。
 - ⚠️ **PIN 切换（§7 / §9.18）未实现**：没有"切家长模式"端点，`pinHash` / `pinLockedUntil` 目前无人使用。
+  → ✅ **W8-C（2026-10-27）已结清**：`POST /auth/parent-mode` 校验 `pinHash`，
+  `POST /auth/parent-pin` 写 `pinHash`，`pinFailedCount` / `pinLockedUntil` 由 `auth` 模块读写
+  （落点与口径见 §7 末尾的「W8-C 落地注」）。
 - ⚠️ **`POST /approvals/:id/decide` 的跨家庭推进仍未堵**：它用的是请求里的 childId，
   与审批行自己的 childId 还没有同源校验（要等 `ApprovalRow` 带上它）—— 会话层的同源校验只解决了**一半**。
 
@@ -922,9 +926,44 @@ model DeviceSession {
   四行**写路径**（PIN／锁／审计／TTL 刷新）**一行都没做**。
 - ⚠️ **凭据未认证**：`x-kp-device-id` 可被伪造 ⇒ `NODE_ENV=production` 一律 **503**（禁止上线）。
 
+### ✅ W8-C 落地注（2026-10-27）：这张表的**写路径**收了四行里的三点五行
+
+- **落地物**：`backend/src/auth/` —— `parent-mode.policy.ts`（纯算术：TTL / 失败计数 / 锁定）＋
+  `auth.repository.ts`（端口）＋ `auth.prisma.repository.ts`（`SELECT … FOR UPDATE` ＋ 审计）＋
+  `auth.service.ts` ＋ `auth.controller.ts`。四条路由，守卫链
+  `DeviceSessionGuard → MembershipGuard → PermissionsGuard`：
+  `GET/POST/DELETE /auth/parent-mode`（`switch_role_mode`）、`POST /auth/parent-pin`（`manage_parent_pin`）。
+- **① 默认角色 `child`**：✅ 一直成立（`activeRole` 初值 `child`；W1-C 起读就以库为准）。
+- **② 切到 `guardian` 需 PIN**：✅ `POST /auth/parent-mode` —— `verifyPin()`（自描述 `scrypt$…`）
+  ＋ 同事务改 `activeRole` / `expiresAt` / 清失败计数 / 写审计。★ 另加一条**业务前提**：
+  这台设备的**成员位必须是家长、且该成员位上有 PIN** —— PIN 落在 `ChildMember.pinHash`，
+  孩子那条会话**没有钥匙** ⇒ `403 PARENT_MODE_REQUIRES_GUARDIAN`（不是矩阵漏了一行）。
+- **③ TTL 5 分钟回落 + 每次 guardian 操作刷新**：⚠️ **半条**。进入时写 `now + 5min`，
+  判定复用 `session.gate.ts#effectiveRole()`（边界只有一处定义）；但"每次 guardian 操作刷新"
+  只落在**进入时**，其它 guardian 写操作尚未续期 —— 写在这里，不藏在实现里。
+- **④ PIN 错 5 次锁 15 分钟**：✅ 计数落在 `ChildMember`（**成员级** ⇒ 换台设备也绕不过），
+  锁定期内**连 scrypt 都不跑**；**格式错不计次**（`400 PARENT_PIN_FORMAT_INVALID`，手滑不是猜）；
+  触发锁定的那一次直接 `429 PARENT_PIN_LOCKED` ＋ `retryAfterSeconds`。
+- **⑤ 审计含 `deviceId`**：✅ 进 / 出 / 失败 ⇒ `switch_role_mode`；设 / 改 ⇒ `manage_parent_pin`；
+  均在同一事务内写 `AuditLog`，只记 `pinConfigured` / `changed` 布尔 —— **不记哈希、不记明文**。
+- **⑥ `modeSource`（2026-10-27 补，W8-C 验收缺口）**：`parentMode:true` 有两种来路，**必须**
+  在回包里说清是哪一种 —— `pin`（PIN 换的 5 分钟）/ `session`（邀请码加入的家长设备，
+  登录会话 30 天自带 `guardian`）。只给 `remainingSeconds` 而不给来源，客户端会把
+  2 592 000 秒画成 `43200:00 后自动收回`，或者干脆当坏数据拒掉（Flutter / 小程序的 DTO
+  早期都硬校验「≤300」，家长本机一开面板就是「数据格式不符合预期」）。
+  服务端派生方式：`parent-mode.policy.ts#parentModeSourceOf(expiresAt, now)` ——
+  「到期时刻离现在 > `PARENT_MODE_TTL_MS`」⇒ `session`，否则 `pin`；**不落库**（`DeviceSession`
+  只存 `activeRole` / `expiresAt`，多存一列只会多一个能与之打架的字段）。客户端据此做交叉校验：
+  `pin ⇒ 1..300`、`session ⇒ 301..一年`、不在家长模式 ⇒ `null` + `0`。
+- **仍未落地**：`02` §7 **没有定义**"忘了 PIN 怎么办"，因此**没有找回通道**（任何"无凭据重置"
+  都会把 PIN 变成装饰品；真要补应走 L2 的监护人身份再验证）。`DELETE` 不验 PIN、幂等、
+  **锁定期间也可用**（降级永不设门槛）。
+
 ---
 
 ## 8. 邀请码（并发安全）
+
+
 
 **问题**：邀请码的"校验剩余次数 → 插入成员 → 次数 +1"若分步执行，**并发下会超发**。
 
@@ -998,7 +1037,7 @@ model InviteCode {
 | 9.15 | 孩子 `adjust_points(delta=-5)` | 403 CHILD_CANNOT_DEDUCT |
 | 9.16 | 孩子第 4 次申请加分（同日） | 403 CHILD_REQUEST_QUOTA_EXCEEDED |
 | 9.17 | 孩子申请加分 51 分（Q15 = ±50） | 403 AMOUNT_EXCEEDS_LIMIT |
-| 9.18 | PIN 连错 5 次 | 锁定 15 分钟 |
+| 9.18 | PIN 连错 5 次 | 锁定 15 分钟（✅ **W8-C 后端**：`parent-mode.policy.ts#nextPinFailureState` 达阈值时**计数清零**并写 `pinLockedUntil = now + 15min`，那一次直接 `429 PARENT_PIN_LOCKED` ＋ `retryAfterSeconds`；锁定期内不跑 scrypt；格式错不计次。真库断言见 `test-db/parent-mode-db.dbtest.ts` 组 H） |
 | 9.19 | `DeviceSession` 到期 | 角色回落 `child`（✅ W1-C：内核 `test/session-gate.test.ts` 组 C —— 含 `expiresAt === now` **边界**；真 HTTP `device-session-http.test.ts` 组 B） |
 | 9.20 | 撤回同意（`GuardianConsent`） | 全链路写入停止（✅ **W7-A 后端**：`ConsentGuard` 按 `contracts/consent-policy.ts` 的显式清单拦下 24 个写动作 —— `none` / `withdrawn` 都拒，403 `CONSENT_REQUIRED`；用例 `test/consent-http.test.ts` 组 E ＋ `test/consent-policy.test.ts` 划分完整性）；导出可下载 ✅ **W7-C**（`GET /export`，豁免同意闸门）；删除可执行 ✅ **W7-D**（`POST /family-deletion`：7 天冷却 ＋ `confirmed: true` 二次确认 ＋ 到期就地匿名化；撤销 / 重复申请幂等；两条删除路由同样**不挂** `ConsentGuard`；真库用例 `test-db/deletion-db.dbtest.ts` 用**已撤回**的同意行跑通全链路） |
 | 9.21 | 非成员访问 | 403 MEMBER_NOT_FOUND（✅ W1-B 已有真 HTTP 用例：`membership-http.test.ts` 组 A） |

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common'
+import { APP_GUARD } from '@nestjs/core'
 import { ApprovalsModule } from './approvals/approvals.module'
 import { AuditModule } from './audit/audit.module'
+import { AuthModule } from './auth/auth.module'
 import { ChildrenModule } from './children/children.module'
 import { ConsentHttpModule } from './consent/consent-http.module'
 import { DeletionModule } from './deletion/deletion.module'
@@ -8,6 +10,8 @@ import { DeviceSessionModule } from './device-session/device-session.module'
 import { DeviceTokensHttpModule } from './device-tokens/device-tokens-http.module'
 import { ExportModule } from './export/export.module'
 import { HabitsModule } from './habits/habits.module'
+import { AuthGuard } from './identity/auth.guard'
+import { IdentityModule } from './identity/identity.module'
 import { IdempotencyModule } from './idempotency/idempotency.module'
 import { InvitesModule } from './invites/invites.module'
 import { LedgerModule } from './ledger/ledger.module'
@@ -98,6 +102,23 @@ import { WishesModule } from './wishes/wishes.module'
     //   ★ `view_onboarding` 在同意闸门**豁免**（第①步就是同意，页要先能打开）；
     //   `apply_onboarding` 受管（第②步起采集昵称，04 §5 要求同意先于采集）。
     OnboardingModule.register(),
+    // ★ W9-A（2026-10-29）：登录 / 认证会话 / 新用户 bootstrap。
+    //   `POST /auth/login`（**免认证**）、`POST /auth/logout`、`GET /auth/session`、
+    //   `POST /auth/child-session`、`POST /children`。
+    //   有库 ⇒ PrismaAuthSessionRepository + PrismaIdentityRepository（真写 `User`/`AuthSession`）；
+    //   无库 ⇒ 两个都是 **501**（绝不"假装登录成功"—— 那会让客户端在
+    //   "登录成功"与"请重新登录"之间无限循环，而病是装配）。
+    //   微信实现按 `WECHAT_MP_APPID` / `WECHAT_MP_SECRET` 分叉：没配 ⇒ 503 `WECHAT_NOT_CONFIGURED`。
+    //   ⚠ 本模块注册的是**路由**，只能被 AppModule 导入一次（见模块文件头的说明）。
+    IdentityModule.register(),
+    // ★ W8-C（2026-10-27）：家长模式 `GET/POST/DELETE /auth/parent-mode` +
+    //   家长 PIN `POST /auth/parent-pin`。有库 ⇒ PrismaAuthRepository（**一个事务**
+    //   改会话 activeRole / TTL + 失败计数 + 审计，并先 `SELECT … FOR UPDATE` 成员位）；
+    //   无库 ⇒ 501（**绝不**回"已切到家长模式"——下一次请求仍按 DeviceSession 判定，
+    //   假成功会把故障指向权限矩阵）。
+    //   ★ 两个 action（`switch_role_mode` / `manage_parent_pin`）在同意闸门**豁免**：
+    //   撤回同意后家长必须仍能进入家长模式，否则"重新同意"永远做不到（死锁）。
+    AuthModule.register(),
     // ★ W5-G（2026-10-22）：邀请码 `POST/GET /invites`、`POST /invites/:id/revoke`、
     //   `POST /invites/accept`。有库 ⇒ PrismaInvitesRepository（条件 UPDATE 原子占位，
     //   占位 + 成员位 + 会话 + 审计同一事务）；无库 ⇒ 501（不返回空列表冒充
@@ -134,6 +155,27 @@ import { WishesModule } from './wishes/wishes.module'
     // ★ W3-C：动态模块 —— 有库 ⇒ PrismaIdempotencyRepository（唯一约束兜底），
     //   无库 ⇒ 501（只在请求真的带 `Idempotency-Key` 时触发）。
     IdempotencyModule.register()
+  ],
+  providers: [
+    /**
+     * ★ W9-A：**认证守卫注册为全局第 0 位**（`40` §9.1）。
+     *
+     * ── 为什么是它、而不是另外三道屏障 ──────────────────────────────────────
+     *   另外三道是**授权**守卫：它们消费 `kpActor`，必须先由 `DeviceSessionGuard`
+     *   填好，因此只能挂在控制器上（顺序见 `permissions.guard.ts` 的"顺序"一节）。
+     *   本守卫是**认证**守卫：它**产出**身份、不消费身份 —— 全局注册正是要把
+     *   它排到所有控制器级守卫**之前**（Nest 的顺序：全局 → 控制器 → 路由）。
+     *
+     * ── 为什么用 `useExisting` 而不是 `useClass` ─────────────────────────────
+     *   `IdentityModule` 已经提供了 `AuthGuard`（控制器上的 `@UseGuards(AuthGuard)`
+     *   用的就是那个实例）。`useClass` 会**再建一个**实例 —— 两份状态看起来一样，
+     *   但"同一个 Guard 有两个实例"是之后加缓存/计数时最容易出错的形状。
+     *
+     * ── 它拦住了谁 ──────────────────────────────────────────────────────────
+     *   除 `@Public()` 之外**所有**路由。这防的不是"某条路由忘了写守卫"
+     *   （那类错误没有测试会红），而是"新加的控制器默认是公开的"这一默认值。
+     */
+    { provide: APP_GUARD, useExisting: AuthGuard }
   ]
 })
 export class AppModule {}

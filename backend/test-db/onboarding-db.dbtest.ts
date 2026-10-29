@@ -38,7 +38,7 @@ import {
   ONBOARDING_REPOSITORY,
   type OnboardingPort
 } from '../src/onboarding/onboarding.repository'
-import { verifyPin } from '../src/onboarding/pin-hash'
+import { verifyPin } from '../src/common/pin-hash'
 import { PrismaService } from '../src/prisma/prisma.service'
 import { grantConsentFor } from './support/consent-fixture'
 
