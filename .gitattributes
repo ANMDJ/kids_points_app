@@ -38,5 +38,16 @@ pnpm-lock.yaml    text
 yarn.lock         text
 pubspec.lock      text
 
+# 部署产物：强制 LF（这些文件在 Linux 上被直接执行 / 被 Caddy 解析）
+#
+# ⚠️ 注意 git 的 eol 只管 **checkout**，不管 `scp`。从 Windows 工作区直接
+#    `scp deploy/xxx.sh` 上传，带过去的仍可能是 CRLF，后果：
+#      · .sh      → `set: pipefail\r` / `command not found\r`
+#      · Caddyfile → caddy validate 报解析错误
+#    上传后一律先清洗：sed -i 's/\r$//' <file>
+deploy/*.sh         text eol=lf
+deploy/*.caddyfile  text eol=lf
+deploy/*.snippet    text eol=lf
+
 # 生成物标记（供 GitHub/Gitee 等平台在 diff 中折叠）
 contracts/permission-matrix.json linguist-generated=true
