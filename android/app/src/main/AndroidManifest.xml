@@ -1,8 +1,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ★ 联网权限（2026-11-01 补）
+         Flutter 模板只在 android/app/src/debug 与 src/profile 的 manifest 里给了
+         INTERNET，src/main 里**没有**。后果是：`flutter run` 一切正常，而
+         `flutter build apk` 出来的正式包**一个请求都发不出去** —— 界面显示
+         「网络错误」，看着像后端挂了。正式包要连线上后端，这里必须有。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- ★ 明文 HTTP 放行（2026-11-01）
+         线上后端此刻只通过 Caddy 的 http://82.157.153.22/k 暴露（备案未过）。
+         而 targetSdk >= 28 时 Android 默认禁止 cleartext，报文在**系统网络栈**
+         就被拒掉 —— 界面上的表现是「网络错误」，看起来像后端没起，其实请求
+         根本没发出去。
+
+         ★ 这是**过渡开关**，不是长期方案：等 kids.littlewish.top 的证书就绪、
+           启动参数 KP_API_BASE_URL 换成 https://kids.littlewish.top:8443 之后，
+           把 android:usesCleartextTraffic="true" 这一行删掉。
+           走 https 之后 Android / iOS 都不需要任何明文例外。 -->
     <application
         android:label="kids_points_app"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

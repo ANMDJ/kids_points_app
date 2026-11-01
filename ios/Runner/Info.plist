@@ -66,5 +66,18 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- ★ ATS 例外（2026-11-01）
+	     iOS 默认拒绝一切明文 HTTP（只有 localhost 例外）。线上后端此刻只能走
+	     http://82.157.153.22/k，不放行的话请求在系统层就被拒，Flutter 侧只会
+	     看到 `SocketException / 网络错误`。
+
+	     ★ 一旦改成 https://kids.littlewish.top:8443（Caddy 自动签发证书），
+	       这一整块 NSAppTransportSecurity 应当**删掉** —— 走 https 不需要任何例外，
+	       也免得以后上架审核被问「为什么允许任意明文」。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

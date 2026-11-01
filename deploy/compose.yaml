@@ -1,0 +1,43 @@
+# ════════════════════════════════════════════════════════════════════════
+# deploy/compose.yaml —— 生产编排（同一镜像三种用法）
+#
+#  · 运行服务：        docker compose up -d
+#  · 跑迁移链（CLI）：  docker compose run --rm kids-api <命令>
+#       npx prisma migrate deploy
+#       npm run seed
+#       node scripts/verify-db.mjs
+#   （900/901 两条 psql 不走容器：df 由宿主机喂给 pg18 容器
+#      `cat <sql> | docker exec -i pg18 psql -U postgres -d kids_points ...`）
+#
+# ★ 硬限（2C4G 专用）：
+#   · mem_limit 400m —— Node 有 cgroup 上限，OOM 只杀本容器不拖垮主机
+#   · memswap_limit 1200m —— 允许用 swap 缓冲尖峰（主机 2G swap 兜底）
+#   · cpus 1.5 —— 2 核留半核给 PG / Caddy / hub
+#   · 127.0.0.1:3000 —— 只绑本机，公网只有 Caddy 能碰到后端（防裸奔）
+# ────────────────────────────────────────────────────────────────────────
+services:
+  kids-api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    image: kids-api:0.1.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    # ★ kids.env 里 DATABASE_URL 的 host 是 `pg18`（**不是** 127.0.0.1 ——
+    #   容器里的回环是容器自己，连不上只绑宿主回环的 PG）。
+    #   这要求 pg18 容器同时接在 deploy_default 网络上：
+    #       sudo docker network connect deploy_default pg18
+    #   该附加是**运行时**的：`docker compose down` 删掉网络、或 pg18 被重建之后，
+    #   必须重跑一次上面那条命令，否则容器 Up 但日志刷 P1001。
+    #   详见 deploy/README.md 第 0 节。
+    env_file:
+      - ../kids.env
+    mem_limit: 400m
+    memswap_limit: 1200m
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3

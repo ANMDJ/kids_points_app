@@ -1,0 +1,42 @@
+
+# deploy/www-8443.snippet —— 直接 `>>` 追加到 /etc/caddy/Caddyfile 末尾的片段
+#
+# ★ 用法（★ 第一步不能省：本文件在 Windows 上编辑过，可能带 CRLF，
+#   带 \r 的 Caddyfile 会让 caddy validate 直接报解析错误）：
+#     scp deploy/www-8443.snippet ubuntu@82.157.153.22:/tmp/
+#     ssh ubuntu@82.157.153.22 "sed -i 's/\r$//' /tmp/www-8443.snippet && \
+#       sudo cat /tmp/www-8443.snippet >> /etc/caddy/Caddyfile && \
+#       sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy"
+#
+# ★ 追加前先备份：sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-$(date +%Y%m%d-%H%M%S)
+#
+# ★ 依赖的证书文件必须已就位（root:caddy 640）：
+#     /etc/caddy/certs/littlewish.top.crt
+#     /etc/caddy/certs/littlewish.top.key
+
+# -- www.littlewish.top:8443 —— 腾讯云 DV 证书固定的 HTTPS 入口 (2026-11-01) --
+# 为什么用 www 而不是 kids：
+#   * littlewish.top 无 A 记录；www 已解析到 82.157.153.22（实测 nslookup）
+#   * 腾讯云证书 SAN = littlewish.top, www.littlewish.top（**不含** *.littlewish.top）
+#   * kids.littlewish.top 走 ACME 自动签发已实测失败：LE 多视角验证里亚太节点
+#     拿到的是备案拦截页（reader size limit exceeded）；TLS-ALPN 的 443 直接
+#     Connection reset by peer；ZeroSSL 同样未签成。故只能用手动证书。
+# 后续：拿到 kids.littlewish.top 的证书后，把本节整体换成
+#       kids.littlewish.top:8443，并删掉上面那个 tls internal 的自签站点。
+# 续期：**手动**。TrustAsia DV，2027-01-29 到期；到期前去腾讯云重新签发，
+#       覆盖 /etc/caddy/certs/littlewish.top.{crt,key}，再 systemctl reload caddy。
+www.littlewish.top:8443 {
+	tls /etc/caddy/certs/littlewish.top.crt /etc/caddy/certs/littlewish.top.key
+	encode zstd gzip
+	header Cache-Control "no-store"
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+	log {
+		output file /var/lib/caddy/kids-https.log {
+			roll_size 10MiB
+			roll_keep 3
+		}
+	}
+}

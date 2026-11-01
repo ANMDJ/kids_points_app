@@ -1,0 +1,107 @@
+# deploy/caddy-kids.caddyfile —— 「积分小管家」的两个入口（完整参考）
+#
+# 线上**同时**需要这两段，缺一段就有客户端连不上：
+#   ① `/k` 路径入口（HTTP）   → 小程序在用（备案未过，微信只认已备案域名）
+#   ② `www:8443` 站点（HTTPS）→ Flutter App 在用（腾讯云 DV 证书固定）
+#
+# ★★ 两段的**位置不同**，放错就白改：
+#    ① 属于 hub 的 `http://82.157.153.22 { … }` 块**内部**
+#    ② 是**独立站点**，放在 Caddyfile **末尾**（块外）
+#
+# ★★★ 为什么 ② 是 `www` 而不是 `kids`（2026-11-01 实测，别改回去）：
+#   `kids.littlewish.top` 走 ACME 自动签发**签不出来**。Let's Encrypt 是多视角验证：
+#     · HTTP-01：美国节点 23.178.112.213 拿到 200（challenge 送达），
+#                但亚太节点 43.174.225.201 拿到的是 DNSPod 备案拦截页，
+#                LE 报 `Error reading HTTP response body: reader size limit exceeded`；
+#     · TLS-ALPN-01：443 直接 `82.157.153.22: Connection reset by peer`。
+#   只要有一个视角失败就整体失败。Caddy 随后自动 fallback 到 ZeroSSL，同样未签成。
+#   而腾讯云那张 DV 证书的 SAN 是 `littlewish.top` + `www.littlewish.top`
+#   （**不含** `*.littlewish.top`），主域还没有 A 记录、`www` 已指向 82.157.153.22 ——
+#   所以能通过系统证书校验的入口只有 `https://www.littlewish.top:8443`。
+#
+# 改完必做三步：
+#   sudo caddy validate --config /etc/caddy/Caddyfile   # 必须打印 "Valid configuration"
+#   sudo systemctl reload caddy                         # ★ reload，不是 restart（restart 会断 hub 的 SSE）
+#   bash deploy/smoke-8443.sh                           # 7 项全绿再动客户端
+#
+# ════════════════════════════════════════════════════════════════════════
+# ① 放进 `http://82.157.153.22 { … }` 内部（★ 顺序不能换）
+# ════════════════════════════════════════════════════════════════════════
+	@kids path /k/*
+	route @kids {
+		header Cache-Control "no-store"
+		uri strip_prefix /k
+		reverse_proxy 127.0.0.1:3000 {
+			# ★ 不能省：Caddy 默认**追加**客户端传来的 XFF，而后端 clientIpOf()
+			#   取第一跳 —— 不覆盖等于让调用方自己挑限流桶。
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	# ★ 线上当前的 `http://82.157.153.22` 块**没有** @site（静态站用裸 file_server），
+	#   所以只要 `route @kids` 存在即可 —— route 的 directive 顺序本来就在 file_server 之前。
+	#   ⚠️ 如果你按老版本加了 `@site not path /_h/*`，**必须**把它改成也排除 `/k/*`，
+	#   否则 `/k/auth/login` 会命中 @site → file_server → **404**，
+	#   看起来像"后端没起来"，其实请求根本没到 Node。
+	@site not path /_h/* /k/*
+
+# ════════════════════════════════════════════════════════════════════════
+# ② 独立站点，放在 Caddyfile 末尾（块外）
+# ════════════════════════════════════════════════════════════════════════
+#
+# ★ 不要用全局 `{ https_port 8443 }` —— 那会把 hub **所有**站点的 HTTPS 端口
+#   一起改掉，hub 当场全挂。
+# ★ 必须写完整主机名，不能只写 `:8443` —— 那是 catch-all，
+#   会把按 IP / 按其他域名进来的流量也抢过来。
+# ★ 它与上面 ① 不冲突：一个按「域名+端口」匹配、一个按路径匹配，两个集合不重叠。
+# ★ 证书放 /etc/caddy/certs/，属主 root:caddy、权限 640：
+#     sudo install -d -o root -g caddy -m 750 /etc/caddy/certs
+#     sudo install -o root -g caddy -m 640 littlewish.top_bundle.crt /etc/caddy/certs/littlewish.top.crt
+#     sudo install -o root -g caddy -m 640 littlewish.top.key        /etc/caddy/certs/littlewish.top.key
+#   2027-01-29 到期，**不会自动续期**。
+
+www.littlewish.top:8443 {
+	# ★ 关键行：用腾讯云手动签发的 DV 证书，不走 ACME（kid 域名签不出来，见文件头）。
+	tls /etc/caddy/certs/littlewish.top.crt /etc/caddy/certs/littlewish.top.key
+
+	encode zstd gzip
+
+	# 与 ① 同一口径：API 响应不该被任何中间层缓存
+	header Cache-Control "no-store"
+
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output file /var/lib/caddy/kids-https.log {
+			roll_size 10MiB
+			roll_keep 3
+		}
+	}
+}
+
+# ════════════════════════════════════════════════════════════════════════
+# 排错速查（2026-11-01 全部实测过）
+# ════════════════════════════════════════════════════════════════════════
+# 症状 A：curl 8443 报 `tlsv1 alert internal error` / `no peer certificate available`
+#   ⇒ TCP 通（安全组没问题），但 Caddy 在 TLS 层就拒了 = 这个站点**没有可用证书**。
+#     最常见原因：`tls` 指向的文件不存在、或权限不对（caddy 用户读不到私钥）。
+#       sudo ls -l /etc/caddy/certs/            # 必须 root:caddy 640
+#       echo | openssl s_client -connect 127.0.0.1:8443 -servername www.littlewish.top 2>/dev/null | openssl x509 -noout -issuer -dates
+#
+# 症状 B：`/k/auth/login` 返回 404，但 `http://82.157.153.22/` 是 200
+#   ⇒ ① 段没生效：没放进去，或 `@site` 忘了排除 `/k/*` 把请求抢给了 file_server。
+#     先 `caddy validate` 排除语法问题，再确认 reload **真的成功**
+#     （reload 失败时会继续跑旧配置，很容易误判）。
+#
+# 症状 C：ACME 死活签不出来（Caddy 日志里 `could not get certificate from issuer`）
+#   ⇒ 这是**预期行为**，不要再去调 ACME 了。证据：
+#       LE 多视角验证里亚太节点拿到的是备案拦截页（reader size limit exceeded）、
+#       TLS-ALPN 的 443 被 Connection reset by peer；ZeroSSL 亦然。
+#     正解只有两个：
+#       a) 用腾讯云手动 DV 证书 + `tls <crt> <key>`（当前采用，见 ② 段）；
+#       b) 给 Caddy 重编译加 DNSPod 插件，走 DNS-01（可签通配符，但要 xcaddy 重装）。
+#   ⚠️ 在拿到证书前用 `tls internal` 只会让站点用自签证书，客户端仍连不上，
+#      且会白耗 CA 的 rate limit —— 别这么干。
