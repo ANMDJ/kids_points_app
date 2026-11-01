@@ -1,0 +1,35 @@
+{
+    "name": "积分小管家",
+    "short_name": "积分小管家",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#F1F8E9",
+    "theme_color": "#B7E28F",
+    "description": "积分小管家 —— 儿童习惯打卡与积分奖励",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
