@@ -11,11 +11,14 @@ import type { PointRule } from '../../data/types'
 import { useViewport } from '../../utils/layout'
 import { goBack } from '../../utils/nav'
 import { toast } from '../../utils/toast'
+import { useAuthGate } from '../../utils/useAuthGate'
 import { usePayloadSheet, useSheet } from '../../utils/useSheet'
 import './index.scss'
 
 /** 积分规则：家庭约定清单 + 新增规则；点 / 长按某条规则可加入习惯或删除。 */
 export default function Rule() {
+  // W9-B：登录闸门（详见 `utils/useAuthGate.ts`）。
+  useAuthGate()
   const store = useStore()
   const viewport = useViewport()
   const addSheet = useSheet()

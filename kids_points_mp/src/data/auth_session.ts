@@ -10,6 +10,7 @@ import { AuthApiException } from './auth_api_errors'
 import type { ChildMembership, SessionDto } from './auth_dto'
 import { AuthTokenHolder, sharedAuthTokens } from './auth_token_holder'
 import { KeyValueStorage, TaroKeyValueStorage } from './client_storage'
+import { readCompiledEnvironment } from './compiled_env'
 import { resolveDeviceId } from './device_identity'
 import { ReadApiException } from './read_api_errors'
 import { WriteApiException } from './write_api_errors'
@@ -663,10 +664,8 @@ function toAuthFailure(error: unknown): AuthApiException | null {
 }
 
 function defaultEnvironment(): Record<string, string | undefined> {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env as Record<string, string | undefined>
-  }
-  return {}
+  // ★ 同上：`process.env` 整体在小程序里是空 polyfill，必须逐键静态读。
+  return readCompiledEnvironment()
 }
 
 /**

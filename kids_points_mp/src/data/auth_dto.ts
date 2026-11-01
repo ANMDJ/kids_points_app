@@ -341,6 +341,84 @@ function typeName(value: unknown): string {
 }
 
 /** 业务码 → 中文兜底文案（服务端没给 `message` 时用）。 */
+/** `PUT /auth/account` 的回包（W9-D，2026-10-30 / `42` §3.2）。 */
+export interface AccountSnapshot {
+  readonly phone: string | null
+  readonly email: string | null
+  readonly hasPassword: boolean
+}
+
+/**
+ * 绑定结果解析。
+ *
+ * ★ **没有**密码长度 / 哈希 —— 服务端只回答"设了没有"，
+ *   客户端也就只该知道这一个比特（`42` §3.2）。
+ *
+ * ★ 自相矛盾的一条：三个字段全空 ⇒ `malformed`。那种状态下这个账号
+ *   根本登不进 App，说"保存成功"会让用户在白屏上反复试密码。
+ *   （只设密码不绑标识是允许的：`hasPassword=true` ⇒ 通过检查。）
+ */
+export class AccountDto {
+  private constructor() {}
+
+  /**
+   * `PUT /auth/account` 的回包（**严格**）。
+   *
+   * 三字段全空 ⇒ `malformed`：一次"保存成功"之后账号必然至少有一个登录标识，
+   * 全空说明回包坏了，此时说"保存成功"会让用户在白屏上反复试密码。
+   */
+  static fromJson(raw: unknown, path = 'account'): AccountSnapshot {
+    return AccountDto.parse(raw, path, false)
+  }
+
+  /**
+   * `GET /auth/account` 的回包（**宽松**）。
+   *
+   * ★ 与 `fromJson` 的唯一差别：三字段全空在这里是**合法**的。
+   *   它表示"这个账号还没有 App 登录账号" —— 这正是那一屏要告诉用户的结论，
+   *   也是「绑定」这个动作存在的前提。若沿用严格解析，**每个新用户一打开
+   *   那一屏就会看到"服务器返回的数据不符合约定"**，然后永远绑不上。
+   *
+   * ★ 两个入口共用一份 `parse`，形状判定只有一处 —— 否则 `GET` 与 `PUT`
+   *   的字段规则一旦漂移，保存后界面就会闪一下（字段突然少了）。
+   */
+  static fromReadJson(raw: unknown, path = 'account'): AccountSnapshot {
+    return AccountDto.parse(raw, path, true)
+  }
+
+  private static parse(
+    raw: unknown,
+    path: string,
+    allowUnbound: boolean
+  ): AccountSnapshot {
+    const json = requireObject(raw, path)
+    const hasPassword = json.hasPassword
+    if (typeof hasPassword !== 'boolean') {
+      throw AuthApiException.malformed(
+        `${path}.hasPassword`,
+        `期望布尔值，实际 ${typeName(hasPassword)}`
+      )
+    }
+    const snapshot: AccountSnapshot = {
+      phone: requireOptionalString(json, 'phone', `${path}.phone`),
+      email: requireOptionalString(json, 'email', `${path}.email`),
+      hasPassword
+    }
+    if (
+      !allowUnbound &&
+      snapshot.phone === null &&
+      snapshot.email === null &&
+      !snapshot.hasPassword
+    ) {
+      throw AuthApiException.malformed(
+        path,
+        'phone / email / hasPassword 全空：这个账号无法用于登录'
+      )
+    }
+    return snapshot
+  }
+}
+
 export function authMessageForCode(code: string | null, fallback: string): string {
   if (code === null) return fallback
   return AUTH_FALLBACK_MESSAGES[code] ?? fallback

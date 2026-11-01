@@ -1,11 +1,14 @@
 import { AUTH_FALLBACK_MESSAGES, AuthApiException } from './auth_api_errors'
 import {
+  AccountDto,
+  AccountSnapshot,
   BootstrapChildResultDto,
   ChildSessionResultDto,
   LoginResultDto,
   SessionDto
 } from './auth_dto'
 import { kDeviceIdHeader, type ReadEnvironment } from './read_api'
+import { readCompiledEnvironment } from './compiled_env'
 import { WriteApiException } from './write_api_errors'
 import { TaroWriteTransport, type WriteMethod, type WriteTransport } from './write_api'
 
@@ -101,7 +104,41 @@ export interface AuthApi {
 }
 
 /** 基于 `Taro.request`（复用写层 transport）的实现。 */
-export class AuthApiClient implements AuthApi {
+/**
+ * 「绑定 App 登录账号」的能力（W9-D，2026-10-30）。
+ *
+ * ── 为什么单独一个接口，而不是塞进 `AuthApi` ────────────────────────────────
+ *   `AuthApi` 是 `AuthSessionMachine` 的依赖（登录 / 会话 / 建孩子 / 选孩子）。
+ *   把 `updateAccount` 加进去，那个编排层的**每一个测试替身**都被迫实现一个
+ *   它永远用不到的方法 —— 替身越胖，用例就越容易只测"能编译"。
+ *   这里只有一个方法，且只被「绑定 App 账号」那一屏依赖。
+ *
+ * ── 它必须带 token ─────────────────────────────────────────────────────────
+ *   它写的是"以后能不能登录"。匿名可写 = 任何人能给别人的账号绑自己的手机号
+ *   （后端 `PUT /auth/account` 挂着 `AuthGuard`，见 `42` §3.2）。
+ */
+export interface AccountBinder {
+  /**
+   * `GET /auth/account` —— 我现在绑的是哪个号、设过密码没有（W9-D）。
+   *
+   * ★ 为什么需要它：那一屏要先回答「你有没有 App 登录账号」。
+   *   不读就只能画一个空白表单 —— 用户会读成「我根本没绑过」然后又绑一次
+   *   （换号 ⇒ 上一台手机的 App 登录再也进不来），而且不知道密码框该写
+   *   「设置密码」还是「修改密码」（后者必须带当前密码，猜错就是一次必然 400）。
+   */
+  fetchAccount(token: string): Promise<AccountSnapshot>
+  updateAccount(
+    token: string,
+    input: {
+      phone?: string
+      email?: string
+      password?: string
+      currentPassword?: string
+    }
+  ): Promise<AccountSnapshot>
+}
+
+export class AuthApiClient implements AuthApi, AccountBinder {
   private readonly config: AuthApiConfig
   private readonly transport: WriteTransport
   private readonly timeoutMs: number
@@ -156,6 +193,67 @@ export class AuthApiClient implements AuthApi {
       if (auth !== null && auth.statusCode === 401) return
       throw error
     }
+  }
+
+  /**
+   * `PUT /auth/account` —— 绑定手机号/邮箱、设置或修改密码（W9-D）。
+   *
+   * ── 这就是「App 能用手机号登录」的**唯一入口** ──────────────────────────────
+   *   App 首版**不开放注册**（`42` §5.1）：所有账号都由小程序创建，
+   *   App 只是另一种进入方式。所以这一屏不是"可选设置"，而是 App 能不能用
+   *   的前提 —— 文案里要写清楚（「App 登录账号」而不是「安全设置」）。
+   *
+   * ── 为什么必须带 token，且**不带** deviceId 之外的任何东西 ─────────────────
+   *   身份由 `Authorization` 背书；手机号在**这里**只是"要绑上去的值"，
+   *   不是"我是谁"的证明。把手机号当身份凭据正是 `42` §5.3 要拦的那类混淆。
+   *
+   * ── `currentPassword` 的服务端规则（客户端不重复判断"要不要"）────────────
+   *   已设过密码再改 ⇒ 必填；从未设过 ⇒ 可不填。客户端只知道"要不要显示
+   *   输入框"这件事需要一次 `hasPassword`，而那一屏会在保存后拿到
+   *   `AccountSnapshot.hasPassword` 才决定下次显示什么。
+   */
+  /**
+   * `GET /auth/account` —— 读当前绑定（W9-D）。
+   *
+   * ── 用 `fromReadJson`（宽松）而不是 `fromJson`（严格）──────────────────────
+   *   全新账号的答案是「三字段全空」，那是**合法结论**（还没有 App 登录账号），
+   *   不是畸形回包。用严格解析的话，每个新用户一打开那一屏都会看到
+   *   "服务器返回的数据不符合约定"，然后永远绑不上。
+   */
+  async fetchAccount(token: string): Promise<AccountSnapshot> {
+    const decoded = await this.send('GET', '/auth/account', null, {
+      token: requireToken(token)
+    })
+    return AccountDto.fromReadJson(decoded)
+  }
+
+  async updateAccount(
+    token: string,
+    input: {
+      phone?: string
+      email?: string
+      password?: string
+      currentPassword?: string
+    }
+  ): Promise<AccountSnapshot> {
+    const trimmedToken = requireToken(token)
+    const body: Record<string, unknown> = {}
+    if (input.phone !== undefined) body.phone = input.phone
+    if (input.email !== undefined) body.email = input.email
+    if (input.password !== undefined) body.password = input.password
+    if (input.currentPassword !== undefined) {
+      body.currentPassword = input.currentPassword
+    }
+    if (Object.keys(body).length === 0) {
+      // 与后端 `ACCOUNT_NOTHING_TO_UPDATE` 同一条判定，但**不发请求**：
+      // 一次必然 400 的往返只会让用户看到"保存失败"。
+      throw new Error('手机号、邮箱、密码至少要填一个。')
+    }
+
+    const decoded = await this.send('PUT', '/auth/account', body, {
+      token: trimmedToken
+    })
+    return AccountDto.fromJson(decoded)
   }
 
   async bootstrapChild(
@@ -373,11 +471,26 @@ export function createAuthApiFromEnvironment(
   return config.isConfigured ? new AuthApiClient({ config }) : null
 }
 
+/**
+ * 只构造「绑定 App 账号」需要的那一个能力。
+ *
+ * ★ 为什么不复用 [createAuthApiFromEnvironment]：它的返回类型是 `AuthApi`，
+ *   上面没有 `fetchAccount` / `updateAccount`（那两个属于 `AccountBinder`）。
+ *   硬转一次类型能编过，但那等于用断言绕开类型系统 —— 以后真把
+ *   `updateAccount` 挪走，编译不会红，面板会在运行期炸。
+ */
+export function createAccountBinderFromEnvironment(
+  env: ReadEnvironment = defaultEnvironment()
+): AccountBinder | null {
+  const config = AuthApiConfig.fromEnvironment(env)
+  return config.isConfigured ? new AuthApiClient({ config }) : null
+}
+
 function defaultEnvironment(): ReadEnvironment {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env as ReadEnvironment
-  }
-  return {}
+  // ★ 必须走 [readCompiledEnvironment]：Taro 的 DefinePlugin 只替换
+  //   `process.env.TARO_APP_X` 这种**整段字面量**，而小程序里整体的
+  //   `process.env` 只是 webpack 的空 polyfill ⇒ 直接读它会永远拿到 undefined。
+  return readCompiledEnvironment()
 }
 
 /** 超时是**客户端**的承诺：Taro.request 的 timeout 在部分平台不生效。 */

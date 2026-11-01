@@ -10,15 +10,63 @@
 }
 
 // ----------------------------------------------------------- SoftTextField
+//
+// ★ 单行输入框为什么必须「写死高度 + line-height 等于高度」，而不是用上下 padding
+// -----------------------------------------------------------------------------
+// 小程序的 `<input>` 不是浏览器里那个 `<input>`：WebView 渲染器会把它渲染成
+//    <wx-input class="kp-field__input …">   ← 用户样式落在这个**宿主**上
+//      <div class="wrapper"><input/></div>  ← 内层才是真正的输入框
+// 并且基础库给宿主写了死高度（基础库 2.25.3 原样式，实测于 webview 渲染器）：
+//    wx-input { height: 22.4px; min-height: 22.4px; overflow: hidden; … }   （Skyline 版是 1.4rem）
+//    wx-input input { height: 100%; min-height: 100%; padding: 0; line-height: inherit; … }
+//
+// 于是「上下 padding 13 + line-height 1.4」这套浏览器写法在这里会翻车：
+//   · 宿主的高度由基础库写死，padding 只是把**外壳**撑高 —— 用 Chrome 复刻这段
+//     结构量出来，盒子 48.77px（设计值应为 45.6 − 边框 ≈ 42.75），内层 input 仍
+//     只有 22.4px 高，「视觉盒」和「文字盒」从此各算各的；
+//   · 更糟的是 app.scss 里那条全局重置 `input { box-sizing: border-box }` 按标签
+//     选择器命中宿主，盒子被反压成 26.38px、内层 input 的高度算成 0 —— 文字就贴着
+//     padding 上沿、甚至被 overflow:hidden 裁掉。
+// 用户看到的就是「初始设置孩子名字 / 设置家长 PIN 的输入框文字没有上下居中」。
+//
+// 解法：在宿主上写死 height，并让 line-height 与它相等（垂直 padding 归零）。
+// 这样宿主的盒子就是设计高度，内层 input（height:100% + line-height:inherit）的
+// 文字自然落在正中，且与 box-sizing、基础库那两条默认高度都无关。
+// 实测同一套结构：宿主 42.75px、内层 40.75px、文字中心与盒心偏差 0.00。
+// 高度仍取 13 + 13 + 14 × 1.4 = 45.6 设计稿 px，所以外观尺寸与改造前一致。
+// 多行 textarea 不能这么写（行高会把盒子撑成一行高），单独走 `--area`。
+$field-font-size: 14;
+$field-line-height: 1.4;
+$field-padding-y: 13;
+$field-padding-x: 14;
+// 45.6 设计稿 px ＝ 上下内边距各 13 + 14 号字的 1.4 倍行高
+$field-height: $field-padding-y * 2 + $field-font-size * $field-line-height;
+
 .kp-field__input {
+  display: block;
+  box-sizing: border-box;
   width: 100%;
-  padding: f2r(13) f2r(14);
-  font-size: f2r(14);
-  line-height: 1.4;
+  font-size: f2r($field-font-size);
   color: $text-primary;
   background-color: $chip-bg;
   border: 1px solid transparent;
   border-radius: f2r(14);
+}
+
+// 单行：高度 ＝ 行高 ⇒ 文字垂直居中；上下不再留 padding（高度已含那 13）。
+// min-height 一起写死：基础库在宿主上还留了 `min-height: 22.4px`（Skyline 1.4rem），
+// 与我们的高度无关地顺手压平，将来基础库调大也不会把盒子顶高。
+.kp-field__input--line {
+  height: f2r($field-height);
+  min-height: f2r($field-height);
+  line-height: f2r($field-height);
+  padding: 0 f2r($field-padding-x);
+}
+
+// 多行：靠上下 padding 撑高，行高用正文行高（第一行本就应该贴着顶部）
+.kp-field__input--area {
+  padding: f2r($field-padding-y) f2r($field-padding-x);
+  line-height: $field-line-height;
 }
 
 .kp-field__input.is-focused {

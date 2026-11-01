@@ -1,4 +1,5 @@
 import { KeyValueStorage, MemoryKeyValueStorage, TaroKeyValueStorage } from './client_storage'
+import { readCompiledEnvironment } from './compiled_env'
 
 /**
  * 设备标识（`x-kp-device-id`）的**来源与持久化**（W9-A / `40` §1.6、§9.2）。
@@ -145,8 +146,6 @@ export function emptyDeviceStorage(): KeyValueStorage {
 }
 
 function defaultEnvironment(): Record<string, string | undefined> {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env as Record<string, string | undefined>
-  }
-  return {}
+  // ★ 同上：`process.env` 整体在小程序里是空 polyfill，必须逐键静态读。
+  return readCompiledEnvironment()
 }

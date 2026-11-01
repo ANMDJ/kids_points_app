@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; width: 375px; background: #fdfff9; color: #33382f;
+         font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 13.5px; line-height: 1.45; }
+  .page { padding: 16px; }
+  h4 { font-size: 12px; color: #909889; margin: 18px 0 6px; font-weight: 700; }
+  .probe { outline: 1px dashed rgba(233, 131, 75, 0.7); }
+
+  /* ===== 微信基础库 2.25.3（webview 渲染器）内置的 input 结构样式 ===== */
+  wx-input { cursor: auto; display: block; font-family: inherit; height: 22.4px; min-height: 22.4px;
+             overflow: hidden; text-overflow: clip; white-space: nowrap; }
+  wx-input .wrapper { color: inherit; height: 100%; width: 100%; }
+  wx-input div { border: none; color: inherit; font-size: inherit; height: inherit; margin: 0;
+                 min-height: 100%; outline: none; padding: 0; position: relative; }
+  wx-input input { background: transparent; border: none; color: inherit; display: inherit; font-size: inherit;
+                   font-weight: inherit; height: 100%; margin: 0; min-height: 100%; outline: none;
+                   overflow: inherit; padding: 0; position: relative; width: 100%; }
+  wx-input input { line-height: inherit; }
+
+  /* F：模拟 app.scss 的 `input { box-sizing: border-box }` 命中宿主 wx-input */
+  wx-input.f6 { box-sizing: border-box; }
+
+  .before { padding: 12.1875px 13.125px; font-size: 13.125px; line-height: 1.4; color: #33382f;
+            background: #f4f6f0; border: 1px solid transparent; border-radius: 13.125px; }
+  .before::placeholder, .before input::placeholder { font-size: 12.65px; color: #b6bdb0; }
+
+  /* ===== 改造后：height = line-height = 45.6 设计稿 px ===== */
+  .after { box-sizing: border-box; display: block; width: 100%; height: 42.75px; line-height: 42.75px;
+           padding: 0 13.125px; font-size: 13.125px; color: #33382f; background: #f4f6f0;
+           border: 1px solid transparent; border-radius: 13.125px; }
+  .after::placeholder, .after input::placeholder { font-size: 12.65px; color: #b6bdb0; }
+</style>
+</head>
+<script>
+  window.addEventListener('load', function () {
+    var rows = []
+    ;['A', 'B', 'C', 'D', 'F'].forEach(function (key) {
+      var host = document.getElementById('host' + key)
+      var inner = host.querySelector('input')
+      var h = host.getBoundingClientRect()
+      var i = inner.getBoundingClientRect()
+      rows.push(
+        key +
+          ' host=' + h.height.toFixed(2) +
+          ' hostCenter=' + (h.top + h.height / 2 - h.top).toFixed(2) +
+          ' inner=' + i.height.toFixed(2) +
+          ' innerTop=' + (i.top - h.top).toFixed(2) +
+          ' 文字中心距宿主顶=' + (i.top - h.top + i.height / 2).toFixed(2) +
+          ' 宿主中心=' + (h.height / 2).toFixed(2) +
+          ' 偏差=' + (i.top - h.top + i.height / 2 - h.height / 2).toFixed(2)
+      )
+    })
+    document.getElementById('out').textContent = rows.join('\n')
+  })
+</script>
+<div class="page" style="padding-top:0">
+  <pre id="out" style="font-size:11px;line-height:1.5;color:#3f6b2e;background:#e8f6da;padding:8px;white-space:pre-wrap"></pre>
+</div>
+
+  <h4>A 改造前 · class 在宿主 wx-input 上</h4>
+  <div class="probe" id="hostA"><wx-input class="before"><div class="wrapper"><input placeholder="例如：小满"></div></wx-input></div>
+
+  <h4>B 改造后 · class 在宿主 wx-input 上</h4>
+  <div class="probe" id="hostB"><wx-input class="after"><div class="wrapper"><input placeholder="例如：小满"></div></wx-input></div>
+
+  <h4>C 改造前 · class 落在内层 input 上</h4>
+  <div class="probe" id="hostC"><wx-input><div class="wrapper"><input class="before" placeholder="例如：小满"></div></wx-input></div>
+
+  <h4>D 改造后 · class 落在内层 input 上</h4>
+  <div class="probe" id="hostD"><wx-input><div class="wrapper"><input class="after" placeholder="例如：小满"></div></wx-input></div>
+
+  <h4>F 改造前 + 全局 input{box-sizing:border-box} 命中宿主</h4>
+  <div class="probe" id="hostF"><wx-input class="before f6"><div class="wrapper"><input placeholder="例如：小满"></div></wx-input></div>
+
+  <h4>E 参照：Flutter 版应有的样子（纯 div 复刻）</h4>
+  <div class="probe" style="background:#f4f6f0;border-radius:13.125px;height:42.75px;display:flex;align-items:center;padding:0 13.125px;color:#b6bdb0;font-size:12.65px">例如：小满</div>
+</div>
+</body>
+</html>

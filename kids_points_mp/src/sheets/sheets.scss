@@ -1029,3 +1029,71 @@
   margin-left: auto;
   width: f2r(150);
 }
+
+// ───────────────────────────────────────────── App 登录账号（W9-D）
+// 一屏做完「看得见现状 + 绑得上号」：状态卡只读服务端事实，表单只提交改动。
+// 「能不能登」由 `accountLoginReady()` 一处判定 —— 样式不参与判断，只负责让
+// 结论在一眼之内可读（绿 = 可以登，黄 = 还差一步）。
+.kp-app-account__hint {
+  padding: f2r(4) 0;
+}
+
+.kp-app-account__hint-text {
+  display: block;
+  font-size: f2r(12);
+  line-height: 1.5;
+  color: $text-secondary;
+}
+
+/* 读失败 / 保存失败 / 本地预检不通过：必须比普通说明更显眼。 */
+.kp-app-account__hint-text.is-danger {
+  color: $point-spend;
+}
+
+.kp-app-account__status-text {
+  display: block;
+  font-size: f2r(13);
+  line-height: 1.55;
+  color: $text-primary;
+}
+
+.kp-app-account__badge {
+  display: inline-flex;
+  align-items: center;
+  margin-top: f2r(10);
+  padding: f2r(4) f2r(10);
+  border-radius: f2r(10);
+}
+
+.kp-app-account__badge.is-ready {
+  background-color: rgba(127, 191, 85, 0.18);
+}
+
+.kp-app-account__badge.is-pending {
+  background-color: rgba(246, 198, 74, 0.24);
+}
+
+.kp-app-account__badge-text {
+  font-size: f2r(11);
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.kp-app-account__retry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: f2r(38);
+  border-radius: f2r(19);
+  background-color: rgba(127, 191, 85, 0.16);
+}
+
+.kp-app-account__retry:active {
+  opacity: 0.7;
+}
+
+.kp-app-account__retry-text {
+  font-size: f2r(13);
+  font-weight: 600;
+  color: $primary-text;
+}

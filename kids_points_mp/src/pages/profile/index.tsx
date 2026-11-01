@@ -7,6 +7,7 @@ import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
 import type { IconName } from '../../components/Icon/icons'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
+import AppAccountSheet from '../../sheets/AppAccountSheet'
 import ConsentSheet from '../../sheets/ConsentSheet'
 import ExportSheet from '../../sheets/ExportSheet'
 import FamilyDeletionSheet from '../../sheets/FamilyDeletionSheet'
@@ -78,6 +79,8 @@ export default function Profile() {
   // 那道门，所以这一行在孩子设备上同样显示：家长可以把手机接过去自己输 PIN，
   // 不必让孩子「先登出再登录」。
   const parentModeSheet = useSheet()
+  // W9-D：App 登录账号（小程序是**唯一**的账号创建入口，App 不开放注册）。
+  const appAccountSheet = useSheet()
   // W7-B：监护人同意。入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const consentSheet = useSheet()
   // W7-C：导出家庭数据。入口同样对所有角色可见（面板自己先确认角色），
@@ -346,6 +349,26 @@ export default function Profile() {
                 <View className='kp-profile__menu-divider' />
               </>
             ) : null}
+            {/* W9-D：App 登录账号。App 首版**不开放注册**，所以这一行是
+                "手机能登 App"的唯一入口 —— 它不像「家长模式」那样按后端配置
+                隐藏：藏起来会让"App 登不上"变成一条没有任何线索的死路。
+                没接后端时点进来会看到一句「预览模式没有真实的账号体系」。 */}
+            <View
+              className='kp-profile__menu'
+              onClick={() => appAccountSheet.show()}
+            >
+              <View
+                className='kp-profile__menu-icon'
+                style={{ backgroundColor: withAlpha('#7f9bd8', 34 / 255) }}
+              >
+                {/* 图标名集合是跨端契约（三份逐字相等），没有 lock / key；
+                    `listCheck` 是最贴近「逐条确认过的凭据」的既有图案。 */}
+                <Icon name='listCheck' size={19} color='#7f9bd8' />
+              </View>
+              <Text className='kp-profile__menu-label'>App 登录账号</Text>
+              <Icon name='chevronRight' size={22} color='#b6bdb0' />
+            </View>
+            <View className='kp-profile__menu-divider' />
             {/* W7-B：监护人同意（先确认角色，再拉 `GET /consent`） */}
             <View
               className='kp-profile__menu'
@@ -493,6 +516,14 @@ export default function Profile() {
           <ParentModeSheet
             visible={parentModeSheet.visible}
             onClose={parentModeSheet.hide}
+          />
+        ) : null}
+        {/* W9-D：App 登录账号弹窗（打开时才拉 `GET /auth/account`）。
+            ★ 明文密码只活在这个组件里：`open` 为假即卸载 ⇒ 输入框内容随之消失。 */}
+        {appAccountSheet.open ? (
+          <AppAccountSheet
+            visible={appAccountSheet.visible}
+            onClose={appAccountSheet.hide}
           />
         ) : null}
         {/* W7-B：监护人同意弹窗（先确认角色，再拉 `GET /consent`） */}

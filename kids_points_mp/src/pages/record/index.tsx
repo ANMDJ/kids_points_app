@@ -12,6 +12,7 @@ import { dayLabel, recordCategoryLabels } from '../../data/types'
 import type { RecordCategory } from '../../data/types'
 import { useViewport } from '../../utils/layout'
 import { goBack } from '../../utils/nav'
+import { useAuthGate } from '../../utils/useAuthGate'
 import './index.scss'
 
 /** 顶部筛选：全部 + 表扬 / 兑换 / 调整。 */
@@ -24,6 +25,8 @@ const FILTERS: Array<RecordCategory | null> = [
 
 /** 积分记录：按 全部 / 表扬 / 兑换 / 调整 过滤，并按天分组（今天 / 昨天 …）。 */
 export default function Record() {
+  // W9-B：登录闸门（详见 `utils/useAuthGate.ts`）。
+  useAuthGate()
   const store = useStore()
   const viewport = useViewport()
   // 与 Flutter 积分记录页的 RefreshIndicator 对齐：下拉从第一页重取，

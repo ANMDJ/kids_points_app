@@ -5,6 +5,7 @@ import {
   sharedAuthTokens
 } from './auth_token_holder'
 import { sharedDeviceContext } from './runtime_identity'
+import { readCompiledEnvironment } from './compiled_env'
 import { ReadApiException } from './read_api_errors'
 import {
   ApprovalsPageDto,
@@ -496,10 +497,9 @@ export function createReadApiFromEnvironment(
 }
 
 function defaultEnvironment(): ReadEnvironment {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env as ReadEnvironment
-  }
-  return {}
+  // ★ 同上：`process.env` 整体在小程序里是空 polyfill，必须逐键静态读
+  //   （见 `compiled_env.ts` 的实测证据）。
+  return readCompiledEnvironment()
 }
 
 /**

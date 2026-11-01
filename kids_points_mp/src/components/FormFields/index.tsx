@@ -46,16 +46,21 @@ export function SoftTextField({
   className = ''
 }: SoftTextFieldProps) {
   const shared = {
-    className: `kp-field__input ${className}`,
     value,
     placeholder: hint,
     placeholderClass: 'kp-field__placeholder'
   }
+  // ★ 单行 / 多行的「文字垂直居中」对策不同，类名必须分开（原因见 index.scss 顶部注释）：
+  //   单行走 `--line`（height ＝ line-height ⇒ 行盒铺满整框，小程序里也居中），
+  //   多行走 `--area`（上下 padding + 正文行高，第一行贴着顶部才对）。
+  const lineClassName = `kp-field__input kp-field__input--line ${className}`
+  const areaClassName = `kp-field__input kp-field__input--area ${className}`
 
   if (maxLines > 1) {
     return (
       <Textarea
         {...shared}
+        className={areaClassName}
         maxlength={-1}
         autoHeight
         disableDefaultPadding
@@ -68,6 +73,7 @@ export function SoftTextField({
   return (
     <Input
       {...shared}
+      className={lineClassName}
       type={digit ? 'number' : 'text'}
       password={password}
       {...(maxLength !== undefined ? { maxlength: maxLength } : {})}

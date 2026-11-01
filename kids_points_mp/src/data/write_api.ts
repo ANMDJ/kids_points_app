@@ -11,6 +11,7 @@ import {
   type ReadEnvironment
 } from './read_api'
 import { ReadApiException } from './read_api_errors'
+import { readCompiledEnvironment } from './compiled_env'
 import {
   ConsentStateDto,
   FamilyDeletionStateDto,
@@ -34,7 +35,7 @@ import type { MemberRole, MutableMemberRole } from './types'
 import { INVITE_MAX_TTL_DAYS, INVITE_MAX_USES } from './types'
 
 /** 写端点用到的 HTTP 方法（与后端 REST 语义一致，幂等哈希按真实方法算）。 */
-export type WriteMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
+export type WriteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 /** 写传输层的一行响应 —— 测试替身只需要造这个。 */
 export interface WriteHttpResponse {
@@ -1140,10 +1141,8 @@ export function createWriteApiFromEnvironment(
 }
 
 function defaultEnvironment(): ReadEnvironment {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env as ReadEnvironment
-  }
-  return {}
+  // ★ 同上：`process.env` 整体在小程序里是空 polyfill，必须逐键静态读。
+  return readCompiledEnvironment()
 }
 
 /** 超时是**客户端**的承诺：部分平台不遵守 Taro.request 的 timeout。 */

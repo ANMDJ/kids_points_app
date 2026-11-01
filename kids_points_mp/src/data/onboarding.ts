@@ -9,6 +9,7 @@ import {
   type ReadEnvironment
 } from './read_api'
 import { ReadApiException } from './read_api_errors'
+import { readCompiledEnvironment } from './compiled_env'
 import {
   readBool,
   readDate,
@@ -546,10 +547,8 @@ export function createOnboardingApiFromEnvironment(
 }
 
 function defaultEnvironment(): ReadEnvironment {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env as ReadEnvironment
-  }
-  return {}
+  // ★ 同上：`process.env` 整体在小程序里是空 polyfill，必须逐键静态读。
+  return readCompiledEnvironment()
 }
 
 /** `Taro.request` 已带超时，但部分平台不遵守它 —— 客户端再兜一层。 */
