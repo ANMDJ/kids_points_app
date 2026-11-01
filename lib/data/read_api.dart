@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
+import 'http_transport.dart';
 import 'read_api_errors.dart';
 import 'read_dto.dart';
+
+/// W10-A：传输层类型已搬到 `http_transport_types.dart`（Web 上没有 `dart:io`）。
+/// 这里保留同一个出口，`import 'read_api.dart'` 的调用方（含测试）一行不用改。
+export 'http_transport_types.dart' show ReadHttpResponse, ReadTransport;
 
 /// 设备身份的**两个请求头** —— 与后端 Guard 的常量必须一致
 /// （`backend/src/device-session/device-session.guard.ts` 的 `DEVICE_ID_HEADER` /
@@ -83,41 +87,6 @@ class ReadApiConfig {
   }
 }
 
-/// 传输层的一行响应 —— 测试替身只需要造这个，不必起真的 HTTP 服务。
-class ReadHttpResponse {
-  ReadHttpResponse({required this.statusCode, required this.body});
-
-  final int statusCode;
-  final String body;
-}
-
-/// 传输层接口（GET 专用）。默认实现是 [IoReadTransport]。
-abstract class ReadTransport {
-  Future<ReadHttpResponse> send(Uri uri, Map<String, String> headers);
-
-  void close() {}
-}
-
-/// 基于 `dart:io HttpClient` 的最小实现：无第三方依赖，桌面/移动都能跑。
-class IoReadTransport implements ReadTransport {
-  IoReadTransport({Duration connectionTimeout = const Duration(seconds: 10)})
-      : _client = HttpClient()..connectionTimeout = connectionTimeout;
-
-  final HttpClient _client;
-
-  @override
-  Future<ReadHttpResponse> send(Uri uri, Map<String, String> headers) async {
-    final HttpClientRequest request = await _client.getUrl(uri);
-    headers.forEach(request.headers.set);
-    final HttpClientResponse response = await request.close();
-    final String body = await utf8.decoder.bind(response).join();
-    return ReadHttpResponse(statusCode: response.statusCode, body: body);
-  }
-
-  @override
-  void close() => _client.close(force: true);
-}
-
 /// `GET /home` 与 `GET /records` 的客户端。
 ///
 /// 只读：没有任何写方法 —— W4-B 的范围就是「读端先真起来」。
@@ -126,11 +95,20 @@ class ReadApiClient {
     required this.config,
     ReadTransport? transport,
     this.timeout = const Duration(seconds: 10),
-  }) : _transport = transport ?? IoReadTransport(connectionTimeout: timeout);
+    this.tokenProvider,
+  }) : _transport = transport ?? createReadTransport(connectionTimeout: timeout);
 
   final ReadApiConfig config;
   final Duration timeout;
   final ReadTransport _transport;
+
+  /// W9-D：从哪取 Bearer token（通常传 `() => holder.token`）。
+  ///
+  /// ★ 默认 `null` ⇒ **不发** `Authorization` 头，既有行为逐字不变
+  ///   （预览模式、旧测试、以及还没接入登录的调用点都不受影响）。
+  /// ★ 传的是"怎么取"而不是"取到的值"：token 会变（登录/登出/过期），
+  ///   构造时快照下来的值会立刻过期（见 `token_store.dart#AuthTokenHolder`）。
+  final String? Function()? tokenProvider;
 
   Future<HomeDto> fetchHome() async {
     return HomeDto.fromJson(await _get('/home'));
@@ -336,10 +314,14 @@ class ReadApiClient {
     }
 
     final Uri uri = config.uri(path, query);
+    final String? bearer = tokenProvider?.call();
     final Map<String, String> headers = <String, String>{
-      HttpHeaders.acceptHeader: 'application/json',
+      kAcceptHeader: 'application/json',
       kDeviceIdHeader: config.deviceId.trim(),
       kChildIdHeader: config.childId.trim(),
+      // W9-D：有 token 才发。空值会让 `Authorization: Bearer ` 变成畸形头。
+      if (bearer != null && bearer.isNotEmpty)
+        kAuthorizationHeader: 'Bearer $bearer',
     };
 
     final ReadHttpResponse response;
@@ -347,7 +329,14 @@ class ReadApiClient {
       response = await _transport.send(uri, headers).timeout(timeout);
     } on TimeoutException {
       throw ReadApiException.timeout(timeout);
-    } on IOException catch (error) {
+    } on ReadApiException {
+      // ★ 领域异常**原样上抛**：它只会来自注入的传输层（测试替身 / 装饰器），
+      //   是"这次失败是哪一类"的显式结论。把它包成 network 会把 403 说成断网。
+      rethrow;
+    } on Exception catch (error) {
+      // ★ 其余捕获的是 `Exception` 而不是 `IOException`：Web 上没有 `dart:io`，
+      //   浏览器侧抛的是 `TransportException`。两者都实现 `Exception`，
+      //   一处 catch 同时覆盖 VM（`SocketException` / `HttpException`）与 Web。
       throw ReadApiException.network(error);
     }
 

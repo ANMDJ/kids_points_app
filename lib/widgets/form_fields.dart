@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show TextInputFormatter;
 
 import '../theme/app_colors.dart';
 import '../theme/app_icons.dart';
@@ -34,6 +35,13 @@ class SoftTextField extends StatelessWidget {
     this.maxLines = 1,
     this.keyboardType,
     this.onChanged,
+    this.textAlign,
+    this.autofocus = false,
+    this.inputFormatters,
+    this.enabled = true,
+    this.style,
+    this.onSubmitted,
+    this.obscureText = false,
   });
 
   final TextEditingController controller;
@@ -42,6 +50,28 @@ class SoftTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final ValueChanged<String>? onChanged;
 
+  /// 密码框：遮住输入并关掉输入法的联想 / 纠错（否则密码会被"记住"）。
+  /// ★ 默认 `false`，所以既有的所有调用点行为不变。
+  final bool obscureText;
+
+  /// 文本对齐；6 位验证码那类「整串是一个数」的输入框用 [TextAlign.center]。
+  final TextAlign? textAlign;
+
+  /// 首帧即聚焦（启动闸门只有一个输入框，再点一下才出键盘是多余的一步）。
+  final bool autofocus;
+
+  /// 输入过滤（只收数字 / 限长）—— 在**按键层**就拦掉，而不是事后报错。
+  final List<TextInputFormatter>? inputFormatters;
+
+  /// 提交中整框置灰（已发出的请求不该被再编辑）。
+  final bool enabled;
+
+  /// 覆盖字号 / 字距（验证码要放大并拉开，否则 6 位数会挤成一团）。
+  final TextStyle? style;
+
+  /// 键盘「完成」键 —— 等价于点主按钮。
+  final ValueChanged<String>? onSubmitted;
+
   @override
   Widget build(BuildContext context) {
     return TextField(
@@ -49,7 +79,16 @@ class SoftTextField extends StatelessWidget {
       maxLines: maxLines,
       keyboardType: keyboardType,
       onChanged: onChanged,
-      style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+      textAlign: textAlign ?? TextAlign.start,
+      autofocus: autofocus,
+      inputFormatters: inputFormatters,
+      enabled: enabled,
+      onSubmitted: onSubmitted,
+      obscureText: obscureText,
+      enableSuggestions: !obscureText,
+      autocorrect: !obscureText,
+      style: style ??
+          const TextStyle(fontSize: 14, color: AppColors.textPrimary),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(fontSize: 13.5, color: AppColors.textHint),

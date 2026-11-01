@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'device_token_api.dart';
+import 'operating_system.dart';
 import 'write_api_errors.dart';
 
 /// release / profile 构建的判定 —— 与 `app_store.dart` 中的私有常量同义。
@@ -22,7 +22,8 @@ bool allowConfiguredPushToken({bool isRelease = _isReleaseBuild}) => !isRelease;
 
 /// 操作系统 → 后端平台枚举。不认识的系统返回 null（**不猜**）。
 ///
-/// 只做纯映射，`Platform.operatingSystem` 由调用方注入，测试因此不需要
+/// 只做纯映射，操作系统名由调用方注入（默认取 [currentOperatingSystem]，
+/// 它通过条件导入在 VM / Web 上各给一份实现），测试因此不需要
 /// 真的跑在 Android / iOS 上。
 String? pushPlatformForOperatingSystem(String operatingSystem) {
   switch (operatingSystem.trim().toLowerCase()) {
@@ -130,7 +131,7 @@ class PushTokenConfig {
         (token ?? const String.fromEnvironment('KP_PUSH_TOKEN')).trim();
     final String rawPlatform =
         (platform ?? const String.fromEnvironment('KP_PUSH_PLATFORM')).trim();
-    final String os = operatingSystem ?? Platform.operatingSystem;
+    final String os = operatingSystem ?? currentOperatingSystem();
     final bool allowed = allowEnvironmentToken ?? allowConfiguredPushToken();
 
     if (rawToken.isEmpty) {

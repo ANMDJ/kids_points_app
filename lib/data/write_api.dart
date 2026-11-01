@@ -1,67 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import '../models/invite.dart' show kMaxInviteTtlDays, kMaxInviteUses;
 import '../models/point_record.dart' show MemberRole;
+import 'http_transport.dart';
 import 'read_api.dart' show ReadApiConfig, kChildIdHeader, kDeviceIdHeader;
 import 'read_api_errors.dart';
 import 'read_dto.dart';
 import 'write_api_errors.dart';
 import 'write_dto.dart';
 
-/// 写传输层的一行响应 —— 测试替身只需要造这个。
-class WriteHttpResponse {
-  WriteHttpResponse({required this.statusCode, required this.body});
-
-  final int statusCode;
-  final String body;
-}
-
-/// 写传输层接口。
-///
-/// 刻意与只读的 `ReadTransport` 分开：
-///   · 写请求必须带 body / Content-Type，且**不允许**自动重试（重试要靠幂等键）；
-///   · 让只读传输层保持极小面，不会因为加写入口而改到已经在跑的读路径。
-///
-/// [method] 默认 POST；规则编辑走 PATCH、删除走 DELETE。**不要**把方法塞进
-/// body 或用 `_method` 覆盖 —— 后端是标准 REST 语义，幂等哈希也按真实方法计算。
-abstract class WriteTransport {
-  Future<WriteHttpResponse> send(
-    Uri uri,
-    Map<String, String> headers,
-    String body, {
-    String method = 'POST',
-  });
-
-  void close() {}
-}
-
-/// 基于 `dart:io HttpClient` 的最小实现。
-class IoWriteTransport implements WriteTransport {
-  IoWriteTransport({Duration connectionTimeout = const Duration(seconds: 10)})
-      : _client = HttpClient()..connectionTimeout = connectionTimeout;
-
-  final HttpClient _client;
-
-  @override
-  Future<WriteHttpResponse> send(
-    Uri uri,
-    Map<String, String> headers,
-    String body, {
-    String method = 'POST',
-  }) async {
-    final HttpClientRequest request = await _client.openUrl(method, uri);
-    headers.forEach(request.headers.set);
-    if (body.isNotEmpty) request.write(body);
-    final HttpClientResponse response = await request.close();
-    final String text = await utf8.decoder.bind(response).join();
-    return WriteHttpResponse(statusCode: response.statusCode, body: text);
-  }
-
-  @override
-  void close() => _client.close(force: true);
-}
+/// W10-A：传输层类型已搬到 `http_transport_types.dart`（Web 上没有 `dart:io`）。
+/// 这里保留同一个出口，`import 'write_api.dart'` 的调用方（含测试）一行不用改。
+export 'http_transport_types.dart' show WriteHttpResponse, WriteTransport;
 
 /// AppStore 依赖的写能力（测试可注入自己的实现，不必起 HTTP 服务）。
 abstract class WriteApi {
@@ -358,11 +309,16 @@ class WriteApiClient implements WriteApi {
     required this.config,
     WriteTransport? transport,
     this.timeout = const Duration(seconds: 10),
-  }) : _transport = transport ?? IoWriteTransport(connectionTimeout: timeout);
+    this.tokenProvider,
+  }) : _transport = transport ?? createWriteTransport(connectionTimeout: timeout);
 
   final ReadApiConfig config;
   final Duration timeout;
   final WriteTransport _transport;
+
+  /// W9-D：Bearer token 的取值函数（`() => holder.token`）。
+  /// 默认 `null` ⇒ 不发 `Authorization` 头，既有调用点行为不变。
+  final String? Function()? tokenProvider;
 
   @override
   Future<WrittenRecordDto> checkIn(
@@ -981,13 +937,17 @@ class WriteApiClient implements WriteApi {
     }
 
     final Uri uri = config.uri(path);
+    final String? bearer = tokenProvider?.call();
     final Map<String, String> headers = <String, String>{
-      HttpHeaders.acceptHeader: 'application/json',
+      kAcceptHeader: 'application/json',
       if (body != null)
-        HttpHeaders.contentTypeHeader: 'application/json; charset=utf-8',
+        kContentTypeHeader: 'application/json; charset=utf-8',
       kDeviceIdHeader: config.deviceId.trim(),
       kChildIdHeader: config.childId.trim(),
       if (key != null && key.isNotEmpty) 'idempotency-key': key,
+      // W9-D：有 token 才发（空值会让 `Authorization: Bearer ` 变成畸形头）。
+      if (bearer != null && bearer.isNotEmpty)
+        kAuthorizationHeader: 'Bearer $bearer',
     };
     final String encoded = body == null ? '' : jsonEncode(body);
 
@@ -998,7 +958,14 @@ class WriteApiClient implements WriteApi {
           .timeout(timeout);
     } on TimeoutException {
       throw WriteApiException.timeout(timeout);
-    } on IOException catch (error) {
+    } on WriteApiException {
+      // ★ 领域异常**原样上抛**：它只会来自注入的传输层（测试替身 / 装饰器），
+      //   是"这次失败是哪一类"的显式结论。包成 network 会把 403 说成断网。
+      rethrow;
+    } on Exception catch (error) {
+      // ★ 捕获 `Exception` 而不是 `IOException`：Web 上浏览器抛的是
+      //   `TransportException`（见 `http_transport_web.dart`），
+      //   VM 上是 `SocketException` / `HttpException` —— 都实现 `Exception`。
       throw WriteApiException.network(error);
     }
 

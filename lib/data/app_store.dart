@@ -19,6 +19,8 @@ import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_icons.dart';
 import 'seed_data.dart';
+import 'date_code_api.dart';
+import 'date_code_dto.dart';
 import 'onboarding_api.dart';
 import 'onboarding_dto.dart';
 import 'onboarding_mapper.dart';
@@ -73,10 +75,12 @@ class AppStore extends ChangeNotifier {
     WriteApi? writeApi,
     OnboardingApi? onboardingApi,
     ParentModeApi? parentModeApi,
+    DateCodeApi? dateCodeApi,
   })  : _readApi = readApi,
         _writeApi = writeApi,
         _onboardingApi = onboardingApi,
-        _parentModeApi = parentModeApi {
+        _parentModeApi = parentModeApi,
+        _dateCodeApi = dateCodeApi {
     _resetToEmpty();
   }
 
@@ -99,6 +103,13 @@ class AppStore extends ChangeNotifier {
   /// 「我的」页那行入口**不显示**，因为本地没有 PIN 也没有会话 TTL，
   /// 画一个点了只会失败的按钮比不画更糟。
   final ParentModeApi? _parentModeApi;
+
+  /// 6 位验证码客户端（W9-C）。为 null = 不接后端 ⇒ **启动闸门整体不启用**
+  /// （预览 / 测试夹具照旧直接进首页）。
+  ///
+  /// 它是启动闸门的**唯一判据**：没有客户端就没有「谁来判定这个码对不对」，
+  /// 本地编一套规则等于把两条实现都留在仓库里。
+  final DateCodeApi? _dateCodeApi;
 
   /// 一页流水条数 —— 与后端 DTO 的上限（200）同口径，50 是「首屏够用」的折中。
   static const int _recordsPageSize = 50;
@@ -440,6 +451,54 @@ class AppStore extends ChangeNotifier {
   /// 自减的倒计时说谎，而服务端给的 [ParentMode.expiresAt] 是绝对时刻。
   int parentModeRemainingSeconds(DateTime now) =>
       _parentMode?.remainingSecondsAt(now) ?? 0;
+
+  // ──────────────────── 6 位验证码 · 启动闸门（W9-C） ────────────────────
+  //
+  // ★ 这一块**不是登录状态**。它记的只是「这次运行里，入口校验过了没有」：
+  //   · 只活在内存：App 重启就重新要一次。不做持久化 —— 把这个**公开可推导**
+  //     的码存成「已登录」，等于把门钥匙留在手机里；
+  //   · 不产生任何凭据：`POST /auth/date-code` 的回包里没有 token，服务端
+  //     也不知道「谁进来了」。身份仍然只来自 `x-kp-child-id` / 会话。
+  //   因此它只能是**本机软锁**（防误触、防小孩自己把手机打开乱点），不是认证。
+
+  /// 闸门放行的时刻；null = 还锁着。
+  DateTime? _dateCodeUnlockedAt;
+
+  /// 校验在途（防连点：连点两次会白烧两次限流额度）。
+  bool _dateCodeBusy = false;
+
+  /// 最近一次失败的说明（界面原样显示，不重新解释）。
+  String? _dateCodeError;
+
+  /// 最近一次 `429` 给的「等到什么时候」—— 存**绝对时刻**，界面每秒现算剩余秒数，
+  /// 这样切到后台再回来不会说谎。
+  DateTime? _dateCodeRetryUntil;
+
+  /// 最近一次回包（`dayOffset` 据此说「这是昨天的码」）。
+  DateCodeVerdictDto? _lastDateCodeVerdict;
+
+  /// 是否启用启动闸门（预览 / 测试夹具不启用）。
+  bool get hasDateCodeGate => _dateCodeApi != null;
+
+  /// 本次运行是否已通过入口校验。
+  bool get isDateCodeGateUnlocked => _dateCodeUnlockedAt != null;
+
+  /// 放行的绝对时刻（null = 未放行）。
+  DateTime? get dateCodeUnlockedAt => _dateCodeUnlockedAt;
+
+  bool get isDateCodeBusy => _dateCodeBusy;
+
+  String? get dateCodeError => _dateCodeError;
+
+  /// 还要等几秒才能再试（0 = 没被限流）。
+  int dateCodeRetrySecondsAt(DateTime now) {
+    final DateTime? until = _dateCodeRetryUntil;
+    if (until == null) return 0;
+    final int seconds = until.difference(now).inSeconds;
+    return seconds > 0 ? seconds : 0;
+  }
+
+  DateCodeVerdictDto? get lastDateCodeVerdict => _lastDateCodeVerdict;
 
 
   /// live 模式下是否已接上写端点（W4-E：只覆盖打卡 / 撤销）。
@@ -859,6 +918,12 @@ class AppStore extends ChangeNotifier {
     _parentPinBusy = false;
     _lastParentPinResult = null;
     _parentPinLockSeconds = 0;
+    // 启动闸门：回到「锁着」。构造时就走这里 ⇒ 冷启动一定先要验证码。
+    _dateCodeUnlockedAt = null;
+    _dateCodeBusy = false;
+    _dateCodeError = null;
+    _dateCodeRetryUntil = null;
+    _lastDateCodeVerdict = null;
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -1008,7 +1073,7 @@ class AppStore extends ChangeNotifier {
       await refreshFromServer();
       return;
     }
-    final ReadApiClient api = _readApi!;
+    final ReadApiClient api = _readApi;
 
     final int epoch = ++_readEpoch;
     _readStatus = ReadStatus.loading;
@@ -1315,6 +1380,7 @@ class AppStore extends ChangeNotifier {
     _writeApi?.close();
     _onboardingApi?.close();
     _parentModeApi?.close();
+    _dateCodeApi?.close();
     super.dispose();
   }
 
@@ -4250,6 +4316,84 @@ class AppStore extends ChangeNotifier {
   void _applyParentModeDto(ParentModeDto dto) {
     _parentMode = mapParentMode(dto);
     if (!dto.parentMode) _parentPinLockSeconds = 0;
+  }
+
+  // ==================================== 6 位验证码 · 启动闸门（W9-C）
+
+  /// 用 6 位验证码（`MMDD` ＋ 两位 ISO 星期）放行启动闸门。
+  ///
+  /// 成功返回 null（闸门随即打开）；失败返回一句话，界面原样显示。
+  ///
+  /// ── 失败语义（与后端逐字对应） ────────────────────────────────────────────
+  ///   · 空 / 非 6 位数字 ⇒ **本地就拒，不发请求**。形状错在后端是 400，但用户
+  ///     看到的那句话会变成「请求失败」—— 少打一位与「算错了」必须说成两句；
+  ///   · `200 { valid:false }` ⇒ 「码不对」，仍锁着（这是校验结果，不是异常）；
+  ///   · `429` ⇒ 记下「等到什么时候」，期间按钮禁用；
+  ///   · 网络 / 超时 / 5xx ⇒ **仍锁着**。
+  ///     ★ 这一点与 `OnboardingGate` 故意相反：引导闸门遇到「不知道」必须放行
+  ///     （否则一次超时就把整个应用锁死在引导里），而入口闸门存在的意义就是
+  ///     拦住 —— 它宁可让家长重试，也不能在校验没通过时打开。
+  Future<String?> verifyDateCodeGate(String code) async {
+    final DateCodeApi? api = _dateCodeApi;
+    if (api == null) return '当前没有接入后端，无法校验验证码。';
+    if (_dateCodeBusy) return '正在校验，请稍候…';
+    if (isDateCodeGateUnlocked) return null;
+
+    final String trimmed = code.trim();
+    if (trimmed.isEmpty) return '请输入 6 位验证码。';
+    if (!DateCodeApiClient.codePattern.hasMatch(trimmed)) {
+      return '验证码是 6 位数字：月日 4 位 ＋ 两位星期（周一 01 … 周日 07）。';
+    }
+
+    _dateCodeBusy = true;
+    _dateCodeError = null;
+    _notify();
+    try {
+      final DateCodeVerdictDto dto = await api.verify(trimmed);
+      if (_disposed) return null;
+      _lastDateCodeVerdict = dto;
+      if (dto.valid) {
+        _dateCodeUnlockedAt = DateTime.now();
+        _dateCodeError = null;
+        _dateCodeRetryUntil = null;
+        return null;
+      }
+      const String message = '验证码不对。它由「月日 4 位 ＋ 星期 2 位」组成，'
+          '例如 2026 年 10 月 29 日（周四）是 102904。';
+      _dateCodeError = message;
+      return message;
+    } on DateCodeRateLimitedException catch (error) {
+      if (_disposed) return error.userMessage;
+      _dateCodeRetryUntil =
+          DateTime.now().add(Duration(seconds: error.retryAfterSeconds));
+      _dateCodeError = error.userMessage;
+      return error.userMessage;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      _dateCodeError = error.userMessage;
+      return error.userMessage;
+    } catch (error) {
+      const String message = '验证码请求已发出，但结果无法确认。请重试。';
+      if (_disposed) return message;
+      _dateCodeError = message;
+      return message;
+    } finally {
+      _dateCodeBusy = false;
+      _notify();
+    }
+  }
+
+  /// 重新锁上闸门（「我的」页的「重新锁定」入口）。
+  ///
+  /// 只改本地内存，**不发请求**：服务端本来就没有「已解锁」这个状态
+  /// （见本块开头的边界说明）。
+  void lockDateCodeGate() {
+    if (_dateCodeUnlockedAt == null) return;
+    _dateCodeUnlockedAt = null;
+    _dateCodeError = null;
+    _dateCodeRetryUntil = null;
+    _lastDateCodeVerdict = null;
+    _notify();
   }
 
   // ------------------------------------------------------------ 内部工具

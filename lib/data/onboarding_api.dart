@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import '../models/onboarding.dart';
+import 'http_transport.dart';
 import 'onboarding_dto.dart';
 import 'read_api.dart' show ReadApiConfig, kChildIdHeader, kDeviceIdHeader;
 import 'read_api_errors.dart';
-import 'write_api.dart'
-    show IoWriteTransport, WriteHttpResponse, WriteTransport;
 import 'write_api_errors.dart';
 
 /// 首启引导的**客户端能力**（W8-B，2026-10-27 / `04` §2–§6）。
@@ -65,11 +63,16 @@ class OnboardingApiClient implements OnboardingApi {
     required this.config,
     WriteTransport? transport,
     this.timeout = const Duration(seconds: 15),
-  }) : _transport = transport ?? IoWriteTransport();
+    this.tokenProvider,
+  }) : _transport = transport ?? createWriteTransport();
 
   final ReadApiConfig config;
   final WriteTransport _transport;
   final Duration timeout;
+
+  /// W9-D：Bearer token 的取值函数（`() => holder.token`）。
+  /// 默认 `null` ⇒ 不发 `Authorization` 头，既有调用点行为不变。
+  final String? Function()? tokenProvider;
 
   @override
   Future<OnboardingViewDto> fetch() async {
@@ -210,12 +213,16 @@ class OnboardingApiClient implements OnboardingApi {
     }
 
     final Uri uri = config.uri(path);
+    final String? bearer = tokenProvider?.call();
     final Map<String, String> headers = <String, String>{
-      HttpHeaders.acceptHeader: 'application/json',
+      kAcceptHeader: 'application/json',
       if (body != null)
-        HttpHeaders.contentTypeHeader: 'application/json; charset=utf-8',
+        kContentTypeHeader: 'application/json; charset=utf-8',
       kDeviceIdHeader: config.deviceId.trim(),
       kChildIdHeader: config.childId.trim(),
+      // W9-D：有 token 才发（空值会让 `Authorization: Bearer ` 变成畸形头）。
+      if (bearer != null && bearer.isNotEmpty)
+        kAuthorizationHeader: 'Bearer $bearer',
     };
     final String encoded = body == null ? '' : jsonEncode(body);
 
@@ -226,7 +233,9 @@ class OnboardingApiClient implements OnboardingApi {
           .timeout(timeout);
     } on TimeoutException {
       throw WriteApiException.timeout(timeout);
-    } on IOException catch (error) {
+    } on Exception catch (error) {
+      // Web 上抛的是 `TransportException`（见 `http_transport_types.dart`），
+      // VM 上是 `IOException` 子类 —— 两者都是 `Exception`，一处覆盖两套平台。
       throw WriteApiException.network(error);
     }
 
