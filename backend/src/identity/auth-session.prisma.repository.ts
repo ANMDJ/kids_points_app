@@ -72,4 +72,29 @@ export class PrismaAuthSessionRepository implements AuthSessionPort {
     })
     return result.count > 0
   }
+
+  /**
+   * 撤销该用户除 `keepTokenHash` 之外的全部未撤销会话（W9-D）。
+   *
+   * ★ 一条 `updateMany` 就够 —— 不需要事务：改密与踢会话之间没有"必须同生共死"
+   *   的第二个写入。即使这条失败（抛错），调用方（改密）也会整体回滚在 HTTP 层
+   *   表现为 500，用户重试即可；**绝不能**吞掉错误后回 200 ——
+   *   那会让"密码已改、旧会话还活着"变成一个静默的安全缺口。
+   */
+  async revokeOthers(
+    userId: string,
+    keepTokenHash: string | null,
+    now: Date,
+    reason: string
+  ): Promise<number> {
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(keepTokenHash === null ? {} : { tokenHash: { not: keepTokenHash } })
+      },
+      data: { revokedAt: now, revokedReason: reason }
+    })
+    return result.count
+  }
 }

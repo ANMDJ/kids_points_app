@@ -48,8 +48,15 @@ const TOKEN_BODY_LENGTH = 43
  * `wechat_mp` —— 见文件头「形状与判定是两件事」。
  *
  * `dev_seed` 只由 `seed:demo` 写入，且**仅非生产**可用（`40` §12.1 M3）。
+ *
+ * `password`（W9-D，2026-10-30）：App 用手机号/邮箱 + 密码登录
+ * （`42-account-login-design.md`）。它与 `wechat_mp` 的区别只在**签发时**
+ * 走的验身方式不同 —— 一旦落成 `AuthSession` 行，两者的判定完全一样，
+ * 守卫不需要知道"这条会话是怎么来的"。
+ * ★ 加值必须同步加进这行：落库但不在白名单 ⇒ 守卫 500，
+ *   而症状会表现成"App 登录后每个请求都 500"，很容易被误诊为部署问题。
  */
-export const AUTH_METHODS = ['wechat_mp', 'dev_seed'] as const
+export const AUTH_METHODS = ['wechat_mp', 'dev_seed', 'password'] as const
 export type AuthMethod = (typeof AUTH_METHODS)[number]
 
 

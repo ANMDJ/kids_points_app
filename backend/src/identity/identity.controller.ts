@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   Post,
+  Put,
   Req,
   UnauthorizedException,
   UseGuards
@@ -13,9 +14,14 @@ import { DEVICE_ID_HEADER } from '../device-session/device-session.guard'
 import type { AuthenticatedIdentity, RequestWithActor } from '../permissions/actor'
 import { AuthGuard } from './auth.guard'
 import { ChildSessionDto } from './dto/child-session.dto'
+import { LoginAccountDto } from './dto/login-account.dto'
 import { LoginDto } from './dto/login.dto'
+import { UpdateAccountDto } from './dto/update-account.dto'
+import { VerifyDateCodeDto } from './dto/verify-date-code.dto'
+import type { DateCodeVerdict } from './date-verification-code'
 import {
   IdentityService,
+  type AccountView,
   type ChildSessionView,
   type LoginView,
   type SessionView
@@ -25,11 +31,18 @@ import { Public } from './public.decorator'
 /**
  * 登录 / 登出 / 会话查询的 HTTP 入口（W9-A，2026-10-29 / `40` §8）。
  *
- * ── 四条路由（判别点只有两处：谁能匿名、谁回 204）────────────────────────────
+ * ── 八条路由（判别点只有两处：谁能匿名、谁回 204）────────────────────────────
  *   `POST   /auth/login`          **@Public()**：它**签发**凭据，不能要求凭据（§8.2）
+ *   `POST   /auth/login-account`  **@Public()**：同上 —— 手机号/邮箱 + 密码那条（W9-D）
+ *   `POST   /auth/date-code`      **@Public()**：固定规则验证码的**服务端校验**（W9-C）
+ *                                 它不签发任何凭据、不读用户数据，只回 `{ valid }`
  *   `POST   /auth/logout`         `AuthGuard`，204（没有响应体：撤销就是没有可说的）
  *   `GET    /auth/session`        `AuthGuard`，200 `{ user, expiresAt, children }`
+ *   `GET    /auth/account`        `AuthGuard`，200 `{ phone, email, hasPassword }`（W9-D）
  *   `POST   /auth/child-session`  `AuthGuard`，200 `{ childId, role, sessionExpiresAt }`
+ *   `PUT    /auth/account`        `AuthGuard`，200 `{ phone, email, hasPassword }`（W9-D）
+ *   ★ 三条匿名路由的判据是同一句话：**要么不返回凭据，要么它就是签发凭据的那一个**。
+ *     多一条的前提只有这个，不是"客户端现在还没登录"（那条理由会让每一条新路由都想匿名）。
  *
  * ── 为什么 `@UseGuards(AuthGuard)` 与 `APP_GUARD` 同时存在（不是重复）───────────
  *   · `APP_GUARD`（`app.module.ts`）：保证**生产**里每条路由默认要身份 ——
@@ -58,6 +71,97 @@ export class IdentityController {
       deviceId: readDeviceId(request),
       headers: request.headers
     })
+  }
+
+  /**
+   * `POST /auth/date-code` —— 固定规则 6 位验证码（`MMDD` ＋ 两位 ISO 星期）的校验（W9-C）。
+   *
+   * ── 为什么它可以 `@Public()`（唯一判据：**不返回任何凭据**）──────────────────
+   *   响应只有 `{ valid, serverDate, weekDay, dayOffset, acceptedUntil }`：没有 token、
+   *   没有 userId、没有"已通过"的会话状态。拿它换不到任何东西 ⇒ 不需要先登录。
+   *   反过来：**一旦有人往响应里加 token，它就必须改回 `AuthGuard`** —— 那等于用
+   *   一个可推导的码签发凭据（见 `date-verification-code.ts` 文件头的诚实标注）。
+   *
+   * ── 为什么是 POST 而不是 GET ────────────────────────────────────────────────
+   *   GET 会把 `code` 写进访问日志 / 浏览器历史 / 代理缓存。虽然这个码可推导，
+   *   但"某人在某时刻试过哪个码"没有任何必要被留着；POST 还顺便让它与登录
+   *   共用同一条限流口径（`LoginRateLimiter`，见 service）。
+   */
+  @Public()
+  @Post('date-code')
+  @HttpCode(200)
+  async verifyDateCode(
+    @Body() dto: VerifyDateCodeDto,
+    @Req() request: RequestWithActor
+  ): Promise<DateCodeVerdict> {
+    return await this.service.verifyDateCode(dto, {
+      deviceId: readDeviceId(request),
+      headers: request.headers
+    })
+  }
+
+  /**
+   * `POST /auth/login-account` —— App 用手机号/邮箱 + 密码登录（W9-D，2026-10-30）。
+   *
+   * ── 它为什么可以 `@Public()`（判据要补一句限定）────────────────────────────
+   *   `public.decorator.ts` 的原文判据是「响应里没有任何凭据」。这里显然不满足
+   *   （它**就是**发 token 的那个）。但把它标成需要登录会构成自举死锁 ——
+   *   和 `POST /auth/login` 完全一样。
+   *   ⇒ 判据的完整形式是：**要么不返回凭据，要么它就是签发凭据的那一个**。
+   *   全仓库满足后半句的只有两条（`/auth/login`、`/auth/login-account`），
+   *   而且两者返回的是**同一种** `AuthSession` token。
+   *
+   * ── 与 `/auth/login` 的分工（写清，否则以后会有人想合并）────────────────────
+   *   不合并：微信那条要一个外网 `code2session`（可能 5xx / 45011），
+   *   密码这条纯本地校验。合并会让"微信挂了"和"密码错了"共用一个错误面，
+   *   客户端就无法决定是"稍后重试"还是"检查密码"。
+   */
+  @Public()
+  @Post('login-account')
+  @HttpCode(200)
+  async loginAccount(
+    @Body() dto: LoginAccountDto,
+    @Req() request: RequestWithActor
+  ): Promise<LoginView> {
+    return await this.service.loginWithAccount(dto, {
+      deviceId: readDeviceId(request),
+      headers: request.headers
+    })
+  }
+
+  /**
+   * `GET /auth/account` —— 读当前绑定情况（W9-D，2026-10-30）。
+   *
+   * 与下面那条 `PUT` 是**同一份** `AccountView`：客户端那一屏先读、再写、
+   * 用写回来的形状覆盖读到的形状。两者形状必须逐字一致，否则保存成功那一刻
+   * 界面会「少几个字段」。
+   *
+   * ★ 必须 `AuthGuard`：这是「我这个账号绑了什么」，匿名可读等于给了别人
+   *   一个按手机号探测「这个号是不是注册过」的接口。
+   */
+  @Get('account')
+  @UseGuards(AuthGuard)
+  async readAccount(@Req() request: RequestWithActor): Promise<AccountView> {
+    return await this.service.readAccount(requireIdentity(request))
+  }
+
+  /**
+   * `PUT /auth/account` —— 绑定手机号/邮箱 + 设置/修改密码（W9-D，2026-10-30）。
+   *
+   * ★ **必须** `AuthGuard`：它写的是"以后能不能登录"。匿名可写 = 账号接管。
+   *   合法调用者只有"已经通过微信登录的小程序用户"（见 service 注释）。
+   *
+   * 200 而不是 204：客户端要用返回的 `{ phone, email, hasPassword }` 立刻
+   * 刷新那一屏（"已绑定 138****8000"），少一次 `GET /auth/session`。
+   */
+  @Put('account')
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  async updateAccount(
+    @Body() dto: UpdateAccountDto,
+    @Req() request: RequestWithActor
+  ): Promise<AccountView> {
+    return await this.service.updateAccount(requireIdentity(request), dto)
   }
 
   /** `POST /auth/logout` —— 撤销**这一条**会话（幂等；已撤销再撤一次也回 204）。 */

@@ -34,10 +34,12 @@ import {
  *
  * 判据：`docs/design/40-login-and-session-design.md` §5、§8、§9.4、§12.2。
  *
- * ── 五条路由，两个控制器 ────────────────────────────────────────────────────
- *   `POST /auth/login` / `POST /auth/logout` / `GET /auth/session` /
- *   `POST /auth/child-session`                 → `IdentityController`
- *   `POST /children`（新用户建占位档案 + 同意） → `ChildrenBootstrapController`
+ * ── 六条路由，两个控制器 ────────────────────────────────────────────────────
+ *   `POST /auth/login` / `POST /auth/date-code` / `POST /auth/logout` /
+ *   `GET /auth/session` / `POST /auth/child-session` → `IdentityController`
+ *   `POST /children`（新用户建占位档案 + 同意）        → `ChildrenBootstrapController`
+ *   ★ `POST /auth/date-code`（W9-C）**不碰库**：它只按服务器时钟算 6 位码并比对，
+ *     所以「没有库」对它不是故障（`hasDatabase: false` 下照样 200）。
  *
  * ── 三处**世界分叉**，每处都必须能显式钉住（用例不许靠环境推断）───────────────
  *   ① `AUTH_SESSION_REPOSITORY`：有库 ⇒ `PrismaAuthSessionRepository`（每个请求真查一行）；

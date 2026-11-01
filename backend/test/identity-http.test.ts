@@ -29,7 +29,7 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, it } from 'node:test'
 
-import type { INestApplication } from '@nestjs/common'
+import { ForbiddenException, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 
 import { applyGlobalPipes } from '../src/app.setup'
@@ -48,12 +48,14 @@ import {
 import { CHILD_SESSION_TTL_MS } from '../src/identity/identity.prisma.repository'
 import {
   IDENTITY_REPOSITORY,
+  type AccountRow,
   type BootstrapChildInput,
   type ChildMembershipRow,
   type EnsureChildSessionInput,
   type IdentityPort,
   type LoginUserRow,
-  type LoginWithOpenIdInput
+  type LoginWithOpenIdInput,
+  type WriteAccountInput
 } from '../src/identity/identity.repository'
 import { IdentityModule } from '../src/identity/identity.module'
 import { LoginRateLimiter, LOGIN_RATE_LIMIT_PER_DEVICE } from '../src/identity/login-rate-limiter'
@@ -182,6 +184,22 @@ function makeAuthSessionFake(onRow?: (row: AuthSessionRow) => void): AuthSession
       if (row === undefined || row.revokedAt !== null) return false
       row.revokedAt = new Date()
       return true
+    },
+    /**
+     * W9-D：改密码后踢掉其它会话。
+     * ★ 替身必须**真按 userId 过滤**：本文件的用途之一就是证明"别把别人的会话踢掉"，
+     *   而一份"全部撤销"的实现会让那条断言永远为真。
+     */
+    async revokeOthers(userId, keepTokenHash, now) {
+      let count = 0
+      for (const row of this.rows.values()) {
+        if (row.userId !== userId) continue
+        if (row.revokedAt !== null) continue
+        if (keepTokenHash !== null && row.tokenHash === keepTokenHash) continue
+        row.revokedAt = now
+        count += 1
+      }
+      return count
     }
   }
   return fake
@@ -206,6 +224,10 @@ interface IdentityFake extends IdentityPort {
   childSessions: EnsureChildSessionInput[]
   users: Map<string, LoginUserRow>
   children: Map<string, ChildMembershipRow[]>
+  /** W9-D：账号行（含 `passwordHash`），key = userId。 */
+  accounts: Map<string, AccountRow>
+  /** W9-D：密码登录实际调过 `issueSession` 的次数（证明"不建 User"）。 */
+  issued: number
   /** 让 `ensureChildSession` 回一个**非法**角色（验 500 `MEMBER_ROLE_INVALID`）。 */
   roleOverride: string | null
 }
@@ -217,6 +239,8 @@ function makeIdentityFake(sessions: AuthSessionFake): IdentityFake {
     childSessions: [],
     users: new Map<string, LoginUserRow>(),
     children: new Map<string, ChildMembershipRow[]>(),
+    accounts: new Map<string, AccountRow>(),
+    issued: 0,
     roleOverride: null,
     async loginWithOpenId(input) {
       this.logins.push(input)
@@ -251,6 +275,49 @@ function makeIdentityFake(sessions: AuthSessionFake): IdentityFake {
         role: this.roleOverride ?? 'guardian',
         sessionExpiresAt: input.sessionExpiresAt
       }
+    },
+
+    // ── W9-D：账号读写（本文件只在编译层面需要它们）─────────────────────────
+    //  ★ 真正的账号端到端用例在 `test/account-login-http.test.ts`（那里有完整替身）。
+    //    这里保持最小但不"假装成功"：`issueSession` 找不到账号 ⇒ 403，
+    //    与真适配器的 `UPDATE … WHERE status='active'` 同一条口径。
+
+    async readAccountByIdentifier(type, value) {
+      for (const row of this.accounts.values()) {
+        if (type === 'phone' && row.phone === value) return row
+        if (type === 'email' && row.email === value) return row
+      }
+      return null
+    },
+
+    async readAccount(userId) {
+      return this.accounts.get(userId) ?? null
+    },
+
+    async issueSession(input) {
+      const user = this.users.get(input.userId)
+      const account = this.accounts.get(input.userId)
+      if (user === undefined || account === undefined || account.status !== 'active') {
+        throw new ForbiddenException({ code: 'USER_NOT_ACTIVE' })
+      }
+      this.issued += 1
+      await sessions.create({
+        userId: user.userId,
+        tokenHash: input.tokenHash,
+        method: input.method,
+        deviceId: input.deviceId,
+        expiresAt: input.expiresAt
+      })
+      return user
+    },
+
+    async writeAccount(input: WriteAccountInput) {
+      const row = this.accounts.get(input.userId)
+      if (row === undefined) throw new ForbiddenException({ code: 'USER_NOT_ACTIVE' })
+      if (input.phone !== undefined) row.phone = input.phone
+      if (input.email !== undefined) row.email = input.email
+      if (input.passwordHash !== undefined) row.passwordHash = input.passwordHash
+      return { phone: row.phone, email: row.email, hasPassword: row.passwordHash !== null }
     }
   }
 }

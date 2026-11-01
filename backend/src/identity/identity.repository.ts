@@ -1,6 +1,7 @@
 import { Injectable, NotImplementedException } from '@nestjs/common'
 
 import type { AuthMethod } from './auth-session.gate'
+import type { IdentifierType } from './account-identifier'
 
 /**
  * 登录 / 建孩子 / 补设备会话的**持久化端口**（W9-A，2026-10-29 / `40` §6–§8）。
@@ -39,6 +40,55 @@ export interface LoginWithOpenIdInput {
 export interface LoginUserRow {
   userId: string
   displayName: string | null
+}
+
+/**
+ * 账号行（W9-D，2026-10-30 / `42` §3.1）。
+ *
+ * ★ **本仓库里唯一会读到 `passwordHash` 的形状**。它只在 `IdentityService`
+ *   的栈帧里存在，绝不进响应、绝不进日志（`passwordAuditValue()` 是审计里
+ *   唯一允许的写法）。
+ *
+ * 与 `LoginUserRow` 分开而不是复用它：`LoginUserRow` 是"登录成功后要回给客户端的
+ * 最小信息"，把 `passwordHash` 塞进去等于让每一个用到 `LoginUserRow` 的地方
+ * （`LoginView`、`SessionView`、`bootstrapChild` 的返回值）都有机会顺手把它
+ * 带出去。**类型上够不着**是最便宜的防线。
+ */
+export interface AccountRow {
+  userId: string
+  displayName: string | null
+  /** 原始 `UserStatus` 字符串（`active` / `suspended` / …）；白名单校验在调用方。 */
+  status: string
+  phone: string | null
+  email: string | null
+  /** `scrypt-pw$…`；`null` = 从未设过密码（≠ 密码错，但**响应必须同形**）。 */
+  passwordHash: string | null
+}
+
+/** 为**已存在的**用户签发一条认证会话（密码登录走这里，不建 User）。 */
+export interface IssueSessionInput {
+  userId: string
+  /** **已哈希**的 token（端口不接收明文）。 */
+  tokenHash: string
+  method: AuthMethod
+  deviceId: string | null
+  expiresAt: Date
+}
+
+/** 绑定标识 / 设置密码。**只写传入的字段**（`undefined` = 不变）。 */
+export interface WriteAccountInput {
+  userId: string
+  phone?: string
+  email?: string
+  passwordHash?: string
+  passwordSetAt?: Date
+}
+
+/** 绑定结果（**不含**哈希，只回答"设了没有"）。 */
+export interface AccountViewRow {
+  phone: string | null
+  email: string | null
+  hasPassword: boolean
 }
 
 /** `GET /auth/session` 的 `children[]` 一项（角色取**成员位**，不取会话的 activeRole）。 */
@@ -96,6 +146,39 @@ export interface IdentityPort {
    */
   readUser(userId: string): Promise<LoginUserRow | null>
 
+  // ── App 账号登录（W9-D，2026-10-30 / `42` §3.1）────────────────────────────
+
+  /**
+   * 按**规范化后**的手机号 / 邮箱查账号（`User.phone` / `User.email` 唯一索引）。
+   *
+   * ★ 查不到返回 `null`，**不抛异常** —— 「没有这个账号」是正常分支，
+   *   由 service 回同一个 401（不区分"账号不存在"与"密码错"）。
+   * ★ 这里**不**过滤 `status`：停用账号也要读出来，好让 service 走同一条
+   *   401/403 分支（在 `where` 里加 `status:'active'` 会让停用账号表现为
+   *   "密码错"，用户以为是自己记错了）。
+   */
+  readAccountByIdentifier(type: IdentifierType, value: string): Promise<AccountRow | null>
+
+  /** 读当前登录者的账号信息（绑定 / 改密要判断"有没有设过密码"）。 */
+  readAccount(userId: string): Promise<AccountRow | null>
+
+  /**
+   * 给**已存在的**用户签发一条 `AuthSession`（密码登录；**绝不建 User**）。
+   *
+   * ★ 事务内必须再确认 `status='active'`：service 验完密码到写会话之间，
+   *   账号可能刚被停用。查到非 active ⇒ 抛 403 `USER_NOT_ACTIVE`。
+   *   这与 `loginWithOpenId` 的口径一致 —— 不发凭据的人，也不该被当成"登录成功"。
+   */
+  issueSession(input: IssueSessionInput): Promise<LoginUserRow>
+
+  /**
+   * 绑定手机号 / 邮箱、写入密码哈希（**同一事务**，部分更新）。
+   *
+   * 唯一键冲突（`phone` / `email` 已被别人占用）⇒ 抛 409 `IDENTIFIER_TAKEN`。
+   * ★ 冲突**不能**被翻成 400：400 会让客户端以为是"格式不对"，用户会反复改写法。
+   */
+  writeAccount(input: WriteAccountInput): Promise<AccountViewRow>
+
   /** 这个人是哪些孩子的**有效**成员（`ChildMember.status='active'`）。 */
   listChildren(userId: string): Promise<ChildMembershipRow[]>
 
@@ -141,6 +224,30 @@ export class NotImplementedIdentityRepository implements IdentityPort {
 
   readUser(_userId: string): Promise<LoginUserRow | null> {
     return Promise.resolve(this.fail('readUser'))
+  }
+
+  // ── App 账号登录（W9-D）：无库时同样**全部 501** ────────────────────────────
+  //  ★ 尤其是 `issueSession`：无库时若"假装签发成功"，客户端会拿到一个永远
+  //    过不了守卫的 token（守卫要查 `AuthSession` 表）—— 那正是 W9-A 文件头
+  //    点名要避免的"登录成功与请重新登录之间无限循环"。
+
+  readAccountByIdentifier(
+    _type: IdentifierType,
+    _value: string
+  ): Promise<AccountRow | null> {
+    return Promise.resolve(this.fail('readAccountByIdentifier'))
+  }
+
+  readAccount(_userId: string): Promise<AccountRow | null> {
+    return Promise.resolve(this.fail('readAccount'))
+  }
+
+  issueSession(_input: IssueSessionInput): Promise<LoginUserRow> {
+    return Promise.resolve(this.fail('issueSession'))
+  }
+
+  writeAccount(_input: WriteAccountInput): Promise<AccountViewRow> {
+    return Promise.resolve(this.fail('writeAccount'))
   }
 
   listChildren(_userId: string): Promise<ChildMembershipRow[]> {

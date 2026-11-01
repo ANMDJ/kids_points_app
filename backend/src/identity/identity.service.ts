@@ -13,14 +13,27 @@ import {
 } from '@nestjs/common'
 
 import { PARENT_MODE_TTL_MS } from '../auth/parent-mode.policy'
+import { burnPasswordHashCost, hashPassword, verifyPassword } from '../common/password-hash'
 import { consentTextVersion } from '../consent/consent.service'
 import { clientIpOf, hashPii } from '../consent/hash-pii'
 import type { AuthenticatedIdentity } from '../permissions/actor'
+import {
+  classifyIdentifier,
+  identifierMessage,
+  normalizeEmail,
+  normalizePhone,
+  passwordMessage,
+  validatePasswordStrength
+} from './account-identifier'
 import { authSessionExpiresAt, hashToken, issueToken } from './auth-session.gate'
 import { AUTH_SESSION_REPOSITORY, type AuthSessionPort } from './auth-session.repository'
 import type { BootstrapChildDto } from './dto/bootstrap-child.dto'
 import type { ChildSessionDto } from './dto/child-session.dto'
+import type { LoginAccountDto } from './dto/login-account.dto'
 import type { LoginDto } from './dto/login.dto'
+import type { UpdateAccountDto } from './dto/update-account.dto'
+import type { VerifyDateCodeDto } from './dto/verify-date-code.dto'
+import { verifyDateVerificationCode, type DateCodeVerdict } from './date-verification-code'
 import { CHILD_SESSION_TTL_MS } from './identity.prisma.repository'
 import {
   IDENTITY_REPOSITORY,
@@ -69,6 +82,18 @@ export interface ChildSessionView {
   childId: string
   role: string
   sessionExpiresAt: string
+}
+
+/**
+ * `PUT /auth/account` 的响应（W9-D，2026-10-30 / `42` §3.3）。
+ *
+ * ★ **没有** `passwordHash`、没有密码长度、没有任何"密码长什么样"的信息 ——
+ *   只回答"设了没有"。客户端据此决定下次显示"设置密码"还是"修改密码"。
+ */
+export interface AccountView {
+  phone: string | null
+  email: string | null
+  hasPassword: boolean
 }
 
 const MEMBER_ROLES = ['guardian', 'child', 'viewer'] as const
@@ -172,6 +197,173 @@ export class IdentityService {
     }
   }
 
+  /**
+   * `POST /auth/login-account` —— App 用**手机号/邮箱 + 密码**登录（W9-D，2026-10-30）。
+   *
+   * ── 它与 `POST /auth/login` 的关系（**不是**第二条身份体系）──────────────────
+   *   两者签发的是**同一种** `AuthSession`，只是"验身方式"不同：
+   *     微信：`code` → `openId` → 找到/建立 User；
+   *     密码：`identifier` → 找到 User → 校验 `passwordHash`。
+   *   落库之后 `method` 只是审计字段，守卫判定完全一致（`auth-session.gate.ts`）。
+   *
+   * ── 顺序（第 2 条与第 4 条是安全条款）──────────────────────────────────────
+   *   1. **限流**：与 `/auth/login` 共用同一份额度（同 IP 20/分、同设备 10/分）。
+   *      密码可以被猜，共用额度意味着"狂刷登录页"会同时限制住微信登录，
+   *      这是刻意的 —— 两个端点打的是同一个东西（拿到凭据）。
+   *   2. **先分类标识**：形状错 ⇒ 400，且**不消耗**一次 scrypt。
+   *      反过来（先查库）会让畸形输入也走一遍索引查询。
+   *   3. **统一 401**：账号不存在 / 从未设密码 / 密码错 ⇒ **同一个** 401
+   *      `ACCOUNT_INVALID_CREDENTIALS`。前两种还会空跑一次 scrypt
+   *      （`burnPasswordHashCost()`），否则"响应快 = 这个号没注册"就是一条
+   *      手机号枚举接口。
+   *   4. **新签发** token（`issueToken()`）：与微信登录同一条会话固定防护 ——
+   *      绝不接受"用旧 token 换新 token"（`40` §11.3）。
+   *   5. 落库：`identity.issueSession()` 在**同一事务**里再确认 `status='active'`
+   *      （验密码到写会话之间隔了 ~50ms 的 scrypt，账号可能刚被停用）。
+   *
+   * ── 为什么**不**在这里建 User ─────────────────────────────────────────────────
+   *   首版没有开放注册（`42` §5）：所有账号都由小程序（微信登录）创建，
+   *   App 只是**另一种进入方式**。这条约束换来两件事：
+   *     ① 不会出现"没有任何家庭的孤儿账号"；
+   *     ② 忘记密码有兜底 —— 家长可以在小程序里（微信身份已证明）重设密码。
+   *   若在这里"查不到就建一个"，手机号打错一个数字就会静默生成一个新账号，
+   *   然后他进去发现"我的孩子不见了"（`42` §5.2）。
+   */
+  async loginWithAccount(
+    dto: LoginAccountDto,
+    context: { deviceId: string | null; headers: Record<string, string | string[] | undefined> }
+  ): Promise<LoginView> {
+    const limited = this.limiter.check(
+      { ip: clientIpOf(context.headers), deviceId: context.deviceId },
+      new Date()
+    )
+    if (limited !== null) {
+      throw new HttpException(
+        {
+          code: 'LOGIN_RATE_LIMITED',
+          scope: limited.scope,
+          retryAfterSeconds: limited.retryAfterSeconds,
+          message:
+            `登录尝试过于频繁（按 ${limited.scope === 'ip' ? 'IP' : '设备'} 限流）。` +
+            `请等 ${limited.retryAfterSeconds} 秒再试；**不要**自动重试。`
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      )
+    }
+
+    const classified = classifyIdentifier(dto.identifier)
+    if (classified.kind === 'invalid') {
+      throw new BadRequestException({
+        code: 'INVALID_IDENTIFIER',
+        reason: classified.reason,
+        message: identifierMessage(classified.reason)
+      })
+    }
+
+    const { type, value } = classified.identifier
+    const account = await this.identity.readAccountByIdentifier(type, value)
+    if (account === null || account.passwordHash === null) {
+      // ★ 这三行是**时序**，不是逻辑：不存在与「没设密码」都必须花掉与
+      //   "密码错了"同等的 CPU，否则响应时间会变成一张注册状态表。
+      await burnPasswordHashCost()
+      this.accountInvalid()
+    }
+
+    if (!(await verifyPassword(dto.password, account.passwordHash))) {
+      this.accountInvalid()
+    }
+
+    const now = new Date()
+    const token = issueToken()
+    const expiresAt = authSessionExpiresAt(now)
+
+    const user = await this.identity.issueSession({
+      userId: account.userId,
+      tokenHash: hashToken(token),
+      method: 'password',
+      deviceId: context.deviceId,
+      expiresAt
+    })
+
+    const children = await this.identity.listChildren(user.userId)
+    const first = children[0]
+
+    return {
+      token,
+      expiresAt: expiresAt.toISOString(),
+      user: { id: user.userId, displayName: user.displayName },
+      membership:
+        first === undefined
+          ? null
+          : { childId: first.childId, role: this.roleOrThrow(first.role) }
+    }
+  }
+
+  /**
+   * 账号登录失败的**唯一出口**（401）。
+   *
+   * ★ 不区分「没有这个账号」「从未设过密码」「密码不对」：分开说等于把
+   *   `/auth/login-account` 变成"这个手机号/邮箱注册过吗"的查询接口。
+   *   手机号号段有限、邮箱可批量猜 —— 那是一条真实可用的枚举路径（`42` §5.3）。
+   *
+   * 返回 `never` 是**刻意的**：调用方写 `this.accountInvalid()` 之后，
+   * TS 会立刻收窄上面那些 `null` 判断 —— 于是不存在"忘了 return"的分支。
+   */
+  private accountInvalid(): never {
+    throw new UnauthorizedException({
+      code: 'ACCOUNT_INVALID_CREDENTIALS',
+      message:
+        '手机号/邮箱或密码不正确。' +
+        '如果你还没设置过密码，请先在小程序「我的」里绑定手机号/邮箱并设置一个密码。'
+    })
+  }
+
+  /**
+   * `POST /auth/date-code` —— 固定规则验证码（`MMDD` ＋ 两位 ISO 星期）的服务端校验（W9-C）。
+   *
+   * ── 为什么校验必须在服务端（这是本端点的**全部**价值）──────────────────────
+   *   码本身由「日期 + 星期」推导而来，客户端当然也能算 —— 但**由客户端自己判**就等于
+   *   没有校验：孩子把手机系统时间往前拨一天，界面就会放行。放在这里 ⇒ 判定用的是
+   *   **服务器时钟**，规则也只有一份实现（`date-verification-code.ts`）。
+   *
+   * ── 限流：与登录**共用**同一份额度（刻意的）───────────────────────────────
+   *   `LoginRateLimiter` 的 key 是"来源"（IP / deviceId），不是"端点" ——
+   *   于是同一来源的匿名尝试共享 20/分（IP）与 10/分（设备）的总额。
+   *   代价：有人狂刷本端点会让同一来源的登录也多等一会儿（最多 1 分钟）；
+   *   收益：不引入第二个限流器，也不会出现"两个端点各有一份额度 ⇒ 总额放大 2 倍"。
+   *
+   * ── 码不对为什么回 200 而不是 401 ────────────────────────────────────────────
+   *   它是**校验结果**，不是认证失败：回 401 会让客户端误以为"要重新登录"，
+   *   而调用它的界面（家长门 / 登录页第二步）此刻可能根本没有会话可登录。
+   *   于是 `{ valid: false }` ＋ 200 是唯一不会把人送到错误分支的形状。
+   */
+  async verifyDateCode(
+    dto: VerifyDateCodeDto,
+    context: { deviceId: string | null; headers: Record<string, string | string[] | undefined> }
+  ): Promise<DateCodeVerdict> {
+    const now = new Date()
+    const limited = this.limiter.check(
+      { ip: clientIpOf(context.headers), deviceId: context.deviceId },
+      now
+    )
+    if (limited !== null) {
+      throw new HttpException(
+        {
+          code: 'DATE_CODE_RATE_LIMITED',
+          scope: limited.scope,
+          retryAfterSeconds: limited.retryAfterSeconds,
+          message:
+            `验证码尝试过于频繁（按 ${limited.scope === 'ip' ? 'IP' : '设备'} 限流）。` +
+            `请等 ${limited.retryAfterSeconds} 秒再试；**不要**自动重试。`
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      )
+    }
+
+    // ★ 不把输入值写进日志：它可推导，但"用户输入了什么"不该出现在服务端日志里。
+    return verifyDateVerificationCode(dto.code, now)
+  }
+
   /** `POST /auth/logout`：撤销**这一条**会话（幂等；已撤销再撤一次不报错）。 */
   async logout(identity: AuthenticatedIdentity): Promise<void> {
     await this.sessions.revoke(identity.tokenHash, new Date(), 'logout')
@@ -200,6 +392,173 @@ export class IdentityService {
         role: this.roleOrThrow(child.role)
       }))
     }
+  }
+
+  /**
+   * `PUT /auth/account` —— 绑定手机号/邮箱、设置或修改密码（W9-D，2026-10-30）。
+   *
+   * ── 为什么它必须 `AuthGuard`（而不是 `@Public()`）───────────────────────────
+   *   它**写入**的是"以后能不能登录"。匿名可写等于任何人都能给别人的账号
+   *   绑一个自己的手机号 —— 那是账号接管，不是"注册"。
+   *   唯一合法的调用者：**已经**通过微信登录的小程序用户（他的身份由
+   *   `Authorization` 里的 `AuthSession` 背书，而不是由手机号背书）。
+   *
+   * ── 两条判定（写在最前面，因为它们决定后面算不算）──────────────────────────
+   *   ① 三个字段全空 ⇒ 400 `ACCOUNT_NOTHING_TO_UPDATE`（不是静默 200：
+   *      静默成功会让客户端以为"保存好了"，而什么都没变）；
+   *   ② 账号非 active ⇒ 403（不是 401：401 会让他去"重新登录"，
+   *      而他本来就有有效凭据，问题是账号被停用）。
+   *
+   * ── 改密码的两道门 ─────────────────────────────────────────────────────────
+   *   · **已设过密码** ⇒ 必须带 `currentPassword` 且正确。否则"拿到解锁手机的人"
+   *     可以直接改密码，把真正的家长锁在外面；
+   *   · 改成功后**撤销其它所有会话**（保留当前这条）—— 见
+   *     `AuthSessionPort.revokeOthers` 的注释：不这么做，泄露的旧 token
+   *     还能用满 7 天，"我改过密码了"就只是一句心理安慰。
+   *
+   * ── 唯一冲突 ⇒ 409，不在这里判 ───────────────────────────────────────────────
+   *   "这个手机号已被别人绑定"由适配器的唯一索引兜住（`P2002` ⇒ 409
+   *   `IDENTIFIER_TAKEN`）。不先查再写：两个请求同时绑同一个号时，
+   *   "先查后写"会双双通过检查。
+   */
+  /**
+   * `GET /auth/account` —— 我绑的是哪个手机号 / 邮箱，设过密码没有（W9-D，2026-10-30）。
+   *
+   * ── 为什么必须有一条**读**路由 ──────────────────────────────────────────────
+   *   `PUT` 的回包已经回答了这三个字段，但那只在「刚保存完」时成立。用户下次
+   *   打开「App 登录账号」那一屏时，界面必须先知道两件事，否则只能猜：
+   *     · **现在绑的是哪个号** —— 不读就只能画一个空白输入框，而用户会把它
+   *       读成「我根本没绑过」，于是又绑一次（换号 ⇒ 上一台设备上的 App 登录
+   *       再也进不来）。
+   *     · **设过密码没有** —— 决定那个框写「设置密码」还是「修改密码」，
+   *       也决定要不要「当前密码」（后端在已有密码时**强制**要求它）。
+   *       猜错的代价是一次必然 400 的往返，以及一句用户看不懂的错误。
+   *
+   * ── 为什么和 `PUT` 共用同一份 `AccountView` ─────────────────────────────────
+   *   两条路由的响应若字段不同，客户端就要维护两套解析器；而「读到的形状」与
+   *   「写回来的形状」不一致时，界面会在保存成功的那一瞬间闪一下（字段突然少了）。
+   *
+   * ── 泄漏面 ──────────────────────────────────────────────────────────────────
+   *   `AuthGuard` 背书的就是调用者本人，返回的也只是他自己那一行：
+   *   不返回 `passwordHash`，连密码长度都不给。那条 `status !== 'active'` 的检查
+   *   与 `updateAccount` 同一口径 —— 已停用的账号不该在这一屏看到「一切正常」。
+   */
+  async readAccount(identity: AuthenticatedIdentity): Promise<AccountView> {
+    const current = await this.identity.readAccount(identity.userId)
+    if (current === null || current.status !== 'active') {
+      throw new ForbiddenException({
+        code: 'USER_NOT_ACTIVE',
+        message: '这个账号当前不可用（已停用或已注销）。'
+      })
+    }
+    return {
+      phone: current.phone,
+      email: current.email,
+      hasPassword: current.passwordHash !== null
+    }
+  }
+
+  async updateAccount(
+    identity: AuthenticatedIdentity,
+    dto: UpdateAccountDto
+  ): Promise<AccountView> {
+    if (dto.phone === undefined && dto.email === undefined && dto.password === undefined) {
+      throw new BadRequestException({
+        code: 'ACCOUNT_NOTHING_TO_UPDATE',
+        message: '这次请求没有要改的内容：手机号、邮箱、密码至少要填一个。'
+      })
+    }
+
+    const current = await this.identity.readAccount(identity.userId)
+    if (current === null || current.status !== 'active') {
+      throw new ForbiddenException({
+        code: 'USER_NOT_ACTIVE',
+        message: '这个账号当前不可用（已停用或已注销），没有修改任何内容。'
+      })
+    }
+
+    let phone: string | undefined
+    if (dto.phone !== undefined) {
+      const normalized = normalizePhone(dto.phone)
+      if (normalized.kind === 'invalid') {
+        throw new BadRequestException({
+          code: 'INVALID_PHONE',
+          reason: normalized.reason,
+          message: identifierMessage(normalized.reason)
+        })
+      }
+      phone = normalized.identifier.value
+    }
+
+    let email: string | undefined
+    if (dto.email !== undefined) {
+      const normalized = normalizeEmail(dto.email)
+      if (normalized.kind === 'invalid') {
+        throw new BadRequestException({
+          code: 'INVALID_EMAIL',
+          reason: normalized.reason,
+          message: identifierMessage(normalized.reason)
+        })
+      }
+      email = normalized.identifier.value
+    }
+
+    // 密码强度里的"不能与标识相同"：**本次要改的值**优先于库里现有的值 ——
+    // 用户在同一个请求里既换手机号又设密码时，他脑子里想的是新的那个号。
+    const identifierForPassword = phone ?? email ?? current.phone ?? current.email ?? undefined
+
+    let passwordHash: string | undefined
+    if (dto.password !== undefined) {
+      if (current.passwordHash !== null) {
+        if (dto.currentPassword === undefined || dto.currentPassword === '') {
+          throw new BadRequestException({
+            code: 'CURRENT_PASSWORD_REQUIRED',
+            message: '修改密码前请先填写当前密码（防止别人拿到你的手机就直接改密码）。'
+          })
+        }
+        if (!(await verifyPassword(dto.currentPassword, current.passwordHash))) {
+          // 403 而不是 401：调用者是**已认证**的，错的是他给的旧密码。
+          // 401 会触发客户端"清 token 去登录页"，而他并不需要重新登录。
+          throw new ForbiddenException({
+            code: 'CURRENT_PASSWORD_INVALID',
+            message: '当前密码不正确，密码没有修改。'
+          })
+        }
+      }
+
+      const strength = validatePasswordStrength(dto.password, identifierForPassword)
+      if (strength.kind === 'invalid') {
+        throw new BadRequestException({
+          code: 'WEAK_PASSWORD',
+          reason: strength.reason,
+          message: passwordMessage(strength.reason)
+        })
+      }
+      passwordHash = await hashPassword(dto.password)
+    }
+
+    const updated = await this.identity.writeAccount({
+      userId: identity.userId,
+      ...(phone === undefined ? {} : { phone }),
+      ...(email === undefined ? {} : { email }),
+      ...(passwordHash === undefined
+        ? {}
+        : { passwordHash, passwordSetAt: new Date() })
+    })
+
+    if (passwordHash !== undefined) {
+      const revoked = await this.sessions.revokeOthers(
+        identity.userId,
+        identity.tokenHash,
+        new Date(),
+        'password_changed'
+      )
+      this.logger.log(
+        `修改密码后撤销了 ${revoked} 条其它会话（userId=${identity.userId}；当前这条保留）`
+      )
+    }
+
+    return updated
   }
 
   /**

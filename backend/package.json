@@ -22,6 +22,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "seed": "prisma db seed",
     "seed:demo": "tsx prisma/seed/demo-family.ts",
+    "seed:account": "tsx scripts/set-demo-account.ts",
     "db:verify": "node scripts/verify-db.mjs",
     "contracts:emit": "node scripts/emit-matrix.mjs",
     "templates:check": "tsx scripts/check-templates.ts",
@@ -43,6 +44,7 @@
     "@prisma/client": "7.10.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "cors": "^2.8.6",
     "dotenv": "^18.0.7",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

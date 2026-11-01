@@ -1,19 +1,24 @@
 import { randomUUID } from 'node:crypto'
 
 import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common'
-import type { RelationKind } from '@prisma/client'
+import { Prisma, type RelationKind } from '@prisma/client'
 
 import { INVITE_SESSION_TTL_MS } from '../invites/invite-code'
 import { PrismaService } from '../prisma/prisma.service'
+import type { IdentifierType } from './account-identifier'
 import type {
+  AccountRow,
+  AccountViewRow,
   BootstrapChildInput,
   BootstrapChildResult,
   ChildMembershipRow,
   EnsureChildSessionInput,
   EnsureChildSessionResult,
   IdentityPort,
+  IssueSessionInput,
   LoginUserRow,
-  LoginWithOpenIdInput
+  LoginWithOpenIdInput,
+  WriteAccountInput
 } from './identity.repository'
 
 /**
@@ -96,6 +101,158 @@ export class PrismaIdentityRepository implements IdentityPort {
       select: { id: true, displayName: true }
     })
     return user === null ? null : { userId: user.id, displayName: user.displayName }
+  }
+
+  // ═══════════════ App 账号登录（W9-D，2026-10-30 / `42` §3）═══════════════
+
+  /**
+   * 按规范化后的标识查账号。
+   *
+   * ★ 用 `findFirst` 而不是 `findUnique({ where: { phone } })`：
+   *   `phone` / `email` 是**可空唯一列**，Prisma 对 `findUnique` 的可空唯一键
+   *   要求写 `phone: value ?? undefined` 之类的前置处理，一旦有人把 `value`
+   *   传成 `null`，`findUnique` 会静默返回"第一行 phone 为 NULL 的用户"——
+   *   那是把"没填手机号"当成"匹配"。`findFirst({ where: { phone: value } })`
+   *   生成的 SQL 是 `WHERE "phone" = $1`，`null` 永远不会等于任何行。
+   */
+  async readAccountByIdentifier(
+    type: IdentifierType,
+    value: string
+  ): Promise<AccountRow | null> {
+    const user = await this.prisma.user.findFirst({
+      where: type === 'phone' ? { phone: value } : { email: value },
+      select: {
+        id: true,
+        displayName: true,
+        status: true,
+        phone: true,
+        email: true,
+        passwordHash: true
+      }
+    })
+    if (user === null) return null
+    return {
+      userId: user.id,
+      displayName: user.displayName,
+      status: user.status,
+      phone: user.phone,
+      email: user.email,
+      passwordHash: user.passwordHash
+    }
+  }
+
+  /** 读当前登录者的账号（**不过滤 status**：停用账号也要能读出来，好走同一条 403）。 */
+  async readAccount(userId: string): Promise<AccountRow | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        displayName: true,
+        status: true,
+        phone: true,
+        email: true,
+        passwordHash: true
+      }
+    })
+    if (user === null) return null
+    return {
+      userId: user.id,
+      displayName: user.displayName,
+      status: user.status,
+      phone: user.phone,
+      email: user.email,
+      passwordHash: user.passwordHash
+    }
+  }
+
+  /**
+   * 给已存在的用户签发会话（密码登录）。
+   *
+   * ── 为什么是 `UPDATE … WHERE status='active' RETURNING` 而不是先 `findUnique` ──
+   *   服务端在**验完密码之后**才调这里，中间隔了一次 ~50ms 的 scrypt。
+   *   若先读后写，这 50ms 里账号被停用就会写出一条属于停用账号的会话。
+   *   一条 `UPDATE … WHERE … RETURNING` 让「确认仍然可用」与「拿到行」是同一次
+   *   原子操作（行锁在语句结束时释放，但会话行已在同一事务里写入）。
+   *
+   * `SET "updatedAt" = "User"."updatedAt"` 只是为了让 `RETURNING` 有行可返；
+   * 它不改变任何值（同 `loginWithOpenId` 的 `DO UPDATE SET …` 手法）。
+   */
+  async issueSession(input: IssueSessionInput): Promise<LoginUserRow> {
+    return await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; displayName: string | null }>>`
+        UPDATE "User" SET "updatedAt" = "User"."updatedAt"
+        WHERE "id" = ${input.userId} AND "status" = 'active'
+        RETURNING "id", "displayName"`
+
+      const user = rows[0]
+      if (user === undefined) {
+        throw new ForbiddenException({
+          code: 'USER_NOT_ACTIVE',
+          message: '这个账号当前不可用（已停用或已删除），没有签发登录凭据。'
+        })
+      }
+
+      await tx.authSession.create({
+        data: {
+          userId: user.id,
+          tokenHash: input.tokenHash,
+          method: input.method,
+          deviceId: input.deviceId,
+          expiresAt: input.expiresAt
+        }
+      })
+
+      return { userId: user.id, displayName: user.displayName }
+    })
+  }
+
+  /**
+   * 绑定标识 / 写密码哈希（**部分更新**，同一语句）。
+   *
+   * ── 为什么唯一冲突要在这里翻 ─────────────────────────────────────────────────
+   *   「这个手机号已被别的家长绑定」是**可预期的正常分支**，不是 500。
+   *   Prisma 的 `P2002` 在事务里会让后续语句全部失败（aborted），所以必须
+   *   在**单条 update** 上捕获 —— 这里没有外层事务，恰好是最简单的形状。
+   *
+   * ── 冲突列只用于挑文案，不用于判权限 ────────────────────────────────────────
+   *   回 `field: 'phone' | 'email'` 是为了让客户端把错误显示在**正确的输入框**下；
+   *   它不泄露"那个账号是谁"（`meta.target` 只有列名）。
+   */
+  async writeAccount(input: WriteAccountInput): Promise<AccountViewRow> {
+    try {
+      const updated = await this.prisma.user.update({
+        where: { id: input.userId },
+        data: {
+          ...(input.phone === undefined ? {} : { phone: input.phone }),
+          ...(input.email === undefined ? {} : { email: input.email }),
+          ...(input.passwordHash === undefined
+            ? {}
+            : {
+                passwordHash: input.passwordHash,
+                passwordSetAt: input.passwordSetAt ?? new Date()
+              })
+        },
+        select: { phone: true, email: true, passwordHash: true }
+      })
+      return {
+        phone: updated.phone,
+        email: updated.email,
+        hasPassword: updated.passwordHash !== null
+      }
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const field = conflictField(err)
+        throw new ConflictException({
+          code: 'IDENTIFIER_TAKEN',
+          field,
+          message:
+            field === 'phone'
+              ? '这个手机号已经被另一个账号绑定了。请换一个，或在小程序里解绑后再试。'
+              : '这个邮箱已经被另一个账号绑定了。请换一个，或在小程序里解绑后再试。'
+        })
+      }
+      throw err
+    }
   }
 
   async listChildren(userId: string): Promise<ChildMembershipRow[]> {
@@ -253,3 +410,25 @@ export const PLACEHOLDER_CHILD_NAME = '宝贝'
 
 /** 设备会话的登录口径 TTL —— **复用邀请码那条常数**（同一个数字只有一个定义处）。 */
 export const CHILD_SESSION_TTL_MS = INVITE_SESSION_TTL_MS
+
+/**
+ * `P2002` 撞的是哪一列 —— **只用来挑文案**，不参与任何判定。
+ *
+ * ── 为什么要容忍三种形状 ─────────────────────────────────────────────────────
+ *   Prisma 的 `meta.target` 在不同版本 / 不同驱动下可能是
+ *   `['phone']`、`'User_phone_key'` 或带 schema 前缀的 `'public.User_phone_key'`。
+ *   依赖其中一种会在升级时静默退化成"永远落在 unknown 分支"。
+ *   三者都含列名 ⇒ 子串判断是这里唯一稳定的写法。
+ *
+ * 认不出 ⇒ `'identifier'`：文案仍然正确（"这个手机号或邮箱已被使用"），
+ * 只是不能把错误挂到具体的输入框下。
+ */
+export function conflictField(
+  err: Prisma.PrismaClientKnownRequestError
+): 'phone' | 'email' | 'identifier' {
+  const target = err.meta?.target
+  const text = Array.isArray(target) ? target.join(',') : String(target ?? '')
+  if (text.includes('phone')) return 'phone'
+  if (text.includes('email')) return 'email'
+  return 'identifier'
+}

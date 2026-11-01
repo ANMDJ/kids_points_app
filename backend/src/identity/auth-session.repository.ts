@@ -52,6 +52,26 @@ export interface AuthSessionPort {
 
   /** 撤销（`revokedAt=now`）。幂等：已撤销的行再撤销一次 ⇒ `false`，不抛错。 */
   revoke(tokenHash: string, now: Date, reason: string): Promise<boolean>
+
+  /**
+   * 撤销该用户**除 `keepTokenHash` 之外**的全部未撤销会话，返回撤销条数（W9-D）。
+   *
+   * ── 为什么改密码必须调它（这是密码方案唯一的安全兜底）───────────────────────
+   *   密码泄露的典型后果是"别人已经拿到了一条 token"。改密码若只换哈希，
+   *   那条 token 仍然有效到 `expiresAt`（最长 7 天）—— 用户会以为"我改过了，
+   *   应该没事了"，而攻击者还在里面。⇒ 改密 = 换哈希 **＋** 踢掉其它会话。
+   *
+   * `keepTokenHash` 保留**当前这一条**：否则用户改完密码会被自己踢下线，
+   * 体验上像"改密码把账号弄坏了"，而且下一次请求 401 会让他以为改失败了。
+   *
+   * `null` ⇒ 撤销全部（将来"退出所有设备"用它）。
+   */
+  revokeOthers(
+    userId: string,
+    keepTokenHash: string | null,
+    now: Date,
+    reason: string
+  ): Promise<number>
 }
 
 /**
@@ -89,5 +109,14 @@ export class NotImplementedAuthSessionRepository implements AuthSessionPort {
 
   revoke(_tokenHash: string, _now: Date, _reason: string): Promise<boolean> {
     return Promise.resolve(this.fail('revoke'))
+  }
+
+  revokeOthers(
+    _userId: string,
+    _keepTokenHash: string | null,
+    _now: Date,
+    _reason: string
+  ): Promise<number> {
+    return Promise.resolve(this.fail('revokeOthers'))
   }
 }

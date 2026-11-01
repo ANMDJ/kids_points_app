@@ -202,7 +202,10 @@ describe('D 组：形状病 ⇒ 500（不是 401，也不是默默当成正常�
     assert.equal(authSessionExpiresAt(NOW).getTime() - NOW.getTime(), AUTH_SESSION_TTL_MS)
   })
 
-  it('方法白名单只有两个值（新增第三个必须同时改这里与 §5.2.1 的说明）', () => {
-    assert.deepEqual([...AUTH_METHODS], ['wechat_mp', 'dev_seed'])
+  it('方法白名单只有三个值（新增第四个必须同时改这里、`42` §3.4 与 `auth-session.gate.ts` 的说明）', () => {
+    // ★ 这条用例的用途是**迫使改动的人停下来想一次**：白名单是"落库之后
+    //   守卫还认不认"的唯一开关，多一个值等于多一条签发路径。
+    //   W9-D 增加了 `password`（App 手机号/邮箱登录），故从两个值变成三个值。
+    assert.deepEqual([...AUTH_METHODS], ['wechat_mp', 'dev_seed', 'password'])
   })
 })

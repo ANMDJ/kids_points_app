@@ -9,6 +9,7 @@ import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
 import { applyGlobalPipes, logBootstrap } from './app.setup'
+import { applyCors } from './cors.setup'
 import { FamilyDeletionWorker } from './deletion/deletion.worker'
 import { assertAuthBootConfig } from './identity/auth-config'
 import { PushRetryWorker } from './notifications/push-retry.worker'
@@ -38,6 +39,12 @@ async function bootstrap(): Promise<void> {
 
   // 关闭 Nest 的隐式 200 —— 审批创建必须显式返回 202（见 02 §9.3）。
   applyGlobalPipes(app)
+
+  // ★ W10-A：Flutter Web 版跑在 `http://localhost:<随机端口>`，接口在
+  //   `http://127.0.0.1:3000` ⇒ 跨源 + 预检。没有这一步时浏览器**不会发出**
+  //   真正的请求，客户端只能看到「连不上服务器」（`cors.setup.ts` 文件头）。
+  //   放在 `listen()` 之前：中间件顺序在监听那一刻就固定了。
+  applyCors(app)
 
   // 账本写入不可回滚于推送失败 —— 优雅关闭确保事务不被中途切断（01 §4）。
   app.enableShutdownHooks()

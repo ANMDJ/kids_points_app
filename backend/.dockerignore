@@ -1,0 +1,13 @@
+# 多阶段构建的运行层
+
+node_modules
+dist
+test
+test-db
+.tsbuildinfo
+*.log
+.tmp_*
+.env
+.env.*
+!.env.example
+nestjs-cli.*
