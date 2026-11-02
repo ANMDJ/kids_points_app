@@ -24,6 +24,7 @@ import { PermissionsModule } from './permissions/permissions.module'
 import { PrismaModule } from './prisma/prisma.module'
 import { ReadModule } from './read/read.module'
 import { RecordsModule } from './records/records.module'
+import { RegistrationInvitesHttpModule } from './registration-invites/registration-invites-http.module'
 import { RulesModule } from './rules/rules.module'
 import { TrashModule } from './trash/trash.module'
 import { WishesModule } from './wishes/wishes.module'
@@ -52,6 +53,13 @@ import { WishesModule } from './wishes/wishes.module'
     // ★ W10-B（2026-11-02）：App 自更新信息 `GET /app/version`（**匿名**）。
     //   版本号 / 下载地址来自环境变量（`APP_LATEST_VERSION` 等），不碰数据库。
     AppVersionModule,
+    // ★ W12（2026-11-02）：网站「邀请码获取」—— `GET /invite` 页面 +
+    //   `POST /public/registration-invites` 发放 + `GET .../quota` 额度。
+    //   有库 ⇒ PrismaRegistrationInviteRepository（额度自增与落码同一事务）；
+    //   无库 ⇒ 发放 / 额度是 501，但页面本身仍能打开（它不碰库）。
+    //   ★ 只在这里注册 HTTP 层一次；`IdentityModule` 导入的是**核心模块**
+    //     （无控制器），否则同一批路由会被注册两遍。
+    RegistrationInvitesHttpModule.register(),
     // ★ 动态模块（W2-D，2026-10-16）：有 DATABASE_URL ⇒ PrismaMembershipRepository
     //   （真查 ChildMember，屏障一读的就是库）；没有 ⇒ NotImplementedMembershipRepository（501）。
     MembershipModule.register(),

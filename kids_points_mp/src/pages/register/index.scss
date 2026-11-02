@@ -1,0 +1,107 @@
+@use '../../styles/vars.scss' as *;
+
+// 注册页（W12）：一屏表单。内容可能超长 ⇒ 允许纵向滚动（与登录页相反：
+// 登录页只有两句话，这里还有邀请码来源说明与协议尾注）。
+.kp-register {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.kp-register__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: f2r(18) f2r(22) f2r(28);
+  overflow-y: auto;
+}
+
+.kp-register__back {
+  align-self: flex-start;
+  padding: f2r(4) f2r(6);
+}
+
+.kp-register__back-label {
+  font-size: f2r(12.5);
+  color: $text-hint;
+}
+
+.kp-register__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-top: f2r(4);
+}
+
+.kp-register__emoji {
+  font-size: f2r(40);
+  line-height: 1.2;
+}
+
+.kp-register__title {
+  display: block;
+  margin-top: f2r(8);
+  font-size: f2r(21);
+  line-height: 1.3;
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-register__subtitle {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(12.5);
+  line-height: 1.6;
+  color: $text-secondary;
+}
+
+.kp-register__card {
+  margin-top: f2r(16);
+}
+
+.kp-register__hint {
+  display: block;
+  font-size: f2r(12.5);
+  line-height: 1.7;
+  color: $text-primary;
+}
+
+.kp-register__gap {
+  height: f2r(14);
+}
+
+.kp-register__fineprint {
+  display: block;
+  margin-top: f2r(8);
+  font-size: f2r(11.5);
+  line-height: 1.6;
+  color: $text-hint;
+}
+
+.kp-register__error {
+  margin-top: f2r(12);
+  padding: f2r(11) f2r(14);
+  border-radius: f2r(14);
+  background-color: #fdf1e9;
+}
+
+.kp-register__error-text {
+  font-size: f2r(12.5);
+  line-height: 1.5;
+  color: $text-primary;
+}
+
+.kp-register__actions {
+  margin-top: f2r(18);
+}
+
+.kp-register__footer {
+  display: block;
+  margin-top: f2r(18);
+  font-size: f2r(11.5);
+  line-height: 1.7;
+  text-align: center;
+  color: $text-hint;
+}

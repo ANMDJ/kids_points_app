@@ -145,6 +145,24 @@ sudo caddy validate --config /etc/caddy/Caddyfile    # 期望 "Valid configurati
 sudo systemctl reload caddy                          # ★ reload 不是 restart：restart 会切断 hub 的 SSE
 ```
 
+### 4.1 网站「邀请码获取」（W12）**不需要新增 Caddy 规则**
+
+`GET /invite` 与其它 API 由**同一个 Node 进程**提供，所以：
+
+| 入口 | 是否可用 | 原因 |
+| --- | --- | --- |
+| `https://www.littlewish.top:8443/invite` | ✅ | 8443 站点整站 `reverse_proxy 127.0.0.1:3000` |
+| `http://82.157.153.22/k/invite` | ✅ | `route @kids` 先 `strip_prefix /k` 再反代 |
+| `http://82.157.153.22/invite`（裸域名、不带 `/k`） | ❌ | 那个位置是 hub 的 `file_server`，不是本项目的 Node |
+
+若产品要求它出现在**裸域名**上，需要改 hub 那段 Caddy（属于 hub 仓库/运维，不在本仓库）：
+在 `http://82.157.153.22 {}` 块里给 `/invite` 与 `/public/*` 加 `reverse_proxy 127.0.0.1:3000`，
+并且 **`@site` 也要排除它们**（否则仍会被 `file_server` 抢走 —— 与 `/k` 当年同一个坑）。
+本仓库**没有**改那一段，因为改坏会同时影响 hub 首页与 `/_h/*`。
+
+> 页面里的接口地址是**相对**的（`public/registration-invites`），所以它跟着页面所在前缀走：
+> `/k/invite` 会请求 `/k/public/...`。不要把它改成 `/public/...`。
+
 ---
 
 ## 5. 冒烟（每次发布照抄）
@@ -171,6 +189,17 @@ done; echo
 
 # ④ hub 未受影响
 curl -s -o /dev/null -w '%{http_code}\n' http://82.157.153.22/                 # 200
+
+# ⑤ 网站「邀请码获取」（W12）—— 页面 + 额度 + 发码
+curl -s -o /dev/null -w '%{http_code}\n' http://82.157.153.22/k/invite       # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://www.littlewish.top:8443/invite  # 200
+curl -s http://82.157.153.22/k/public/registration-invites/quota
+# 期望 200 + {"dailyLimit":50,"remainingToday":N,"resetsAt":"...","timeZone":"Asia/Shanghai"}
+#   ★ 发码（POST）会**真的消耗一个名额**，冒烟时不要连点；看到 201 即链路通
+curl -s -X POST http://82.157.153.22/k/public/registration-invites \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"13800138000","email":"smoke@example.com"}'
+# 期望 201 + {"code":"ABCD-EFGH",...}；429 表示当天 50 个已发完（不是故障）
 ```
 
 **★ 探活别用 `/health`** —— 这个端点**不存在**（`src/identity/public.decorator.ts`
@@ -352,25 +381,25 @@ flutter build apk --release \
   --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
 
 scp build/app/outputs/flutter-apk/app-release.apk \
-  ubuntu@82.157.153.22:/tmp/kids-points-1.0.2.apk
+  ubuntu@82.157.153.22:/tmp/kids-points-1.0.3.apk
 ssh ubuntu@82.157.153.22 \
-  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.2.apk /var/www/cline-hub/app/ && \
-   sudo cp /var/www/cline-hub/app/kids-points-1.0.2.apk /var/www/cline-hub/app/kids-points-app.apk'
+  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.3.apk /var/www/cline-hub/app/ && \
+   sudo cp /var/www/cline-hub/app/kids-points-1.0.3.apk /var/www/cline-hub/app/kids-points-app.apk'
 ```
 
 - `kids-points-app.apk` 是**稳定地址**（`GET /app/version` 默认返回它）；
 - 版本化的 `kids-points-X.Y.Z.apk` 保留，便于回滚 / 对比；
-- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.2.apk` 应为 `200` + `content-length` ≈ 包大小。
+- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.3.apk` 应为 `200` + `content-length` ≈ 包大小。
 
 **版本信息（`/srv/kids-points/kids.env`，改完 `docker compose up -d`）：**
 
 ```dotenv
-APP_LATEST_VERSION="1.0.2"
-APP_LATEST_BUILD="3"
+APP_LATEST_VERSION="1.0.3"
+APP_LATEST_BUILD="4"
 APP_MINIMUM_VERSION="1.0.0"
 APP_MINIMUM_BUILD="1"
 APP_DOWNLOAD_URL="https://hub.littlewish.top:8443/app/kids-points-app.apk"
-APP_RELEASE_NOTES="新增邀请码注册；登录页可直接查看「忘记密码」步骤；登录页与「我的」页都能看到新版本入口。"
+APP_RELEASE_NOTES="新增网站「邀请码获取」页（每天限量）；小程序新增邀请码注册页；注册页说明与错误提示同步更新。"
 APP_PUBLISHED_AT=""
 ```
 

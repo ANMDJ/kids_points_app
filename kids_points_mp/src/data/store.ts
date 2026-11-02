@@ -1151,6 +1151,44 @@ export class AppStore {
   }
 
   /**
+   * `POST /auth/login-account`（W12）：手机号 / 邮箱 + 密码登录。
+   *
+   * 返回 null 表示已就绪；否则是可直接展示的失败文案（密码错 / 账号停用）。
+   */
+  async loginAccount(identifier: string, password: string): Promise<string | null> {
+    if (!this.authMachine.isConfigured) return '没有配置登录后端，无法登录。'
+    if (this.authBusyValue) return null
+    await this.runAuthRequest(async () =>
+      this.authMachine.loginAccount({ identifier, password })
+    )
+    return this.authKindValue === 'needs_login' ? this.authMessageValue : null
+  }
+
+  /**
+   * `POST /auth/register-invite`（W12）：用邀请码注册并登录。
+   *
+   * 返回 null 表示注册成功（随后按 `authState` 走：`ready` 进主页 /
+   * `needs_bootstrap` 回登录页勾选同意建档案）；否则是**可以直接展示**的失败文案
+   * （码不可用 / 手机号已注册 / 弱密码，全部来自服务端）。
+   */
+  async registerWithInvite(input: {
+    inviteCode: string
+    identifier: string
+    password: string
+    displayName?: string
+  }): Promise<string | null> {
+    if (!this.authMachine.isConfigured) return '没有配置登录后端，无法注册。'
+    if (this.authBusyValue) return null
+    await this.runAuthRequest(async () => this.authMachine.registerWithInvite(input))
+    // `needs_bootstrap` 是**成功**（账号已建、只差孩子档案），不能当错误返回；
+    // `needs_login` / `unreachable` 才是用户需要看到的失败。
+    if (this.authKindValue === 'needs_login' || this.authKindValue === 'unreachable') {
+      return this.authMessageValue
+    }
+    return null
+  }
+
+  /**
    * `POST /children`：同意并建立第一个孩子（`needs_bootstrap` 那一步）。
    *
    * `accepted` 恒为 true —— 界面上**勾选了**才会调到这里；编排器另有

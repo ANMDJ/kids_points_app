@@ -2,6 +2,7 @@ import { DynamicModule, Module, type Type } from '@nestjs/common'
 
 import { hasDatabaseUrl } from '../prisma/database-enabled'
 import { PrismaModule } from '../prisma/prisma.module'
+import { RegistrationInvitesCoreModule } from '../registration-invites/registration-invites.module'
 import { AuthGuard } from './auth.guard'
 import { PrismaAuthSessionRepository } from './auth-session.prisma.repository'
 import {
@@ -25,6 +26,12 @@ import {
 } from './identity.repository'
 import { IdentityService } from './identity.service'
 import { LoginRateLimiter } from './login-rate-limiter'
+import { PrismaPublicRegistrationRepository } from './public-registration.prisma.repository'
+import {
+  PUBLIC_REGISTRATION_REPOSITORY,
+  NotImplementedPublicRegistrationRepository,
+  type PublicRegistrationPort
+} from './public-registration.repository'
 import {
   HttpWechatCode2Session,
   readWechatConfig
@@ -100,6 +107,21 @@ export function resolveWechatCode2SessionClass(
   return wechatConfigured ? HttpWechatCode2Session : UnconfiguredWechatCode2Session
 }
 
+/**
+ * 网站注册邀请码的**写入端口**（W12，2026-11-02）：有库 ⇒ 一个事务写
+ * `User` + 占码 + `AuthSession` + 审计；无库 ⇒ **501**（不假装注册成功）。
+ *
+ * ★ 与 `REGISTRATION_INVITE_REPOSITORY` 分工不同：那个（由
+ *   `RegistrationInvitesCoreModule` 提供）只负责「这张码是不是网站发的」，
+ *   本端口才负责「用它建账号」。拆开是为了让无库世界里的**路由查询**
+ *   不会把注册的 501 说成发码的 501。
+ */
+export function resolvePublicRegistrationRepositoryClass(
+  hasDatabase: boolean
+): Type<PublicRegistrationPort> {
+  return hasDatabase ? PrismaPublicRegistrationRepository : NotImplementedPublicRegistrationRepository
+}
+
 export interface IdentityAssemblyOptions {
   /** 省略 ⇒ 按环境推断（只有生产代码允许省略；用例必须显式钉死世界）。 */
   hasDatabase?: boolean
@@ -117,7 +139,13 @@ export class IdentityModule {
       module: IdentityModule,
       // 无库时**不**导入 PrismaModule：`PrismaService` 缺连接串会刻意抛错，
       // 而 Nest 会急切实例化被导入模块的全部 provider。
-      imports: [...(hasDatabase ? [PrismaModule] : [])],
+      imports: [
+        ...(hasDatabase ? [PrismaModule] : []),
+        // 网站注册邀请码的**只读路由**（findByCode）：判断这张码是不是网站发的。
+        // ★ 只导入核心模块（无控制器）—— HTTP 层由 `RegistrationInvitesHttpModule`
+        //   在 `AppModule` 里注册一次，避免同一批路由被注册两遍。
+        RegistrationInvitesCoreModule.register({ hasDatabase })
+      ],
       controllers: [IdentityController, ChildrenBootstrapController],
       providers: [
         IdentityService,
@@ -131,6 +159,10 @@ export class IdentityModule {
         {
           provide: INVITE_REGISTRATION_REPOSITORY,
           useClass: resolveInviteRegistrationRepositoryClass(hasDatabase)
+        },
+        {
+          provide: PUBLIC_REGISTRATION_REPOSITORY,
+          useClass: resolvePublicRegistrationRepositoryClass(hasDatabase)
         },
         {
           provide: WECHAT_CODE2SESSION,

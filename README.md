@@ -125,21 +125,37 @@ flutter build apk --release \
 
 ### 第一次怎么登录（没有账号时）
 
-App **不开放自助注册**，但有**邀请码注册**（W11-A，2026-11-02 /
-[`docs/design/45-invite-registration.md`](./docs/design/45-invite-registration.md)）：
+**不开放自助注册**，但有两条**邀请码**来源（W11-A / W12，2026-11-02）：
+
+| 来源 | 从哪拿 | 注册后是什么 |
+| --- | --- | --- |
+| **网站「邀请码获取」**（W12） | 打开 `…/invite`，填手机号 + 邮箱当场领取（默认每天 50 个、7 天有效） | 一个**零个孩子**的新账号，随后按引导建立孩子档案 |
+| **家庭邀请码**（W11-A） | 家里已经在用的家长在小程序「我的 → 邀请码」生成 | 直接加入该家庭（`membership` 指向那个孩子） |
+
+网站入口与现有两个 API 入口同源，**不需要改 Caddy**：
+`https://www.littlewish.top:8443/invite` 或 `http://82.157.153.22/k/invite`。
+每日额度 / 有效期可配：`REGISTRATION_INVITE_DAILY_LIMIT`（默认 `50`）、
+`REGISTRATION_INVITE_TTL_DAYS`（默认 `7`），详见
+[`docs/design/48-public-invite-acquisition.md`](./docs/design/48-public-invite-acquisition.md)。
+
+**小程序与 App 都能注册，且互不依赖**：同一张码在任意一边用一次即失效；
+两边是同一套账号（`User.phone/email`），注册后用同一个手机号/邮箱 + 密码在另一边登录即可，
+不存在「必须先在某个端登录过」的前置。
 
 | 你的情况 | 怎么进 |
 | --- | --- |
 | 本地演示（已存在的家长） | `cd backend && npm run seed:demo && npm run seed:account` → `13800138000 / demo12345` |
-| 全新的人（本地） | 用 `seed:demo` 生成的邀请码 `MAMA2345`（guardian · 3 次名额 · 7 天）＋ 任意未注册手机号 ＋ 自定密码 |
-| 线上 | 请家里已经在用的家长在小程序「我的 → 家庭成员」生成邀请码；线上**没有**预置演示账号 |
+| 全新的人（本地） | 用 `seed:demo` 生成的邀请码 `MAMA2345`（guardian · 3 次名额 · 7 天）＋ 任意未注册手机号 ＋ 自定密码；或起本地服务后访问 `http://127.0.0.1:3000/invite` 领网站码 |
+| 线上 | 打开 `…/invite` 领取网站码；或请家里已经在用的家长生成家庭邀请码。线上**没有**预置演示账号 |
 
 登录页底部有「第一次用？用邀请码注册」：填邀请码 + 手机号/邮箱 + 密码即可，
 注册成功**直接进 App**（不需要再登录一次）。失败时留在注册页，错误文案来自服务端；
 点「返回登录」可以放弃注册（不会留下半成品账号 —— 后端是一个事务）。
+小程序登录页有同一个入口（W12），注册页在 `kids_points_mp/src/pages/register/`。
 
-> 邀请码是**凭据**：有次数上限、有有效期、可吊销。四种「不能用」（不存在 / 过期 / 用完 / 吊销）
-> 故意给同一个 `409 INVITE_CODE_UNAVAILABLE` —— 区分它们等于告诉别人「哪些码存在」。
+> 邀请码是**凭据**：有次数上限 / 有效期 / 可吊销（家庭码），或单次 + 有效期（网站码）。
+> 四种「不能用」（不存在 / 过期 / 用完 / 吊销）故意给同一个 `409 INVITE_CODE_UNAVAILABLE`
+> —— 区分它们等于告诉别人「哪些码存在」。网站码还会核对**申请时填的手机号或邮箱**。
 > 手机号已被注册时是 `409 IDENTIFIER_TAKEN`（提示直接登录），不是「格式不对」。
 
 > 明文 HTTP 例外仍保留在 `AndroidManifest.xml`（`usesCleartextTraffic="true"`）
@@ -160,11 +176,11 @@ App **不开放自助注册**，但有**邀请码注册**（W11-A，2026-11-02 /
 - APK 放在 Caddy 的 `/app/*` 静态目录：
 
   ```text
-  /var/www/cline-hub/app/kids-points-1.0.2.apk
-  https://hub.littlewish.top:8443/app/kids-points-1.0.2.apk
+  /var/www/cline-hub/app/kids-points-1.0.3.apk
+  https://hub.littlewish.top:8443/app/kids-points-1.0.3.apk
   ```
 
-- 当前这一版（1.0.2+3）的下载地址：
+- 当前这一版（1.0.3+4）的下载地址：
   <https://hub.littlewish.top:8443/app/kids-points-app.apk>
 
 

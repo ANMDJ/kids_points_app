@@ -90,6 +90,35 @@ export interface AuthRequestIdentity {
 export interface AuthApi {
   /** 微信一次性 code → 新签发的会话。★ 不接收 token（会话固定）。 */
   login(input: { code: string; deviceId?: string | null }): Promise<LoginResultDto>
+  /**
+   * `POST /auth/login-account` —— 手机号 / 邮箱 + 密码登录（W12 接进小程序）。
+   *
+   * ★ 它让「在 App 用网站码注册的账号」也能在小程序登录，反之亦然 ——
+   *   这是产品要求的「同一套账号、互不依赖」在**客户端**上的前提。
+   *   没有它，小程序只有微信登录：同一个人用微信登录会按 openid 建**另一个**账号，
+   *   而那个账号与网站码建的账号不是同一行 `User`。
+   * ★ 与 `login()` 一样不接收 token（会话固定）。
+   */
+  loginAccount(input: {
+    identifier: string
+    password: string
+    deviceId?: string | null
+  }): Promise<LoginResultDto>
+  /**
+   * `POST /auth/register-invite` —— 用**邀请码**注册并直接登录（W12，2026-11-02）。
+   *
+   * ★ 与 `login()` 一样**不接收 token**：这是一条签发凭据的路由，
+   *   带旧 token 只会让「会话固定」的防线重新出现。
+   * ★ 网站注册码（`GET /invite` 发的）注册成功后 `membership` 是 `null`：
+   *   这个账号零个孩子，随后走 `POST /children` 建档案。
+   */
+  registerWithInvite(input: {
+    inviteCode: string
+    identifier: string
+    password: string
+    displayName?: string
+    deviceId?: string | null
+  }): Promise<LoginResultDto>
   fetchSession(token: string): Promise<SessionDto>
   logout(token: string): Promise<void>
   bootstrapChild(
@@ -175,6 +204,66 @@ export class AuthApiClient implements AuthApi, AccountBinder {
       token: requireToken(token)
     })
     return SessionDto.fromJson(decoded)
+  }
+
+  /**
+   * `POST /auth/login-account`（W12）：手机号 / 邮箱 + 密码。
+   *
+   * 本地只拦「空」：标识形状与密码规则只有服务端一份
+   * （`account-identifier.ts`），客户端不重复判断。
+   */
+  async loginAccount(input: {
+    identifier: string
+    password: string
+    deviceId?: string | null
+  }): Promise<LoginResultDto> {
+    const identifier = typeof input.identifier === 'string' ? input.identifier.trim() : ''
+    const password = typeof input.password === 'string' ? input.password : ''
+    if (identifier === '') throw new Error('请填写手机号或邮箱。')
+    if (password === '') throw new Error('请填写密码。')
+
+    const decoded = await this.send(
+      'POST',
+      '/auth/login-account',
+      { identifier, password },
+      { deviceId: input.deviceId ?? null }
+    )
+    return LoginResultDto.fromJson(decoded)
+  }
+
+  /**
+   * `POST /auth/register-invite`（W12）。
+   *
+   * ── 本地只拦「空」 ────────────────────────────────────────────────────────
+   *   码的形状 / 标识形状 / 密码强度都只有服务端一份规则
+   *   （`invite-code.ts` / `account-identifier.ts`）。在客户端再抄一遍，
+   *   两边迟早不一致，而用户会看到「本地说可以、服务端说不行」。
+   *
+   * ★ 不传 token（会话固定）；设备头只在显式给出时发送 —— 注册成功后
+   *   这台设备还没绑定任何孩子，`deviceId` 只进 `AuthSession` 与审计。
+   */
+  async registerWithInvite(input: {
+    inviteCode: string
+    identifier: string
+    password: string
+    displayName?: string
+    deviceId?: string | null
+  }): Promise<LoginResultDto> {
+    const inviteCode = typeof input.inviteCode === 'string' ? input.inviteCode.trim() : ''
+    const identifier = typeof input.identifier === 'string' ? input.identifier.trim() : ''
+    const password = typeof input.password === 'string' ? input.password : ''
+    if (inviteCode === '') throw new Error('请填写邀请码。')
+    if (identifier === '') throw new Error('请填写手机号或邮箱。')
+    if (password === '') throw new Error('请填写密码。')
+
+    const body: Record<string, unknown> = { inviteCode, identifier, password }
+    const displayName = (input.displayName ?? '').trim()
+    if (displayName !== '') body.displayName = displayName
+
+    const decoded = await this.send('POST', '/auth/register-invite', body, {
+      deviceId: input.deviceId ?? null
+    })
+    return LoginResultDto.fromJson(decoded)
   }
 
   /**

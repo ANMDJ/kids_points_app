@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -22,6 +23,10 @@ import {
   isWellFormedInviteCode,
   normalizeInviteCode
 } from '../invites/invite-code'
+import {
+  REGISTRATION_INVITE_REPOSITORY,
+  type RegistrationInvitePort
+} from '../registration-invites/registration-invite.repository'
 import type { AuthenticatedIdentity } from '../permissions/actor'
 import {
   classifyIdentifier,
@@ -51,6 +56,10 @@ import {
   type ChildMembershipRow,
   type IdentityPort
 } from './identity.repository'
+import {
+  PUBLIC_REGISTRATION_REPOSITORY,
+  type PublicRegistrationPort
+} from './public-registration.repository'
 import { LoginRateLimiter } from './login-rate-limiter'
 import {
   WECHAT_CODE2SESSION,
@@ -144,6 +153,10 @@ export class IdentityService {
     @Inject(IDENTITY_REPOSITORY) private readonly identity: IdentityPort,
     @Inject(INVITE_REGISTRATION_REPOSITORY)
     private readonly registration: InviteRegistrationPort,
+    @Inject(REGISTRATION_INVITE_REPOSITORY)
+    private readonly registrationInvites: RegistrationInvitePort,
+    @Inject(PUBLIC_REGISTRATION_REPOSITORY)
+    private readonly publicRegistration: PublicRegistrationPort,
     private readonly limiter: LoginRateLimiter
   ) {}
 
@@ -289,6 +302,13 @@ export class IdentityService {
    *     · 有邀请码 ⇒ 建的是「加入这个家庭的新账号」，不是新家庭。
    *   所以它既不是开放注册，也不需要在 App 里「先随便建个号再加家庭」。
    *
+   * ── W12（2026-11-02）：同一个端点还服务**网站发放的注册码** ─────────────────
+   *   网站码不绑定家庭（`RegistrationInvite`），只授权「建一个账号」。
+   *   走那条路时回包的 `membership` 是 **null**：新账号零个孩子，
+   *   客户端走既有的「建立孩子档案」引导（`POST /children`）。
+   *   两条路共用一个端点，是因为对用户而言输入完全相同（码 + 标识 + 密码），
+   *   而「码从哪来」不该要求用户先选对入口。
+   *
    * ── 顺序（第 2/3 条是安全条款）──────────────────────────────────────────────
    *   1. **限流**：与两个登录端点共用同一份额度（同 IP 20/分、同设备 10/分）。
    *      注册同样是「拿到凭据」，不共用额度就等于开了一个绕过限流的后门。
@@ -299,9 +319,10 @@ export class IdentityService {
    *   4. **新签发** token（`issueToken()`）：与两条登录路由同一条会话固定防护。
    *
    * ── 成功回包与 `POST /auth/login-account` **逐字段同构** ────────────────────
-   *   客户端只需要一套解析器（`AuthLoginResult`）。`membership` 一定有值
-   *   （邀请码本身就是一个孩子的成员位），但客户端仍应走既有的
-   *   `POST /auth/child-session` 编排 —— 那条路已经处理了「换设备 / 换账号」。
+   *   客户端只需要一套解析器（`AuthLoginResult`）。家庭邀请码的 `membership`
+   *   一定有值；网站注册码是 `null`（见上）。无论哪种，客户端都应走既有的
+   *   `POST /auth/child-session` / 建孩子编排 —— 那条路已经处理了
+   *   「换设备 / 换账号 / 零个孩子」。
    */
   async registerWithInvite(
     dto: RegisterWithInviteDto,
@@ -360,6 +381,46 @@ export class IdentityService {
     const token = issueToken()
     const expiresAt = authSessionExpiresAt(now)
     const rawName = dto.displayName?.trim() ?? ''
+
+    // ── 这张码是「网站发的」还是「家庭里发的」？────────────────────────────
+    //   W12 起同一个端点服务两种凭据。先问**来源**（只读，不授权），
+    //   两种码的形状相同（8 位、同一字母表），靠库里的表区分。
+    //   ★ 这里只做路由：真正的「还能不能用」仍由各自的事务用一条 SQL 回答。
+    const websiteInvite = await this.registrationInvites.findByCode(code)
+    if (websiteInvite !== null) {
+      // 网站码绑定「手机号 + 邮箱」，注册时填其中任意一个即可。
+      // ★ 这里先比一次是为了给用户一句准确的话；占码 SQL 里还有同样的条件，
+      //   两处不矛盾：SQL 是授权判据，这里是文案判据。
+      if (websiteInvite.phone !== value && websiteInvite.email !== value) {
+        throw new ConflictException({
+          code: 'INVITE_CODE_UNAVAILABLE',
+          message:
+            '这张邀请码与这里填写的手机号/邮箱不一致（也可能已使用、过期或已吊销）。' +
+            '请回到获取页面，用申请时的手机号或邮箱填写；或重新申请一张。'
+        })
+      }
+
+      const registered = await this.publicRegistration.registerWithInvite({
+        code,
+        identifierType: type,
+        identifierValue: value,
+        passwordHash,
+        displayName: rawName === '' ? null : rawName,
+        deviceId: context.deviceId,
+        tokenHash: hashToken(token),
+        authExpiresAt: expiresAt
+      })
+
+      // ★ `membership: null` 是**事实**：网站码不加入任何家庭，这个账号此刻
+      //   零个孩子。客户端（App 的 `AccountGate` / 小程序的登录闸门）本来就会
+      //   在 `children: []` 时走「建立孩子档案」引导 —— 不需要新状态。
+      return {
+        token,
+        expiresAt: expiresAt.toISOString(),
+        user: { id: registered.userId, displayName: registered.displayName },
+        membership: null
+      }
+    }
 
     const registered = await this.registration.registerWithInvite({
       code,

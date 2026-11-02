@@ -1,7 +1,8 @@
 @use '../../styles/vars.scss' as *;
 
-// 登录页 / 启动闸门（W9-B）：一屏居中，禁止滚动 —— 这里没有任何"往下翻"的内容，
-// 需要滚动只会说明文案真的超长了（那要么砍文案，要么换布局）。
+// 登录页 / 启动闸门（W9-B；W12 起内容变多，允许纵向滚动）：
+// 微信登录、账号密码登录（可展开）、邀请码注册三个入口都在这一屏，
+// 小屏设备上一定超过一屏 —— 继续 `overflow: hidden` 会把底部入口裁掉。
 .kp-login {
   display: flex;
   flex-direction: column;
@@ -15,6 +16,7 @@
   display: flex;
   flex-direction: column;
   padding: f2r(28) f2r(22) f2r(18);
+  overflow-y: auto;
 }
 
 .kp-login__brand {
@@ -55,6 +57,10 @@
   font-size: f2r(13);
   line-height: 1.6;
   color: $text-primary;
+}
+
+.kp-login__gap {
+  height: f2r(14);
 }
 
 .kp-login__warn {

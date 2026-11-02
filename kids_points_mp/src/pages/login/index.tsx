@@ -3,13 +3,14 @@ import { redirectTo } from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 
 import AppCard from '../../components/AppCard'
+import { FieldLabel, SoftTextField } from '../../components/FormFields'
 import GradientPage from '../../components/GradientPage'
 import Icon from '../../components/Icon'
 import SoftButton from '../../components/SoftButton'
 import type { AuthLoginReason } from '../../data/auth_session'
 import { useStore } from '../../data/store'
 import type { AuthGateKind } from '../../data/store'
-import { TAB_PAGES } from '../../utils/nav'
+import { REGISTER_PAGE, TAB_PAGES } from '../../utils/nav'
 import './index.scss'
 
 /**
@@ -58,6 +59,10 @@ export default function LoginPage() {
   const store = useStore()
   const [error, setError] = useState<string | null>(null)
   const [consentChecked, setConsentChecked] = useState(false)
+  /** W12：手机号 / 邮箱 + 密码登录（默认收起，微信仍是这一屏的主按钮）。 */
+  const [showAccountLogin, setShowAccountLogin] = useState(false)
+  const [identifier, setIdentifier] = useState('')
+  const [password, setPassword] = useState('')
 
   const state = store.authState
   const busy = store.isAuthBusy
@@ -81,6 +86,28 @@ export default function LoginPage() {
     if (busy) return
     setError(null)
     const message = await store.login()
+    if (message !== null) setError(message)
+  }
+
+  /**
+   * `POST /auth/login-account`（W12）：手机号 / 邮箱 + 密码。
+   *
+   * 之所以必须补这一条：小程序原先只有微信登录，而网站码建的账号是
+   * 「手机号/邮箱 + 密码」账号；没有这个入口，同一个人在小程序里
+   * 只能用微信再建一个**不同的**账号 —— 那就违背了「同一套账号、互不依赖」。
+   */
+  const handleAccountLogin = async () => {
+    if (busy) return
+    setError(null)
+    if (identifier.trim() === '') {
+      setError('请填写手机号或邮箱。')
+      return
+    }
+    if (password === '') {
+      setError('请填写密码。')
+      return
+    }
+    const message = await store.loginAccount(identifier, password)
     if (message !== null) setError(message)
   }
 
@@ -139,6 +166,45 @@ export default function LoginPage() {
             ) : null}
           </AppCard>
         ) : null}
+
+        {state === 'needs_login' && canLogin && showAccountLogin ? (
+          <AppCard className='kp-login__card'>
+            <FieldLabel text='手机号或邮箱' />
+            <SoftTextField
+              value={identifier}
+              onChange={(value) => {
+                setIdentifier(value)
+                setError(null)
+              }}
+              hint='13800138000 或 dad@example.com'
+            />
+            <View className='kp-login__gap' />
+            <FieldLabel text='密码' />
+            <SoftTextField
+              value={password}
+              onChange={(value) => {
+                setPassword(value)
+                setError(null)
+              }}
+              hint='在 App 注册时设置的密码'
+              password
+              maxLength={64}
+            />
+            <View className='kp-login__gap' />
+            <SoftButton
+              label={busy ? '正在登录…' : '登录'}
+              enabled={!busy}
+              onClick={() => {
+                void handleAccountLogin()
+              }}
+            />
+            <Text className='kp-login__fineprint'>
+              在 App（或另一个端）注册的账号，也能在这里用同一个手机号/邮箱 + 密码登录。
+              两边是同一套账号，不要求先在某一端登录过。
+            </Text>
+          </AppCard>
+        ) : null}
+
 
         {state === 'needs_bootstrap' ? (
           <AppCard className='kp-login__card'>
@@ -233,6 +299,39 @@ export default function LoginPage() {
               <Text className='kp-login__secondary-label'>
                 {busy ? '正在重试…' : '重试'}
               </Text>
+            </View>
+          ) : null}
+          {state === 'needs_login' && canLogin ? (
+            <View
+              className='kp-login__secondary'
+              onClick={() => {
+                if (busy) return
+                setShowAccountLogin((value) => !value)
+                setError(null)
+              }}
+            >
+              <Text className='kp-login__secondary-label'>
+                {showAccountLogin ? '改用微信一键登录' : '用手机号或邮箱登录'}
+              </Text>
+            </View>
+          ) : null}
+          {/*
+            W12：第一次用的人从网站拿到邀请码后，必须在这一屏就能找到入口。
+            ★ 只放在 `needs_login`：已登录的人点它会回到一个需要新建账号的页面，
+              而那个动作对他是错的方向。
+            ★ 用 `redirectTo` 而不是 `navigateTo`：与登录页「页面栈始终一层」的
+              既有策略一致。注册页成功后会自己 `redirectTo` 回登录页或主页，
+              不会出现「登录页在栈底、后台 effect 跳页」的竞态。
+          */}
+          {state === 'needs_login' && canLogin ? (
+            <View
+              className='kp-login__secondary'
+              onClick={() => {
+                if (busy) return
+                void redirectTo({ url: REGISTER_PAGE })
+              }}
+            >
+              <Text className='kp-login__secondary-label'>第一次用？用邀请码注册</Text>
             </View>
           ) : null}
         </View>

@@ -9,7 +9,9 @@ export default defineAppConfig({
     // W8-B：首启引导。放在最后，首页在首屏即可决定 `redirectTo` 过来。
     'pages/onboarding/index',
     // W9-B：登录页 / 启动闸门。同样靠 `redirectTo` 进入，不占首屏。
-    'pages/login/index'
+    'pages/login/index',
+    // W12：用邀请码注册。从登录页 `navigateTo` 进入，不占首屏。
+    'pages/register/index'
   ],
   window: {
     backgroundTextStyle: 'light',

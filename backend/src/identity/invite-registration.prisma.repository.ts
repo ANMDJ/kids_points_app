@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 
 import { claimInviteCode, toInviteRole } from '../invites/invite-claim'
 import { PrismaService } from '../prisma/prisma.service'
+import { rethrowIfIdentifierTaken } from './identifier-conflict'
 import type {
   InviteRegistrationPort,
   RegisteredInviteRow,
@@ -168,24 +169,10 @@ export class PrismaInviteRegistrationRepository implements InviteRegistrationPor
   private mapRegistrationError(error: unknown): never {
     if (error instanceof HttpException) throw error
 
+    // 手机号 / 邮箱的唯一约束冲突（与网站邀请码注册共用一份文案与 field）
+    rethrowIfIdentifierTaken(error)
+
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        const target = JSON.stringify(error.meta?.target ?? '').toLowerCase()
-        if (target.includes('phone')) {
-          throw new ConflictException({
-            code: 'IDENTIFIER_TAKEN',
-            field: 'phone',
-            message: '这个手机号已经注册过了，请直接返回登录（忘记密码：在登录页点「忘记密码？」查看重设步骤）。'
-          })
-        }
-        if (target.includes('email')) {
-          throw new ConflictException({
-            code: 'IDENTIFIER_TAKEN',
-            field: 'email',
-            message: '这个邮箱已经注册过了，请直接返回登录（忘记密码：在登录页点「忘记密码？」查看重设步骤）。'
-          })
-        }
-      }
       if (error.code === 'P2003') {
         throw new NotFoundException({
           code: 'CHILD_NOT_FOUND',

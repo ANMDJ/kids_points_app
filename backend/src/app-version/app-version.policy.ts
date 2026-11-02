@@ -44,8 +44,8 @@ export interface AppVersionView {
 }
 
 /** 默认版本号：与 `pubspec.yaml` 的 `version:` 保持同步（有测试钉住两边）。 */
-export const DEFAULT_LATEST_VERSION = '1.0.2'
-export const DEFAULT_LATEST_BUILD = 3
+export const DEFAULT_LATEST_VERSION = '1.0.3'
+export const DEFAULT_LATEST_BUILD = 4
 export const DEFAULT_MINIMUM_VERSION = '1.0.0'
 export const DEFAULT_MINIMUM_BUILD = 1
 
@@ -59,7 +59,7 @@ export const DEFAULT_DOWNLOAD_URL =
   'https://hub.littlewish.top:8443/app/kids-points-app.apk'
 
 export const DEFAULT_RELEASE_NOTES =
-  '新增邀请码注册；登录页可直接查看「忘记密码」步骤；登录页与「我的」页都能看到新版本入口。'
+  '新增网站「邀请码获取」页（每天限量）；小程序新增邀请码注册页；注册页说明与错误提示同步更新。'
 
 const VERSION_PATTERN = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/
 

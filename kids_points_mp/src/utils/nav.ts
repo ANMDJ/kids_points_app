@@ -17,6 +17,15 @@ export const TAB_PAGES = [
 export const LOGIN_PAGE = '/pages/login/index'
 
 /**
+ * 注册页（W12，2026-11-02）：用邀请码建号。
+ *
+ * 不是 tab 页：从登录页 `redirectTo` 进入（页面栈始终一层）。成功后由 store
+ * 的闸门决定去向：`ready` ⇒ `redirectTo` 主页；`needs_bootstrap` ⇒
+ * `redirectTo` 登录页显示「同意并建立档案」。
+ */
+export const REGISTER_PAGE = '/pages/register/index'
+
+/**
  * 切换底部导航页。
  *
  * 用 redirectTo 而不是 navigateTo：小程序 tab 栏不是原生的，

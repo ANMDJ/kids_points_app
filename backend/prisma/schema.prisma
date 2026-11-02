@@ -253,6 +253,8 @@ model User {
   decidedApprovals   ApprovalRequest[]   @relation("ApprovalDecider")
   createdInviteCodes InviteCode[]        @relation("InviteCreator")
   usedInviteCodes    InviteCode[]        @relation("InviteUser")
+  /// 网站发放的注册邀请码（W12，2026-11-02）：只回答「谁用了这张码」。
+  registrationInvites RegistrationInvite[] @relation("RegistrationInviteUser")
   consents           GuardianConsent[]
   /// 该用户作为申请人发起的家庭数据删除请求（W7-D）。
   familyDeletionRequests FamilyDeletionRequest[] @relation("FamilyDeletionRequester")
@@ -730,6 +732,75 @@ model InviteCode {
   @@index([childId, revoked])
   /// 原子占位语句的 WHERE 依赖 (code, expiresAt, revoked)
   @@index([code, revoked, expiresAt])
+}
+
+/// 网站发放的**注册邀请码**（W12，2026-11-02 / `docs/design/48-public-invite-acquisition.md`）。
+///
+/// ── 为什么它不是 `InviteCode` 的又一行 ──────────────────────────────────────
+///   `InviteCode` 的 `childId` 是**必填外键**：它回答的是「加入哪个已有家庭」。
+///   网站发码时申请人还不是任何家庭的成员，也没有孩子档案 —— 硬塞一行只能
+///   先造一个假孩子，那正是 `42` §5.1 拒绝「开放注册」时说的孤儿数据。
+///   所以它是**另一种凭据**：只授权「创建一个账号」，不授权加入任何家庭。
+///   注册成功后客户端会看到「零个孩子」，走既有的 `POST /children` 引导。
+///
+/// ── 为什么绑定 phone + email ────────────────────────────────────────────────
+///   这张码在**匿名**页面上发放，若不绑定标识，任何拿到码的人都能注册。
+///   绑定后，占码语句要求注册时填的手机号或邮箱与码上的**逐字相等**
+///   （`registration-invite-claim.ts`，与「还能不能用」在同一条 SQL 里）。
+///   ★ 只要求「其中之一」：注册页只收一个标识，要求两个都填会把
+///     「用手机号注册」的人挡在门外。
+///
+/// ── 为什么没有 `maxUses` ────────────────────────────────────────────────────
+///   网站发码是**一人一码**：`usedAt` 非空即不可再用。多次发放由每日额度
+///   约束（`RegistrationInviteQuota`），而不是让一张码被多人共用。
+model RegistrationInvite {
+  id   String @id @default(cuid())
+  code String @unique
+
+  /// **已规范化**的手机号（`account-identifier.ts#normalizePhone`）。
+  phone String
+  /// **已规范化**的邮箱（全小写）。
+  email String
+
+  expiresAt DateTime
+  usedAt    DateTime?
+  /// 使用者的 `User.id`；`SetNull` 让账号删除后仍保留「这张码用过」的事实。
+  usedByUserId String?
+  revoked      Boolean   @default(false)
+
+  /// 发放时来源 IP 的 HMAC（`consent/hash-pii.ts`；没有盐时为 NULL）。
+  /// ★ 只用于事后排查「某一天 50 张码是不是同一个人刷的」，不做任何判定。
+  issuedIpHash String?
+
+  createdAt DateTime @default(now())
+
+  usedBy User? @relation("RegistrationInviteUser", fields: [usedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([phone, createdAt])
+  @@index([email, createdAt])
+  /// 每日额度对账 / 运维查看当天发了多少张。
+  @@index([createdAt])
+}
+
+/// **每日发放额度**（W12，2026-11-02）：一行 = 一个业务日。
+///
+/// ── 为什么单独一张表，而不是 `COUNT(*)` ─────────────────────────────────────
+///   「先 count 再 insert」是 TOCTOU：两个并发请求都数到 49，于是发出第 50、51 张。
+///   而额度是产品承诺（每天最多 50 个），不能靠「通常没人同时点」来成立。
+///   这里把计数做成**一行的原子自增**：
+///     `UPDATE … SET issued = issued + 1 WHERE day = $1 AND issued < $2 RETURNING issued`
+///   ⇒ 恰好 `dailyLimit` 个请求拿到行，其余拿到 0 行。
+///   `day` 是 `KP_TIMEZONE` 下的日历日（`habits/business-day.ts`，与「每日打卡上限」
+///   同一套口径），不是 UTC 日 —— 否则北京时间 00:30 会算进昨天。
+///
+/// ── 为什么额度上限不落库 ────────────────────────────────────────────────────
+///   上限来自 `REGISTRATION_INVITE_DAILY_LIMIT`（可改、立即生效）。若把它抄进
+///   这张表，改配置就会变成「要迁移历史行」—— 而它本来只是一条运营参数。
+model RegistrationInviteQuota {
+  /// `YYYY-MM-DD`（`KP_TIMEZONE` 的业务日）。
+  day      String   @id
+  issued   Int      @default(0)
+  updatedAt DateTime @updatedAt
 }
 
 /// 04 §5：监护人同意记录（合规前置）。

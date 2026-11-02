@@ -287,7 +287,7 @@ export class AuthSessionMachine {
     const token = this.tokens.read()
     if (token === null) {
       this.holder.clear()
-      return needsLogin('no_token', '还没有登录过：请先点「微信一键登录」。')
+      return needsLogin('no_token', '还没有登录过：请用微信一键登录，或用手机号/邮箱 + 密码登录。')
     }
     // 从 storage 恢复的 token 必须进持有者，否则后续业务请求仍不带 Authorization。
     this.holder.set(token)
@@ -340,6 +340,80 @@ export class AuthSessionMachine {
       return {
         kind: 'needs_login',
         reason: failure.code === 'USER_NOT_ACTIVE' ? 'account_inactive' : 'login_failed',
+        message: failure.userMessage
+      }
+    }
+    return await this.restore()
+  }
+
+  /**
+   * `POST /auth/login-account`（W12）：手机号 / 邮箱 + 密码登录。
+   *
+   * 与 `login()` 只有两点不同：**不需要微信 code**，失败原因来自账号体系
+   * （密码错 / 账号不存在 / 被停用）。成功后的编排完全一样：token 落盘 →
+   * 交给持有者 → `restore()`（会话的唯一权威来源）。
+   *
+   * ★ 失败**不清旧 token**：一次密码输错说明不了已有会话失效。
+   */
+  async loginAccount(input: {
+    identifier: string
+    password: string
+  }): Promise<AuthRestoreResult> {
+    const preview = this.previewResult()
+    if (preview !== null) return preview
+
+    try {
+      const deviceId = this.requireDeviceId()
+      const result = await this.requireApi().loginAccount({ ...input, deviceId })
+      this.tokens.write(result.token)
+      this.holder.set(result.token)
+    } catch (error) {
+      const failure = toAuthFailure(error)
+      if (failure === null) throw error
+      return {
+        kind: 'needs_login',
+        reason: failure.code === 'USER_NOT_ACTIVE' ? 'account_inactive' : 'login_failed',
+        message: failure.userMessage
+      }
+    }
+    return await this.restore()
+  }
+
+  /**
+   * `POST /auth/register-invite`（W12）：用邀请码建号并登录。
+   *
+   * ── 成功与失败各去哪 ────────────────────────────────────────────────────────
+   *   · 成功 ⇒ token 立刻落盘 + 交给持有者 ⇒ `restore()`（会话的唯一权威来源）。
+   *     网站码的账号零个孩子，`restore()` 会给出 `needs_bootstrap`；
+   *     家庭码会直接给出 `ready` —— 页面只按返回的 kind 走，不自己判断。
+   *   · 失败 ⇒ `needs_login` + 服务端原话（码不可用 / 已被注册 / 弱密码）。
+   *     **不清旧 token**：注册失败说明不了已有会话失效（与 `login()` 同一条纪律）。
+   *
+   * ★ 不传 token：`AuthApi.registerWithInvite()` 的签名里没有它（会话固定）。
+   */
+  async registerWithInvite(input: {
+    inviteCode: string
+    identifier: string
+    password: string
+    displayName?: string
+  }): Promise<AuthRestoreResult> {
+    const preview = this.previewResult()
+    if (preview !== null) return preview
+
+    try {
+      const deviceId = this.requireDeviceId()
+      const result = await this.requireApi().registerWithInvite({
+        ...input,
+        deviceId
+      })
+      this.tokens.write(result.token)
+      this.holder.set(result.token)
+    } catch (error) {
+      const failure = toAuthFailure(error)
+      if (failure === null) throw error
+      return {
+        kind: 'needs_login',
+        reason: 'login_failed',
         message: failure.userMessage
       }
     }
