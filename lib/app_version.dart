@@ -13,11 +13,11 @@
 ///   `APP_LATEST_VERSION` / `APP_LATEST_BUILD`。
 library;
 
-/// 与 `pubspec.yaml` 的 `version: 1.0.1+2` 前半段逐字一致。
-const String kAppVersion = '1.0.1';
+/// 与 `pubspec.yaml` 的 `version: 1.0.2+3` 前半段逐字一致。
+const String kAppVersion = '1.0.2';
 
-/// 与 `pubspec.yaml` 的 `+2` 逐字一致（Android `versionCode`）。
-const int kAppBuildNumber = 2;
+/// 与 `pubspec.yaml` 的 `+3` 逐字一致（Android `versionCode`）。
+const int kAppBuildNumber = 3;
 
 /// 界面上展示的版本标签。
 String get kAppVersionLabel => 'v$kAppVersion ($kAppBuildNumber)';

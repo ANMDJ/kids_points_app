@@ -12,6 +12,12 @@ import {
 import { ChildrenBootstrapController } from './children-bootstrap.controller'
 import { IdentityController } from './identity.controller'
 import { PrismaIdentityRepository } from './identity.prisma.repository'
+import { PrismaInviteRegistrationRepository } from './invite-registration.prisma.repository'
+import {
+  INVITE_REGISTRATION_REPOSITORY,
+  NotImplementedInviteRegistrationRepository,
+  type InviteRegistrationPort
+} from './invite-registration.repository'
 import {
   IDENTITY_REPOSITORY,
   NotImplementedIdentityRepository,
@@ -34,22 +40,25 @@ import {
  *
  * 判据：`docs/design/40-login-and-session-design.md` §5、§8、§9.4、§12.2。
  *
- * ── 六条路由，两个控制器 ────────────────────────────────────────────────────
- *   `POST /auth/login` / `POST /auth/date-code` / `POST /auth/logout` /
- *   `GET /auth/session` / `POST /auth/child-session` → `IdentityController`
+ * ── 七条路由，两个控制器 ────────────────────────────────────────────────────
+ *   `POST /auth/login` / `POST /auth/login-account` / `POST /auth/register-invite`
+ *   / `POST /auth/date-code` / `POST /auth/logout` / `GET /auth/session`
+ *   / `POST /auth/child-session` → `IdentityController`
  *   `POST /children`（新用户建占位档案 + 同意）        → `ChildrenBootstrapController`
  *   ★ `POST /auth/date-code`（W9-C）**不碰库**：它只按服务器时钟算 6 位码并比对，
  *     所以「没有库」对它不是故障（`hasDatabase: false` 下照样 200）。
  *
- * ── 三处**世界分叉**，每处都必须能显式钉住（用例不许靠环境推断）───────────────
+ * ── 四处**世界分叉**，每处都必须能显式钉住（用例不许靠环境推断）───────────────
  *   ① `AUTH_SESSION_REPOSITORY`：有库 ⇒ `PrismaAuthSessionRepository`（每个请求真查一行）；
  *      无库 ⇒ `NotImplementedAuthSessionRepository`（**501**，绝不返回"查不到"——
  *      那会把装配缺失伪装成 401 `TOKEN_INVALID`，把用户送去反复重新登录）；
  *   ② `IDENTITY_REPOSITORY`：有库 ⇒ `PrismaIdentityRepository`（登录/建孩子/补会话的写路径）；
  *      无库 ⇒ `NotImplementedIdentityRepository`（**501**，绝不"假装登录成功"）；
- *   ③ `WECHAT_CODE2SESSION`：配了 AppID/Secret ⇒ HTTP 适配器；
+ *   ③ `INVITE_REGISTRATION_REPOSITORY`（W11-A）：有库 ⇒ `PrismaInviteRegistrationRepository`；
+ *      无库 ⇒ **501**（同样不假装注册成功）；
+ *   ④ `WECHAT_CODE2SESSION`：配了 AppID/Secret ⇒ HTTP 适配器；
  *      没配 ⇒ `UnconfiguredWechatCode2Session`（**503 `WECHAT_NOT_CONFIGURED`**）。
- *      注意 ③ **不依赖数据库**：`npm start` 没有库时它照样按配置分叉，
+ *      注意 ④ **不依赖数据库**：`npm start` 没有库时它照样按配置分叉，
  *      这样"没配 secret"与"没有库"是两个可区分的故障。
  *
  * ── ★ 本模块**导出** `AuthGuard` 与两个仓库 token ─────────────────────────────
@@ -69,6 +78,20 @@ export function resolveAuthSessionRepositoryClass(hasDatabase: boolean): Type<Au
 
 export function resolveIdentityRepositoryClass(hasDatabase: boolean): Type<IdentityPort> {
   return hasDatabase ? PrismaIdentityRepository : NotImplementedIdentityRepository
+}
+
+/**
+ * 邀请注册（W11-A）：有库 ⇒ 真写 5 张表（同一事务）；无库 ⇒ **501**。
+ *
+ * 为什么它不并进 `IdentityPort`：那个接口的 7 个方法每个都有两个测试替身，
+ * 加第 8 个方法 = 一次性改 4 个替身，而 3 个永远用不到它。详见端口文件头。
+ */
+export function resolveInviteRegistrationRepositoryClass(
+  hasDatabase: boolean
+): Type<InviteRegistrationPort> {
+  return hasDatabase
+    ? PrismaInviteRegistrationRepository
+    : NotImplementedInviteRegistrationRepository
 }
 
 export function resolveWechatCode2SessionClass(
@@ -105,6 +128,10 @@ export class IdentityModule {
           useClass: resolveAuthSessionRepositoryClass(hasDatabase)
         },
         { provide: IDENTITY_REPOSITORY, useClass: resolveIdentityRepositoryClass(hasDatabase) },
+        {
+          provide: INVITE_REGISTRATION_REPOSITORY,
+          useClass: resolveInviteRegistrationRepositoryClass(hasDatabase)
+        },
         {
           provide: WECHAT_CODE2SESSION,
           useClass: resolveWechatCode2SessionClass(wechatConfigured)

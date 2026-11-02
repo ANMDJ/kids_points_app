@@ -12,6 +12,7 @@ import '../data/token_store.dart' show AuthTokenHolder;
 import '../data/write_api_errors.dart' show WriteApiException, WriteFailureKind;
 import 'create_child_screen.dart';
 import 'login_screen.dart';
+import 'register_screen.dart';
 
 /// 启动闸门：**没有 token ⇒ 登录页；有 token 但没有孩子会话 ⇒ 先建立会话**
 /// （W9-D 建立；W10-B / P0-1 补齐运行期身份，2026-11-02）。
@@ -74,7 +75,16 @@ class AccountGate extends StatefulWidget {
   State<AccountGate> createState() => _AccountGateState();
 }
 
-enum _Phase { checking, preparing, signedIn, needLogin, needChild, blocked }
+enum _Phase {
+  checking,
+  preparing,
+  signedIn,
+  needLogin,
+  /// 登录页的「第一次用？用邀请码注册」分支（W11-A）。
+  needRegister,
+  needChild,
+  blocked,
+}
 
 class _AccountGateState extends State<AccountGate> {
   _Phase _phase = _Phase.checking;
@@ -213,37 +223,7 @@ class _AccountGateState extends State<AccountGate> {
         password: password,
       );
       if (!mounted) return null;
-
-      final IdentityApi? identity = widget.identityApi;
-      final SessionScope? scope = widget.session;
-
-      if (result.childId != null && identity != null && scope != null) {
-        setState(() {
-          _phase = _Phase.preparing;
-          _banner = null;
-        });
-        final ChildSessionResult session =
-            await identity.establishChildSession(result.childId!);
-        await scope.adoptChild(childId: session.childId, role: session.role);
-        widget.onIdentityChanged?.call();
-        if (!mounted) return null;
-        setState(() => _phase = _Phase.signedIn);
-        return null;
-      }
-
-      if (identity != null && scope != null) {
-        // 登录回包里的 `membership` 只是"我猜你只有一个孩子"；
-        // 真正的权威来源是 `GET /auth/session`（可能刚被邀请进一个家庭）。
-        await _ensureChild();
-        return null;
-      }
-
-      // 旧路径（测试 / 未注入身份客户端）：登录成功即放行。
-      setState(() {
-        _phase = _Phase.signedIn;
-        _banner = null;
-      });
-      return null;
+      return await _enterWith(result);
     } on WriteApiException catch (error) {
       if (!mounted) return error.userMessage;
       // ★ 不清 `_banner`、也不设它：错误由登录页自己那一行显示。
@@ -255,6 +235,98 @@ class _AccountGateState extends State<AccountGate> {
     } finally {
       _submitting = false;
     }
+  }
+
+  /// 用**邀请码注册**（W11-A / `45`）。与 [_submit] 的差别只有一处：
+  /// 失败时回到**注册页**（`needRegister`），而不是登录页 —— 因为用户还没账号，
+  /// 把他弹回登录页等于把刚输入的邀请码和手机号全丢掉。
+  ///
+  /// ★ 一旦 `registerWithInvite` 成功（账号已建好、token 已收下），后续建立
+  ///   child-session 的失败**不能**再退回注册页：再点一次会得到
+  ///   409 `IDENTIFIER_TAKEN`，而用户会以为自己没注册成功。
+  ///   那种情况走 [_handleIdentityFailure]（可重试 / 重新登录）。
+  Future<String?> _register(
+    String inviteCode,
+    String identifier,
+    String password,
+    String? displayName,
+  ) async {
+    final AuthApi? api = widget.authApi;
+    if (api == null) {
+      return '这个版本没有配置账号登录（缺 KP_API_BASE_URL）。';
+    }
+    _submitting = true;
+    // 与登录同一条：先清掉上一个账号的 childId，再拿新身份。
+    await widget.session?.beginAccount();
+    try {
+      final AuthLoginResult result = await api.registerWithInvite(
+        inviteCode: inviteCode,
+        identifier: identifier,
+        password: password,
+        displayName: displayName,
+      );
+      if (!mounted) return null;
+      try {
+        return await _enterWith(result);
+      } on WriteApiException catch (error) {
+        if (!mounted) return error.userMessage;
+        _handleIdentityFailure(error);
+        return error.userMessage;
+      } on ReadApiException catch (error) {
+        if (!mounted) return error.userMessage;
+        setState(() {
+          _phase = _Phase.blocked;
+          _blockedMessage = error.userMessage;
+        });
+        return error.userMessage;
+      }
+    } on WriteApiException catch (error) {
+      if (!mounted) return error.userMessage;
+      // 注册失败：留在注册页，且不让错误同时出现在顶部 banner 与表单下方。
+      setState(() => _phase = _Phase.needRegister);
+      return error.userMessage;
+    } on ArgumentError catch (error) {
+      return error.message?.toString() ?? '请检查输入。';
+    } finally {
+      _submitting = false;
+    }
+  }
+
+  /// 拿到凭据之后的**共同编排**：把 token 落到「这台设备 + 这个孩子」上。
+  ///
+  /// 登录与注册的成功路径逐字相同，所以抽成一个方法 —— 两份手抄的下一步
+  /// 就是「注册走了新路径、登录忘了改」。
+  Future<String?> _enterWith(AuthLoginResult result) async {
+    final IdentityApi? identity = widget.identityApi;
+    final SessionScope? scope = widget.session;
+
+    if (result.childId != null && identity != null && scope != null) {
+      setState(() {
+        _phase = _Phase.preparing;
+        _banner = null;
+      });
+      final ChildSessionResult session =
+          await identity.establishChildSession(result.childId!);
+      await scope.adoptChild(childId: session.childId, role: session.role);
+      widget.onIdentityChanged?.call();
+      if (!mounted) return null;
+      setState(() => _phase = _Phase.signedIn);
+      return null;
+    }
+
+    if (identity != null && scope != null) {
+      // 回包里的 `membership` 只是"我猜你只有一个孩子"；
+      // 真正的权威来源是 `GET /auth/session`（可能刚被邀请进一个家庭）。
+      await _ensureChild();
+      return null;
+    }
+
+    // 旧路径（测试 / 未注入身份客户端）：拿到 token 即放行。
+    setState(() {
+      _phase = _Phase.signedIn;
+      _banner = null;
+    });
+    return null;
   }
 
   Future<String?> _createChild(String name) async {
@@ -334,7 +406,27 @@ class _AccountGateState extends State<AccountGate> {
           child: widget.child,
         );
       case _Phase.needLogin:
-        return LoginScreen(onSubmit: _submit, banner: _banner);
+        return LoginScreen(
+          onSubmit: _submit,
+          banner: _banner,
+          // `authApi == null` ⇒ 预览模式：注册同样不可用，不画一个点了没反应的入口。
+          onOpenRegister: widget.authApi == null
+              ? null
+              : () => setState(() {
+                    _phase = _Phase.needRegister;
+                    _banner = null;
+                  }),
+        );
+      case _Phase.needRegister:
+        // 注册是**可放弃的**：返回登录不需要清 token（此时本来就没有）。
+        return RegisterScreen(
+          onSubmit: _register,
+          onBack: () => setState(() {
+            _phase = _Phase.needLogin;
+            _banner = null;
+          }),
+          banner: _banner,
+        );
       case _Phase.needChild:
         return CreateChildScreen(onSubmit: _createChild);
       case _Phase.blocked:

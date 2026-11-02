@@ -8,6 +8,7 @@ import 'package:kids_points_app/data/app_version_api.dart';
 import 'package:kids_points_app/data/http_transport_types.dart';
 import 'package:kids_points_app/data/read_api.dart';
 import 'package:kids_points_app/data/read_api_errors.dart';
+import 'package:kids_points_app/screens/login_screen.dart';
 import 'package:kids_points_app/screens/update_gate.dart';
 
 /// W10-B：App 自更新的客户端用例（2026-11-02）。
@@ -178,6 +179,26 @@ void main() {
       expect(find.text('立即更新'), findsOneWidget);
       expect(find.textContaining('已不被支持'), findsOneWidget);
     });
+  });
+
+  testWidgets('★ 登录页底部也显示「发现新版本 · 点此更新」（W11-B）', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: UpdateGate(
+        api: _FakeVersionApi(info(latestVersion: '9.9.9', latestBuild: 9)),
+        currentVersion: '1.0.0',
+        currentBuild: 1,
+        child: LoginScreen(onSubmit: (String _, String __) async => null),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // 自动检查会先弹出更新对话框；登录页底部是同一个事实的第二个入口，
+    // 这样「进不去 App 的人」也能看到并触发更新。
+    expect(find.textContaining('点此更新'), findsOneWidget);
+
+    await tester.tap(find.text('稍后'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('发现新版本 v9.9.9'), findsOneWidget);
   });
 
   test('★ pubspec.yaml 与 lib/app_version.dart 必须同步（改一处忘另一处会红）',

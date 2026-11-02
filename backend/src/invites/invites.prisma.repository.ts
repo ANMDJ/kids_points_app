@@ -2,12 +2,12 @@ import {
   ConflictException,
   HttpException,
   Injectable,
-  InternalServerErrorException,
   NotFoundException
 } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 
 import { PrismaService } from '../prisma/prisma.service'
+import { claimInviteCode, toInviteRole } from './invite-claim'
 import { generateInviteCode, withFreshInviteCode } from './invite-code'
 import type {
   AcceptInviteInput,
@@ -16,7 +16,7 @@ import type {
   InvitesPort,
   RevokeInviteInput
 } from './invites.repository'
-import type { InviteRevokeResponse, InviteRole, InviteRow } from './invites.types'
+import type { InviteRevokeResponse, InviteRow } from './invites.types'
 
 /** `InviteCode` 行的读取列 —— 列表 / 创建回包共用，免得两处 `select` 漂移。 */
 const INVITE_SELECT = {
@@ -31,13 +31,8 @@ const INVITE_SELECT = {
   createdAt: true
 } as const
 
-/** 原子占位语句的 `RETURNING` 行（`role` 已 `::text`，避免驱动给枚举对象）。 */
-interface ClaimRow {
-  id: string
-  childId: string
-  role: string
-  createdByUserId: string
-}
+// `ClaimRow` 与占位语句已抽到 `invite-claim.ts`：注册路径（`/auth/register-invite`）
+// 用的是**同一条** SQL，两处各写一份就会有两份「什么叫可用」的判据。
 
 /**
  * 邀请码的 **Prisma 适配器**（W5-G，2026-10-22）
@@ -192,19 +187,12 @@ export class PrismaInvitesRepository implements InvitesPort {
       return await this.prisma.$transaction(
         async (tx): Promise<AcceptedInviteRow> => {
           // ── 第 1 步：原子占位（整个功能就是这一条语句）────────────────────
-          const claimed = await tx.$queryRaw<ClaimRow[]>`
-            UPDATE "InviteCode"
-               SET "usedCount" = "usedCount" + 1,
-                   "usedByUserId" = ${input.userId},
-                   "usedAt" = now()
-             WHERE code = ${input.code}
-               AND "usedCount" < "maxUses"
-               AND "expiresAt" > now()
-               AND revoked = false
-            RETURNING id, "childId", role::text AS role, "createdByUserId"`
+          const claim = await claimInviteCode(tx, {
+            code: input.code,
+            userId: input.userId
+          })
 
-          const claim = claimed[0]
-          if (claim === undefined) {
+          if (claim === null) {
             // 「不存在 / 已用完 / 已过期 / 已吊销」四种情况给**同一个**回答：
             // 区分它们会让这个端点变成「哪些码存在」的探测器，而用户能做的
             // 动作完全相同（找家长再要一个）。
@@ -406,19 +394,8 @@ function toInviteRow(row: {
 }
 
 /**
- * 库里只有 `child | guardian | viewer` 三种角色，而邀请只发前两种
- * （`viewer` 在矩阵里没有列 ⇒ 一律 DENY ⇒ 邀请一个 viewer 等于邀请一个
- * 什么都做不了的成员，02 §2 D6）。
- *
- * 读到第三种 ⇒ **500**：这是库里有脏数据（不可能是本模块写的），
- * 混报成 409 会让「有人直接改过库」被当成「这个码不可用」查很久（D3b 同一条纪律）。
+ * 库里只有 `child | guardian | viewer` 三种角色；邀请只用前两种。
+ * 映射与 500 语义已随占位语句一起抽到 `invite-claim.ts#toInviteRole`
+ * —— 注册路径读的是**同一份**行形状，两处各写一遍必然漂移。
  */
-function toInviteRole(role: string): InviteRole {
-  if (role === 'child' || role === 'guardian') return role
-  throw new InternalServerErrorException({
-    code: 'INVITE_ROLE_UNUSABLE',
-    message:
-      `邀请码上的角色是 ${role}，它不是可邀请的角色（只有 child / guardian）。` +
-      '这是数据问题，请检查该行是不是被直接改过库。'
-  })
-}
+

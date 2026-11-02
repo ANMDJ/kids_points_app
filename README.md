@@ -114,7 +114,7 @@ flutter build apk --release \
 
 首次启动的顺序（全部在 App 里自动完成）：
 
-1. 登录（手机号 / 邮箱 + 密码）→ token 落盘；
+1. 登录（手机号 / 邮箱 + 密码）；**没有账号**时点「第一次用？用邀请码注册」（W11-A）→ token 落盘；
 2. `GET /auth/session` 查成员位；
 3. 有孩子 ⇒ `POST /auth/child-session` 建立 `(deviceId, childId)` 会话 → 首页；
 4. 没有孩子 ⇒ 建孩子引导（同意 → `POST /children` → `child-session` → `PATCH /child` 改昵称）；
@@ -122,6 +122,25 @@ flutter build apk --release \
 
 冷启动：token + childId 都在本地 ⇒ 直接进首页；token 被撤销 / 换账号 ⇒
 旧 childId 先被清掉，新账号重新建立会话（不串数据）。
+
+### 第一次怎么登录（没有账号时）
+
+App **不开放自助注册**，但有**邀请码注册**（W11-A，2026-11-02 /
+[`docs/design/45-invite-registration.md`](./docs/design/45-invite-registration.md)）：
+
+| 你的情况 | 怎么进 |
+| --- | --- |
+| 本地演示（已存在的家长） | `cd backend && npm run seed:demo && npm run seed:account` → `13800138000 / demo12345` |
+| 全新的人（本地） | 用 `seed:demo` 生成的邀请码 `MAMA2345`（guardian · 3 次名额 · 7 天）＋ 任意未注册手机号 ＋ 自定密码 |
+| 线上 | 请家里已经在用的家长在小程序「我的 → 家庭成员」生成邀请码；线上**没有**预置演示账号 |
+
+登录页底部有「第一次用？用邀请码注册」：填邀请码 + 手机号/邮箱 + 密码即可，
+注册成功**直接进 App**（不需要再登录一次）。失败时留在注册页，错误文案来自服务端；
+点「返回登录」可以放弃注册（不会留下半成品账号 —— 后端是一个事务）。
+
+> 邀请码是**凭据**：有次数上限、有有效期、可吊销。四种「不能用」（不存在 / 过期 / 用完 / 吊销）
+> 故意给同一个 `409 INVITE_CODE_UNAVAILABLE` —— 区分它们等于告诉别人「哪些码存在」。
+> 手机号已被注册时是 `409 IDENTIFIER_TAKEN`（提示直接登录），不是「格式不对」。
 
 > 明文 HTTP 例外仍保留在 `AndroidManifest.xml`（`usesCleartextTraffic="true"`）
 > 与 iOS ATS，只影响 `http://` 入口；走 `https://…:8443` 不需要它们。
@@ -134,18 +153,19 @@ flutter build apk --release \
   低于最低版本时强制更新（没有「稍后」）。
 - 「立即更新」用系统浏览器打开 APK 直链（Android 走 `MethodChannel('kp/url_opener')`，
   桌面 / Web 各有实现，**仍然零第三方依赖**）；打不开时退回到「复制链接」。
-- 手动入口：「我的 → 检查更新（v1.0.1 (2)）」。
+- 手动入口：**登录页底部**「当前版本 vX · 检查更新」与「我的 → 检查更新（vX）」；
+  有新版本时两处都会直接变成「发现新版本 vY · 点此更新」，「我的」页头像下方还会出现横幅。
 - 发布新版要同时改三处：`pubspec.yaml` 的 `version:`、`lib/app_version.dart` 的常量、
   服务器的 `APP_LATEST_VERSION` / `APP_LATEST_BUILD`（测试会钉住前两处一致）。
 - APK 放在 Caddy 的 `/app/*` 静态目录：
 
   ```text
-  /var/www/cline-hub/app/kids-points-1.0.1.apk
-  https://hub.littlewish.top:8443/app/kids-points-1.0.1.apk
+  /var/www/cline-hub/app/kids-points-1.0.2.apk
+  https://hub.littlewish.top:8443/app/kids-points-1.0.2.apk
   ```
 
-- 当前这一版（1.0.1+2）的下载地址：
-  <https://hub.littlewish.top:8443/app/kids-points-1.0.1.apk>
+- 当前这一版（1.0.2+3）的下载地址：
+  <https://hub.littlewish.top:8443/app/kids-points-app.apk>
 
 
 浏览器里没有 `dart:io`，所以下面三处各自有一份平台实现，由条件导入

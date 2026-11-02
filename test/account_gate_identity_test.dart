@@ -221,6 +221,25 @@ class _FakeAuthApi implements AuthApi {
   }
 
   @override
+  Future<AuthLoginResult> registerWithInvite({
+    required String inviteCode,
+    required String identifier,
+    required String password,
+    String? displayName,
+  }) async {
+    // 注册与登录在客户端是**同一条**落点：拿 token 立刻 adopt。
+    await holder.adopt(_token);
+    return AuthLoginResult(
+      token: _token,
+      expiresAt: DateTime.now().add(const Duration(days: 7)),
+      userId: 'u-1',
+      displayName: displayName,
+      childId: childId,
+      role: childId == null ? null : 'guardian',
+    );
+  }
+
+  @override
   Future<AccountInfo> updateAccount({
     String? phone,
     String? email,

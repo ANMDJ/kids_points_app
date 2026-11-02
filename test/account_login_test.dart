@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:kids_points_app/app_version.dart';
 import 'package:kids_points_app/data/auth_api.dart';
 import 'package:kids_points_app/data/auth_dto.dart';
 import 'package:kids_points_app/data/read_api.dart';
@@ -79,6 +80,25 @@ class _FakeAuthApi implements AuthApi {
       role: null,
     );
   }
+  @override
+  Future<AuthLoginResult> registerWithInvite({
+    required String inviteCode,
+    required String identifier,
+    required String password,
+    String? displayName,
+  }) async {
+    // 注册与登录在客户端是**同一条**落点：拿 token 立刻 adopt。
+    await holder?.adopt(_validToken);
+    return AuthLoginResult(
+      token: _validToken,
+      expiresAt: DateTime.now().add(const Duration(days: 7)),
+      userId: 'u-1',
+      displayName: displayName,
+      childId: null,
+      role: null,
+    );
+  }
+
   @override
   Future<AccountInfo> updateAccount({
     String? phone,
@@ -352,6 +372,42 @@ void main() {
       expect(holder.token, _validToken);
       // 送出去的是 **trim 过** 的标识（后端还会再规范化一次，两处都不该有空格）
       expect(api.seenIdentifier, '13800138000');
+    });
+  });
+
+  // ── W11-B（2026-11-02）：忘记密码的「App 内入口」 ─────────────────────────
+  group('登录页：忘记密码入口（W11-B）', () {
+    testWidgets('★ 「忘记密码？」可点，四步说明写在 App 自己的对话框里', (WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: LoginScreen(onSubmit: (String _, String __) async => null),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('忘记密码？'), findsOneWidget);
+      await tester.ensureVisible(find.text('忘记密码？'));
+      await tester.tap(find.text('忘记密码？'));
+      await tester.pumpAndSettle();
+
+      // 关键：不是只丢一句「去小程序」，而是把「在 App 里怎么完成」讲完。
+      expect(find.textContaining('App 的登录密码要在微信小程序'), findsOneWidget);
+      expect(find.textContaining('2. 进入「我的 → App 登录账号」'), findsOneWidget);
+      expect(find.textContaining('回到 App，用手机号/邮箱 + 新密码登录'), findsOneWidget);
+      expect(find.textContaining('不需要短信或邮件验证码'), findsOneWidget);
+
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
+      expect(find.text('我知道了'), findsNothing);
+    });
+
+    testWidgets('预览模式（没有版本服务）只报版本，不画一个点了没反应的按钮',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: LoginScreen(onSubmit: (String _, String __) async => null),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('当前版本 $kAppVersionLabel'), findsOneWidget);
+      expect(find.textContaining('检查更新'), findsNothing);
     });
   });
 }

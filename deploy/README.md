@@ -352,25 +352,25 @@ flutter build apk --release \
   --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
 
 scp build/app/outputs/flutter-apk/app-release.apk \
-  ubuntu@82.157.153.22:/tmp/kids-points-1.0.1.apk
+  ubuntu@82.157.153.22:/tmp/kids-points-1.0.2.apk
 ssh ubuntu@82.157.153.22 \
-  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.1.apk /var/www/cline-hub/app/ && \
-   sudo cp /var/www/cline-hub/app/kids-points-1.0.1.apk /var/www/cline-hub/app/kids-points-app.apk'
+  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.2.apk /var/www/cline-hub/app/ && \
+   sudo cp /var/www/cline-hub/app/kids-points-1.0.2.apk /var/www/cline-hub/app/kids-points-app.apk'
 ```
 
 - `kids-points-app.apk` 是**稳定地址**（`GET /app/version` 默认返回它）；
 - 版本化的 `kids-points-X.Y.Z.apk` 保留，便于回滚 / 对比；
-- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.1.apk` 应为 `200` + `content-length` ≈ 包大小。
+- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.2.apk` 应为 `200` + `content-length` ≈ 包大小。
 
 **版本信息（`/srv/kids-points/kids.env`，改完 `docker compose up -d`）：**
 
 ```dotenv
-APP_LATEST_VERSION="1.0.1"
-APP_LATEST_BUILD="2"
+APP_LATEST_VERSION="1.0.2"
+APP_LATEST_BUILD="3"
 APP_MINIMUM_VERSION="1.0.0"
 APP_MINIMUM_BUILD="1"
 APP_DOWNLOAD_URL="https://hub.littlewish.top:8443/app/kids-points-app.apk"
-APP_RELEASE_NOTES="支持运行时建立家庭会话；新增检查更新入口。"
+APP_RELEASE_NOTES="新增邀请码注册；登录页可直接查看「忘记密码」步骤；登录页与「我的」页都能看到新版本入口。"
 APP_PUBLISHED_AT=""
 ```
 

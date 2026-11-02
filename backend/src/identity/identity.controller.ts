@@ -16,6 +16,7 @@ import { AuthGuard } from './auth.guard'
 import { ChildSessionDto } from './dto/child-session.dto'
 import { LoginAccountDto } from './dto/login-account.dto'
 import { LoginDto } from './dto/login.dto'
+import { RegisterWithInviteDto } from './dto/register-with-invite.dto'
 import { UpdateAccountDto } from './dto/update-account.dto'
 import { VerifyDateCodeDto } from './dto/verify-date-code.dto'
 import type { DateCodeVerdict } from './date-verification-code'
@@ -31,9 +32,10 @@ import { Public } from './public.decorator'
 /**
  * 登录 / 登出 / 会话查询的 HTTP 入口（W9-A，2026-10-29 / `40` §8）。
  *
- * ── 八条路由（判别点只有两处：谁能匿名、谁回 204）────────────────────────────
+ * ── 九条路由（判别点只有两处：谁能匿名、谁回 204）────────────────────────────
  *   `POST   /auth/login`          **@Public()**：它**签发**凭据，不能要求凭据（§8.2）
  *   `POST   /auth/login-account`  **@Public()**：同上 —— 手机号/邮箱 + 密码那条（W9-D）
+ *   `POST   /auth/register-invite` **@Public()**：同上 —— 邀请码注册（W11-A / `45`）
  *   `POST   /auth/date-code`      **@Public()**：固定规则验证码的**服务端校验**（W9-C）
  *                                 它不签发任何凭据、不读用户数据，只回 `{ valid }`
  *   `POST   /auth/logout`         `AuthGuard`，204（没有响应体：撤销就是没有可说的）
@@ -124,6 +126,29 @@ export class IdentityController {
     @Req() request: RequestWithActor
   ): Promise<LoginView> {
     return await this.service.loginWithAccount(dto, {
+      deviceId: readDeviceId(request),
+      headers: request.headers
+    })
+  }
+
+  /**
+   * `POST /auth/register-invite` —— **邀请码注册**（W11-A，2026-11-02 / `45` §3.1）。
+   *
+   * ── 为什么它可以 `@Public()`（与上面两条登录路由同一条判据）──────────────────
+   *   它**签发**凭据，所以不能要求凭据。授权由**邀请码**承担：码是家长生成、
+   *   有次数上限、有有效期、可吊销的凭据（`02` §8）。
+   *
+   * ★ 它不是「开放注册」：没有有效邀请码时，这条路由不会建出任何 `User`
+   *   （见 `IdentityService.registerWithInvite`）。`42` §5.1 的拒绝理由仍然成立。
+   */
+  @Public()
+  @Post('register-invite')
+  @HttpCode(200)
+  async registerWithInvite(
+    @Body() dto: RegisterWithInviteDto,
+    @Req() request: RequestWithActor
+  ): Promise<LoginView> {
+    return await this.service.registerWithInvite(dto, {
       deviceId: readDeviceId(request),
       headers: request.headers
     })

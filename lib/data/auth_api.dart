@@ -41,6 +41,29 @@ abstract class AuthApi {
     required String password,
   });
 
+  /// `POST /auth/register-invite` —— **用邀请码注册**并直接登录（W11-A，2026-11-02）。
+  ///
+  /// ── 它解决的是「第一次登录没有账号」──────────────────────────────────────
+  ///   邀请码是家长在小程序里生成的；新家长拿码 + 手机号/邮箱 + 密码注册，
+  ///   得到的是「加入**已有家庭**的账号」，而不是一个新的孤儿家庭。
+  ///
+  /// 失败语义（与后端逐字对应）：
+  ///   · `400` 码形状错 ⇒ `badRequest` `INVITE_CODE_MALFORMED`
+  ///     （抄漏一位 ≠ 码失效，文案要能区分）；
+  ///   · `409` 码不可用 ⇒ `conflict` `INVITE_CODE_UNAVAILABLE`
+  ///     （不存在 / 过期 / 用完 / 吊销，四者**故意同形**）；
+  ///   · `409` 标识已注册 ⇒ `conflict` `IDENTIFIER_TAKEN`（引导去登录，不是改写法）；
+  ///   · `400` 弱密码 / 标识形状错 ⇒ `badRequest`（`WEAK_PASSWORD` / `INVALID_IDENTIFIER`）。
+  ///
+  /// ★ 与 [loginAccount] 三条不变量一致：密码不落盘、不带旧 token 换新 token、
+  ///   拿到的 token **立刻**交给 [AuthTokenHolder]（调用方不再手工转存）。
+  Future<AuthLoginResult> registerWithInvite({
+    required String inviteCode,
+    required String identifier,
+    required String password,
+    String? displayName,
+  });
+
   /// `PUT /auth/account` —— 绑定手机号/邮箱、设置或修改密码。
   ///
   /// ★ 需要已登录（小程序里绑定时用的是小程序侧的客户端，这里是 App 侧，
@@ -96,6 +119,47 @@ class AuthApiClient implements AuthApi {
 
     final AuthLoginResult result = AuthLoginResult.fromJson(decoded, r'$');
     // ★ 唯一一次转存。写盘失败会被 `adopt()` 吞掉并降级为内存（见 token_store.dart）。
+    await holder.adopt(result.token);
+    return result;
+  }
+
+  @override
+  Future<AuthLoginResult> registerWithInvite({
+    required String inviteCode,
+    required String identifier,
+    required String password,
+    String? displayName,
+  }) async {
+    final String code = inviteCode.trim();
+    // 本地只拦**空**与"整段粘贴"：形状与归一化（大小写 / 连字符）在服务端
+    // 只有一份（`invite-code.ts`），客户端再写一遍必然漂移 —— 而漂移的后果
+    // 是「本地放行、服务端 400」，用户完全无法自查。
+    if (code.isEmpty) {
+      throw ArgumentError('请填写邀请码。');
+    }
+    final String who = identifier.trim();
+    if (who.isEmpty) {
+      throw ArgumentError('请填写手机号或邮箱。');
+    }
+    if (password.isEmpty) {
+      throw ArgumentError('请填写密码。');
+    }
+    final String name = displayName?.trim() ?? '';
+
+    final Object? decoded = await _send(
+      method: 'POST',
+      path: '/auth/register-invite',
+      body: <String, Object?>{
+        'inviteCode': code,
+        'identifier': who,
+        'password': password,
+        // 空串 ⇒ **不发**这个字段（后端把缺失当 null，而不是要一个空名字）。
+        if (name.isNotEmpty) 'displayName': name,
+      },
+    );
+
+    final AuthLoginResult result = AuthLoginResult.fromJson(decoded, r'$');
+    // ★ 与登录同一条：唯一一次转存。注册本身就等于登录，调用方不需要再登一次。
     await holder.adopt(result.token);
     return result;
   }
@@ -174,7 +238,8 @@ class AuthApiClient implements AuthApi {
     if (authenticated && token == null) {
       throw WriteApiException(
         WriteFailureKind.unauthenticated,
-        '这条操作需要先登录。请用手机号/邮箱 + 密码登录，或先在小程序「我的」里绑定 App 账号。',
+        '这条操作需要先登录。请用手机号/邮箱 + 密码登录；还没有账号可以用邀请码注册，'
+        '或先在小程序「我的 → App 登录账号」里绑定。',
         code: 'CLIENT_NO_TOKEN',
       );
     }

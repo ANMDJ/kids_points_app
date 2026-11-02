@@ -16,6 +16,12 @@ import { PARENT_MODE_TTL_MS } from '../auth/parent-mode.policy'
 import { burnPasswordHashCost, hashPassword, verifyPassword } from '../common/password-hash'
 import { consentTextVersion } from '../consent/consent.service'
 import { clientIpOf, hashPii } from '../consent/hash-pii'
+import {
+  INVITE_CODE_LENGTH,
+  INVITE_SESSION_TTL_MS,
+  isWellFormedInviteCode,
+  normalizeInviteCode
+} from '../invites/invite-code'
 import type { AuthenticatedIdentity } from '../permissions/actor'
 import {
   classifyIdentifier,
@@ -31,10 +37,15 @@ import type { BootstrapChildDto } from './dto/bootstrap-child.dto'
 import type { ChildSessionDto } from './dto/child-session.dto'
 import type { LoginAccountDto } from './dto/login-account.dto'
 import type { LoginDto } from './dto/login.dto'
+import type { RegisterWithInviteDto } from './dto/register-with-invite.dto'
 import type { UpdateAccountDto } from './dto/update-account.dto'
 import type { VerifyDateCodeDto } from './dto/verify-date-code.dto'
 import { verifyDateVerificationCode, type DateCodeVerdict } from './date-verification-code'
 import { CHILD_SESSION_TTL_MS } from './identity.prisma.repository'
+import {
+  INVITE_REGISTRATION_REPOSITORY,
+  type InviteRegistrationPort
+} from './invite-registration.repository'
 import {
   IDENTITY_REPOSITORY,
   type ChildMembershipRow,
@@ -131,6 +142,8 @@ export class IdentityService {
     @Inject(WECHAT_CODE2SESSION) private readonly wechat: WechatCode2SessionPort,
     @Inject(AUTH_SESSION_REPOSITORY) private readonly sessions: AuthSessionPort,
     @Inject(IDENTITY_REPOSITORY) private readonly identity: IdentityPort,
+    @Inject(INVITE_REGISTRATION_REPOSITORY)
+    private readonly registration: InviteRegistrationPort,
     private readonly limiter: LoginRateLimiter
   ) {}
 
@@ -148,25 +161,7 @@ export class IdentityService {
     dto: LoginDto,
     context: { deviceId: string | null; headers: Record<string, string | string[] | undefined> }
   ): Promise<LoginView> {
-    const limited = this.limiter.check(
-      { ip: clientIpOf(context.headers), deviceId: context.deviceId },
-      new Date()
-    )
-    if (limited !== null) {
-      // 429 而不是 503：503 会被读成"服务挂了"（客户端退避 30s+），
-      // 而 429 的语义正是"你太快了，等一下再来"（`40` §11.1）。
-      throw new HttpException(
-        {
-          code: 'LOGIN_RATE_LIMITED',
-          scope: limited.scope,
-          retryAfterSeconds: limited.retryAfterSeconds,
-          message:
-            `登录尝试过于频繁（按 ${limited.scope === 'ip' ? 'IP' : '设备'} 限流）。` +
-            `请等 ${limited.retryAfterSeconds} 秒再试；**不要**自动重试。`
-        },
-        HttpStatus.TOO_MANY_REQUESTS
-      )
-    }
+    this.enforceRateLimit(context)
 
     const outcome = await this.wechat.exchange(dto.code.trim())
     const openId = this.openIdOrThrow(outcome)
@@ -233,23 +228,7 @@ export class IdentityService {
     dto: LoginAccountDto,
     context: { deviceId: string | null; headers: Record<string, string | string[] | undefined> }
   ): Promise<LoginView> {
-    const limited = this.limiter.check(
-      { ip: clientIpOf(context.headers), deviceId: context.deviceId },
-      new Date()
-    )
-    if (limited !== null) {
-      throw new HttpException(
-        {
-          code: 'LOGIN_RATE_LIMITED',
-          scope: limited.scope,
-          retryAfterSeconds: limited.retryAfterSeconds,
-          message:
-            `登录尝试过于频繁（按 ${limited.scope === 'ip' ? 'IP' : '设备'} 限流）。` +
-            `请等 ${limited.retryAfterSeconds} 秒再试；**不要**自动重试。`
-        },
-        HttpStatus.TOO_MANY_REQUESTS
-      )
-    }
+    this.enforceRateLimit(context)
 
     const classified = classifyIdentifier(dto.identifier)
     if (classified.kind === 'invalid') {
@@ -300,6 +279,146 @@ export class IdentityService {
   }
 
   /**
+   * `POST /auth/register-invite` —— **用邀请码注册**（W11-A，2026-11-02 / `45`）。
+   *
+   * ── 它把「开放注册」替换成了什么 ─────────────────────────────────────────────
+   *   `42` §5.1 拒绝开放注册（打错一位手机号 ⇒ 孤儿账号 + 「我的孩子不见了」），
+   *   `42` §9 第 1 条写明了补上它的**前置条件**：邀请码并入家庭。
+   *   本方法就是那个前置条件：
+   *     · 没有邀请码 ⇒ 400（形状不对）/ 409（不可用），**注册不成立**；
+   *     · 有邀请码 ⇒ 建的是「加入这个家庭的新账号」，不是新家庭。
+   *   所以它既不是开放注册，也不需要在 App 里「先随便建个号再加家庭」。
+   *
+   * ── 顺序（第 2/3 条是安全条款）──────────────────────────────────────────────
+   *   1. **限流**：与两个登录端点共用同一份额度（同 IP 20/分、同设备 10/分）。
+   *      注册同样是「拿到凭据」，不共用额度就等于开了一个绕过限流的后门。
+   *   2. **先验形状**（邀请码 / 标识 / 密码强度）再花 scrypt：
+   *      畸形输入不该消耗一次 ~50ms 的哈希。
+   *   3. **角色绝不来自请求体**：DTO 没有 `role`，全局管道对多余键 400；
+   *      真正的角色由适配器从邀请码行读取。
+   *   4. **新签发** token（`issueToken()`）：与两条登录路由同一条会话固定防护。
+   *
+   * ── 成功回包与 `POST /auth/login-account` **逐字段同构** ────────────────────
+   *   客户端只需要一套解析器（`AuthLoginResult`）。`membership` 一定有值
+   *   （邀请码本身就是一个孩子的成员位），但客户端仍应走既有的
+   *   `POST /auth/child-session` 编排 —— 那条路已经处理了「换设备 / 换账号」。
+   */
+  async registerWithInvite(
+    dto: RegisterWithInviteDto,
+    context: { deviceId: string | null; headers: Record<string, string | string[] | undefined> }
+  ): Promise<LoginView> {
+    this.enforceRateLimit(context)
+
+    // DeviceSession 的行键是 (deviceId, childId)。没有设备 id 就注册 ⇒ 发出去的
+    // token 永远过不了业务守卫，用户会看到「登录成功」然后每个请求 401。
+    if (context.deviceId === null || context.deviceId === '') {
+      throw new BadRequestException({
+        code: 'DEVICE_ID_REQUIRED',
+        message:
+          '缺少 x-kp-device-id 请求头：注册要同时在这台设备上开一个会话，' +
+          '而会话的行键是 (deviceId, childId)。'
+      })
+    }
+
+    // 用户会把码抄成 `abcd-efgh` / `ABCD EFGH` / 前后带空格 —— 归一化只有一份
+    // （规范化和形状判定都在 `invite-code.ts`，与 `/invites/accept` 同一份）。
+    const code = normalizeInviteCode(dto.inviteCode)
+    if (!isWellFormedInviteCode(code)) {
+      // 形状错是**输入**问题（400），不是「码不可用」（409）：
+      // 说成后者会让人去找家长重发，而他其实只是抄漏了一位。
+      throw new BadRequestException({
+        code: 'INVITE_CODE_MALFORMED',
+        message:
+          `邀请码是 ${INVITE_CODE_LENGTH} 位字母数字（不含容易认错的 0/O/1/I/L）。` +
+          '请检查是否抄漏或抄错了字符。'
+      })
+    }
+
+    const classified = classifyIdentifier(dto.identifier)
+    if (classified.kind === 'invalid') {
+      throw new BadRequestException({
+        code: 'INVALID_IDENTIFIER',
+        reason: classified.reason,
+        message: identifierMessage(classified.reason)
+      })
+    }
+    const { type, value } = classified.identifier
+
+    // ★ 密码强度**只在设置密码时**判定（与 `updateAccount` 同一口径）：
+    //   规则也只有一份（`account-identifier.ts`）。
+    const strength = validatePasswordStrength(dto.password, value)
+    if (strength.kind === 'invalid') {
+      throw new BadRequestException({
+        code: 'WEAK_PASSWORD',
+        reason: strength.reason,
+        message: passwordMessage(strength.reason)
+      })
+    }
+    const passwordHash = await hashPassword(dto.password)
+
+    const now = new Date()
+    const token = issueToken()
+    const expiresAt = authSessionExpiresAt(now)
+    const rawName = dto.displayName?.trim() ?? ''
+
+    const registered = await this.registration.registerWithInvite({
+      code,
+      identifierType: type,
+      identifierValue: value,
+      passwordHash,
+      // 空字符串 ⇒ null：`User.displayName` 可空，不要落一个空串（界面上会画成空白）。
+      displayName: rawName === '' ? null : rawName,
+      deviceId: context.deviceId,
+      tokenHash: hashToken(token),
+      authExpiresAt: expiresAt,
+      // 与 `POST /invites/accept` 同一条 TTL（`INVITE_SESSION_TTL_MS` 的注释里
+      // 写清了它与 02 §7「5 分钟家长模式」的偏差，改的时候两处必须一起改）。
+      deviceSessionExpiresAt: new Date(now.getTime() + INVITE_SESSION_TTL_MS)
+    })
+
+    return {
+      token,
+      expiresAt: expiresAt.toISOString(),
+      user: { id: registered.userId, displayName: registered.displayName },
+      membership: { childId: registered.childId, role: registered.role }
+    }
+  }
+
+  /**
+   * 三个「拿到凭据」的端点共用的**限流闸门**。
+   *
+   * ── 为什么抽成一个方法（而不是每个端点抄一遍）────────────────────────────────
+   *   `LoginRateLimiter` 的 key 是**来源**（IP / deviceId），不是端点。三处若各抄
+   *   一份，某天有人只调了其中一个的额度，就会出现「登录限流 20 次、注册限流
+   *   不限」—— 那等于用注册绕过登录限流。
+   *
+   * 429 而不是 503：503 会被读成「服务挂了」（客户端退避 30s+），而 429 的语义
+   * 正是「你太快了，等一下再来」（`40` §11.1）。
+   */
+  private enforceRateLimit(context: {
+    deviceId: string | null
+    headers: Record<string, string | string[] | undefined>
+  }): void {
+    const limited = this.limiter.check(
+      { ip: clientIpOf(context.headers), deviceId: context.deviceId },
+      new Date()
+    )
+    if (limited === null) return
+
+    throw new HttpException(
+      {
+        code: 'LOGIN_RATE_LIMITED',
+        scope: limited.scope,
+        retryAfterSeconds: limited.retryAfterSeconds,
+        message:
+          `登录尝试过于频繁（按 ${limited.scope === 'ip' ? 'IP' : '设备'} 限流）。` +
+          `请等 ${limited.retryAfterSeconds} 秒再试；**不要**自动重试。`
+      },
+      HttpStatus.TOO_MANY_REQUESTS
+    )
+  }
+
+  /**
    * 账号登录失败的**唯一出口**（401）。
    *
    * ★ 不区分「没有这个账号」「从未设过密码」「密码不对」：分开说等于把
@@ -314,7 +433,8 @@ export class IdentityService {
       code: 'ACCOUNT_INVALID_CREDENTIALS',
       message:
         '手机号/邮箱或密码不正确。' +
-        '如果你还没设置过密码，请先在小程序「我的」里绑定手机号/邮箱并设置一个密码。'
+        '如果还没设置过密码，请在小程序「我的 → App 登录账号」绑定手机号/邮箱并设置密码；' +
+        '忘记密码也可以在那里重设（不需要短信验证码）。'
     })
   }
 

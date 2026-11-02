@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app_version.dart';
 import '../data/app_scope.dart';
 import '../data/app_store.dart';
+import '../data/app_version_api.dart';
 import '../theme/app_colors.dart';
 import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
@@ -130,6 +131,23 @@ class ProfileScreen extends StatelessWidget {
                 ),
               ],
             ),
+            if (update != null)
+              AnimatedBuilder(
+                animation: update.controller,
+                builder: (BuildContext context, _) {
+                  final AppVersionInfo? latest = update.controller.latest;
+                  if (!update.controller.hasUpdate || latest == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 14),
+                    child: _UpdateBanner(
+                      version: latest.latestVersion,
+                      onTap: () => unawaited(update.onCheckManually()),
+                    ),
+                  );
+                },
+              ),
             const SizedBox(height: 20),
             _StatsCard(
               goodHabitCount: store.profile.goodHabitCount,
@@ -370,22 +388,37 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.divider,
                     indent: 66,
                   ),
-                  _MenuRow(
-                    icon: Icons.system_update_alt_rounded,
-                    color: AppColors.primaryDeep,
-                    label: '检查更新（$kAppVersionLabel）',
-                    onTap: () {
-                      // W10-B：与启动检查共用同一个控制器（`UpdateGate` 注入）。
-                      // 预览模式没有版本服务 ⇒ 只告诉用户当前版本，不假装在查。
-                      if (update == null) {
-                        messenger.showSnackBar(
-                          SnackBar(
-                            content: Text('当前版本 $kAppVersionLabel（未接版本服务）'),
-                          ),
-                        );
-                        return;
-                      }
-                      unawaited(update.onCheckManually());
+                  AnimatedBuilder(
+                    // `update == null`（预览 / 未接版本服务）时用一条永不变化的
+                    // 动画占位：仍然渲染同一行，只是没有「有新版本」的状态。
+                    animation: update?.controller ??
+                        const AlwaysStoppedAnimation<double>(0),
+                    builder: (BuildContext context, _) {
+                      final AppVersionInfo? latest = update?.controller.latest;
+                      final bool hasUpdate =
+                          update?.controller.hasUpdate == true && latest != null;
+                      return _MenuRow(
+                        icon: Icons.system_update_alt_rounded,
+                        color: AppColors.primaryDeep,
+                        // 有新版时这一行**直接写待办**（「发现新版本 vX · 点此更新」），
+                        // 而不是让用户先点一次「检查更新」才知道有没有。
+                        label: hasUpdate
+                            ? '发现新版本 v${latest.latestVersion} · 点此更新'
+                            : '检查更新（$kAppVersionLabel）',
+                        onTap: () {
+                          // W10-B：与启动检查共用同一个控制器（`UpdateGate` 注入）。
+                          // 预览模式没有版本服务 ⇒ 只告诉用户当前版本，不假装在查。
+                          if (update == null) {
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text('当前版本 $kAppVersionLabel（未接版本服务）'),
+                              ),
+                            );
+                            return;
+                          }
+                          unawaited(update.onCheckManually());
+                        },
+                      );
                     },
                   ),
                 ],
@@ -508,6 +541,63 @@ class ProfileScreen extends StatelessWidget {
 }
 
 /// 战绩卡：好习惯累计 / 奖励次数。
+/// 「我的」页顶部的新版本横幅（W11-B，2026-11-02）。
+///
+/// ── 为什么还要一个横幅 ──────────────────────────────────────────────────────
+///   自动弹窗只在**启动那一刻**出现，用户点「稍后」之后就没有第二次提醒；
+///   列表最后一行又要滚到底才看得到。把「有新版本」放到头像下面，
+///   才是「一眼能看见」——这正是用户反馈的「看不到更新按钮」。
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({required this.version, required this.onTap});
+
+  final String version;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.chipBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: <Widget>[
+            const Icon(
+              Icons.system_update_alt_rounded,
+              size: 20,
+              color: AppColors.primaryDeep,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '发现新版本 v$version',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            const Text(
+              '立即更新',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primaryDeep,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _StatsCard extends StatelessWidget {
   const _StatsCard({
     required this.goodHabitCount,
