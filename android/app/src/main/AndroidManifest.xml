@@ -16,7 +16,7 @@
            把 android:usesCleartextTraffic="true" 这一行删掉。
            走 https 之后 Android / iOS 都不需要任何明文例外。 -->
     <application
-        android:label="kids_points_app"
+        android:label="积分小管家"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
