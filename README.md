@@ -4,6 +4,8 @@
 
 > 产品需求文档（PRD）：[`docs/PRD.md`](./docs/PRD.md)　·　可评审的设计事实源：[`docs/design/`](./docs/design/README.md)
 >
+> **续开发待办**（2026-11-02 快照，含实测基线与 P0/P1/P2 清单）：[`docs/design/43-open-work-backlog.md`](./docs/design/43-open-work-backlog.md)
+>
 > 微信小程序高保真原型（双击即开、可点可演示）：[`prototype/index.html`](./prototype/index.html)　·　说明见 [`prototype/README.md`](./prototype/README.md)
 
 | 设计稿页面 | 实现文件 | 主要交互 |
@@ -67,102 +69,84 @@ flutter test test/platform_portability_test.dart --platform chrome  # 浏览器�
 `web/` 已随仓库提供，直接 `flutter run -d chrome` 就能启动，不必先 `flutter create`。
 
 > ⚠️ **第一屏显示什么，由 `--dart-define` 决定，不是登录坏了。**
-> 三项配置（`KP_API_BASE_URL` / `KP_DEVICE_ID` / `KP_CHILD_ID`）缺任何一项，
-> `ReadApiConfig.isConfigured` 就是 `false`，`AccountGate` 据此判定为**预览模式并直接放行**
-> （见 `lib/screens/account_gate.dart` 文件头）—— 于是你一进来就是首页 + 本地演示数据。
-> 想看登录页，把三项配齐再启动：
+> 没配 `KP_API_BASE_URL` ⇒ `ReadApiConfig.hasBaseUrl` 为 `false`，
+> `AccountGate` 据此判定为**预览模式并直接放行**（见 `lib/screens/account_gate.dart`
+> 文件头）—— 于是你一进来就是首页 + 本地空态。
+> 想看登录页，只配地址即可（设备 / 孩子 id 已在运行期生成与签发）：
 >
 > ```bash
 > flutter run -d chrome --web-port=5173 \
->   --dart-define=KP_API_BASE_URL=http://127.0.0.1:3000 \
->   --dart-define=KP_DEVICE_ID=demo-device-guardian \
->   --dart-define=KP_CHILD_ID=demo-child
+>   --dart-define=KP_API_BASE_URL=http://127.0.0.1:3000
 > ```
 >
-> `demo-device-guardian` / `demo-child` 来自 `npm run seed:demo`（见下面的完整步骤）。
-> 配齐且本地没有 token ⇒ 首屏就是「登录积分小管家」；登录成功后 token 落在
+> 本地账号来自 `npm run seed:account`（`13800138000 / demo12345`）。
+> 本地没有 token ⇒ 首屏就是「登录积分小管家」；登录成功后 token 落在
 > 浏览器 `localStorage`（键 `kp_token`），刷新会直接进首页。
+> 设备 id / 孩子 id 落在 `localStorage` 的 `kp_session`（JSON）。
 
-### 连线上后端（Flutter App，2026-11-01）
+### 连线上后端（Flutter App，W10-B 之后）
 
-> ★ **先记住这条**：三项 `--dart-define` **缺任何一项**，`ReadApiConfig.isConfigured`
-> 就是 `false`，`AccountGate` 判定为**预览模式并直接放行**（`account_gate.dart:94`）——
-> 于是你看到的是 seed 演示数据、**一个请求都不发，而且没有任何报错**。
-> 「配了地址却还是演示数据」几乎都是漏了后两项。
+> ★ **编译期只需要一项**：`KP_API_BASE_URL`。
+> `KP_DEVICE_ID` / `KP_CHILD_ID` **已废弃**（2026-11-02，P0-1）：
+> 设备 id 首启生成并持久化（`kp_session`），孩子 id 登录后由
+> `POST /auth/child-session` 签发。旧参数**填了也不生效** ——
+> 这正是「换一个家庭不用重新打包」的前提。
+>
+> 没配 `KP_API_BASE_URL` ⇒ `ReadApiConfig.hasBaseUrl` 为 `false`，
+> `AccountGate` 判定为**预览模式并直接放行**：你看到的是本地空态，
+> **一个请求都不发，也没有任何报错**。
 
-线上有两个入口，App 两个都能用：
+线上入口（App）：
 
-| 入口 | baseUrl | 前提 |
+| 入口 | baseUrl | 说明 |
 | --- | --- | --- |
-| IP + `/k` 前缀（**小程序**用） | `http://82.157.153.22/k` | 平台放行明文（已配好，见下） |
-| 域名 + 8443（**App 主路径**） | `https://www.littlewish.top:8443` | 腾讯云 DV 证书已固定、8443 已放行 |
+| 域名 + 8443 + `/kids`（**当前主路径**） | `https://hub.littlewish.top:8443/kids` | Caddy `handle_path /kids/*` → `127.0.0.1:3000`；证书系统可信，不需要明文例外 |
+| IP + `/k`（小程序用） | `http://82.157.153.22/k` | 2026-11-02 起当前 Caddyfile 里这段随 cline-console 部署被移除；恢复前 App 用上面那条 |
 
-`backend` 容器只发布到 `127.0.0.1:3000`（`deploy/compose.yaml:26`），公网**不能**
+`backend` 容器只发布到 `127.0.0.1:3000`（`deploy/compose.yaml`），公网**不能**
 直连 `:3000`，必须经 Caddy。
 
-#### 走 IP（当下可用）
-
-`deploy/README.md` §4 的 `@kids` 段已经 `uri strip_prefix /k`，所以把 `/k` 当成
-baseUrl 的一部分即可。**端口不受影响**：`ReadApiConfig.uri()` 用的是
-`base.replace(path: …)`（`read_api.dart:83`），host 与 port 原样保留。
-
 ```bash
-flutter run -d <device> \
-  --dart-define=KP_API_BASE_URL=http://82.157.153.22/k \
-  --dart-define=KP_DEVICE_ID=demo-device-guardian \
-  --dart-define=KP_CHILD_ID=demo-child
+# 构建正式包（不需要任何设备 / 孩子 id）
+flutter build apk --release \
+  --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
 ```
 
-> 明文 HTTP 在 Android（targetSdk ≥ 28）和 iOS（ATS）上**默认都是禁的**，这次一并开了例外：
-> `android/app/src/main/AndroidManifest.xml` 的 `android:usesCleartextTraffic="true"`、
-> `ios/Runner/Info.plist` 的 `NSAppTransportSecurity → NSAllowsArbitraryLoads`。
-> 不开的表现是「网络错误」——请求在**系统网络栈**就被拒，后端日志里一条都不会有。
+首次启动的顺序（全部在 App 里自动完成）：
 
-⚠️ 线上要先跑过 `deploy/README.md` §6.3（`seed:demo` + `seed:account`），
-否则会**登录成功、之后每个请求都 401**（`x-kp-device-id` 查不到 `DeviceSession`）。
+1. 登录（手机号 / 邮箱 + 密码）→ token 落盘；
+2. `GET /auth/session` 查成员位；
+3. 有孩子 ⇒ `POST /auth/child-session` 建立 `(deviceId, childId)` 会话 → 首页；
+4. 没有孩子 ⇒ 建孩子引导（同意 → `POST /children` → `child-session` → `PATCH /child` 改昵称）；
+5. 失败 ⇒ 「暂时进不去」+ **重试 / 重新登录**，不会先渲染首页再被 401 打回。
 
-#### 走 8443（App 主路径，且不需要任何明文例外）
+冷启动：token + childId 都在本地 ⇒ 直接进首页；token 被撤销 / 换账号 ⇒
+旧 childId 先被清掉，新账号重新建立会话（不串数据）。
 
-小程序受微信「服务器域名 + 备案」约束，**Flutter App 不受**：自建 App 只要求
-证书能被系统信任，没有 ICP 前置条件。8443 的价值是绕开未备案域名在 80/443 上
-可能被运营商/云厂商拦截的问题。
+> 明文 HTTP 例外仍保留在 `AndroidManifest.xml`（`usesCleartextTraffic="true"`）
+> 与 iOS ATS，只影响 `http://` 入口；走 `https://…:8443` 不需要它们。
 
-服务器侧**已经配好**（腾讯云证书已固定、安全组已放行 8443）。要复核就一条命令：
+### App 版本更新（W10-B，2026-11-02）
 
-```bash
-bash deploy/smoke-8443.sh     # 7 项全绿再动客户端；跑完会打印该用的 baseUrl
-```
+- 服务端：`GET /app/version`（**匿名**）返回最新版本 / 最低版本 / 下载地址 / 更新说明。
+  数据源是环境变量（`backend/.env.example` 的 `APP_*` 段），配错会回退默认值、不会 500。
+- 客户端：启动与回到前台时检查（6 小时节流）；有新版本才弹窗，可「稍后」；
+  低于最低版本时强制更新（没有「稍后」）。
+- 「立即更新」用系统浏览器打开 APK 直链（Android 走 `MethodChannel('kp/url_opener')`，
+  桌面 / Web 各有实现，**仍然零第三方依赖**）；打不开时退回到「复制链接」。
+- 手动入口：「我的 → 检查更新（v1.0.1 (2)）」。
+- 发布新版要同时改三处：`pubspec.yaml` 的 `version:`、`lib/app_version.dart` 的常量、
+  服务器的 `APP_LATEST_VERSION` / `APP_LATEST_BUILD`（测试会钉住前两处一致）。
+- APK 放在 Caddy 的 `/app/*` 静态目录：
 
-> ⚠️ **别把小程序也切到 8443**：微信后台的「服务器域名」要求域名**已备案**，
-> 备案没下来之前那个输入框根本填不进去。小程序继续用 `http://82.157.153.22/k`，
-> 两条入口并存是正确状态（`deploy/smoke-8443.sh` 第 6 项专门验证 `/k` 没被挤掉）。
+  ```text
+  /var/www/cline-hub/app/kids-points-1.0.1.apk
+  https://hub.littlewish.top:8443/app/kids-points-1.0.1.apk
+  ```
 
-客户端**代码一行不用改**，只换地址：
+- 当前这一版（1.0.1+2）的下载地址：
+  <https://hub.littlewish.top:8443/app/kids-points-1.0.1.apk>
 
-```bash
-flutter run -d <device> \
-  --dart-define=KP_API_BASE_URL=https://www.littlewish.top:8443 \
-  --dart-define=KP_DEVICE_ID=demo-device-guardian \
-  --dart-define=KP_CHILD_ID=demo-child
-```
-
-> 走 https 之后，上面那两处明文例外都应当删掉。注意 `IoReadTransport` 用的是原生
-> `HttpClient` 且**没有** `badCertificateCallback`（`http_transport_io.dart`），
-> 所以自签名证书一定失败 —— 必须是**系统信任**的证书。
->
-> **为什么是 `www` 而不是 `kids`（2026-11-01 实测结论）**：
-> `kids.littlewish.top` 走 ACME 自动签发**签不出来**。Let's Encrypt 是多视角验证，
-> 亚太节点拿到的是 DNSPod 备案拦截页（`reader size limit exceeded`），
-> TLS-ALPN-01 走 443 又直接 `Connection reset by peer`；Caddy 自动切到 ZeroSSL 同样未成。
-> 于是改用腾讯云手动签发的 DV 证书 —— 但它的 SAN 是
-> `littlewish.top` + `www.littlewish.top`，**不含** `*.littlewish.top`，
-> 而 `www` 恰好已解析到 82.157.153.22（主域 `littlewish.top` 还没有 A 记录）。
-> 所以当前唯一能通过系统证书校验的入口就是 `https://www.littlewish.top:8443`。
->
-> ⚠️ 这张证书 **2027-01-29 到期，且不会自动续期**。到期前去腾讯云重新签发，
-> 覆盖服务器上的 `/etc/caddy/certs/littlewish.top.{crt,key}`，再 `systemctl reload caddy`。
-> 想彻底摆脱手动续期，只有两条路：① 拿到 `kids.littlewish.top` 的证书；
-> ② 给 Caddy 重编译加 DNSPod 插件，走 DNS-01 签通配符。
 
 浏览器里没有 `dart:io`，所以下面三处各自有一份平台实现，由条件导入
 （`if (dart.library.js_interop)`）在编译期选定 —— **上层业务代码只有一份**：

@@ -690,7 +690,7 @@ class WriteApiClient implements WriteApi {
       <String, Object?>{'name': trimmed},
     );
     final ChildProfileDto dto = _parse(decoded, ChildProfileDto.fromJson);
-    final String expected = config.childId.trim();
+    final String expected = config.childId ?? '' ;
     if (expected.isNotEmpty && dto.childId != expected) {
       // 回包指向别的孩子 ⇒ 会话串号 / 后端 bug。把名字写到本地档案上就是
       // 给错误的孩子改名，宁可显式失败。
@@ -943,7 +943,7 @@ class WriteApiClient implements WriteApi {
       if (body != null)
         kContentTypeHeader: 'application/json; charset=utf-8',
       kDeviceIdHeader: config.deviceId.trim(),
-      kChildIdHeader: config.childId.trim(),
+      kChildIdHeader: config.childId ?? '',
       if (key != null && key.isNotEmpty) 'idempotency-key': key,
       // W9-D：有 token 才发（空值会让 `Authorization: Bearer ` 变成畸形头）。
       if (bearer != null && bearer.isNotEmpty)

@@ -107,7 +107,9 @@ class DateCodeApiClient implements DateCodeApi {
     // 复用 `ReadApiConfig` 的完整性闸门：**「算不算配好」只有这一个定义**。
     // （本端点本身只需要 baseUrl，但另立一套判断就会在"配了一半"时给出
     //   两种互相矛盾的提示 —— 那种不一致比多要求一个 childId 更贵。）
-    final String? configError = config.validationError;
+    // W10-B：日期码闸门在**登录之前**运行，那时还没有 childId ——
+    // 所以这里只能要求 baseUrl + deviceId，不能复用业务请求的 `validationError`。
+    final String? configError = config.transportValidationError;
     if (configError != null) {
       throw WriteApiException(
         WriteFailureKind.badRequest,
@@ -123,7 +125,7 @@ class DateCodeApiClient implements DateCodeApi {
       // 后端拿它做限流的**设备维度**（与登录共用 `LoginRateLimiter`），
       // 所以即使本端点不需要身份也要带上。
       kDeviceIdHeader: config.deviceId.trim(),
-      kChildIdHeader: config.childId.trim(),
+      if (config.childId != null) kChildIdHeader: config.childId!,
     };
 
     final WriteHttpResponse response;

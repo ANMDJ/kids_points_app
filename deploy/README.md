@@ -317,6 +317,73 @@ sudo docker compose run --rm kids-api npm run seed:account   # 13800138000 / dem
 
 ---
 
+### 6.2 App 自更新：`/kids` 反代与 APK 静态目录（2026-11-02，W10-B）
+
+**两件事，一个站点（`hub.littlewish.top:8443`）：**
+
+| 路径 | 去向 | 用途 |
+|---|---|---|
+| `/kids/*` | `handle_path` 剥前缀 → `127.0.0.1:3000` | Flutter App 的 API（baseUrl = `https://hub.littlewish.top:8443/kids`） |
+| `/app/*` | `handle_path` 剥前缀 → `file_server`，root `/var/www/cline-hub/app` | APK 静态下载（App 自更新） |
+
+> ⚠️ **为什么不是 `/k`**：2026-11-02 上午 cline-console 的部署把 IP 站点的
+> `@kids path /k/*` 整段移除了，kids API 曾短时间没有公网入口。
+> 现在 App 走 8443 的 `/kids`（证书系统可信，不需要明文例外）；
+> 小程序的 `http://82.157.153.22/k` 若要恢复，需要把 `@kids` 段加回 IP 站点。
+
+**插入/修复路由（幂等，自动备份 + `caddy validate`）：**
+
+```bash
+scp deploy/ensure-kids-route.sh deploy/caddy-kids-8443.snippet ubuntu@82.157.153.22:/tmp/
+ssh ubuntu@82.157.153.22 \
+  'sudo cp /tmp/ensure-kids-route.sh /tmp/caddy-kids-8443.snippet /srv/kids-points/deploy/ && \
+   sudo sed -i "s/\r$//" /srv/kids-points/deploy/ensure-kids-route.sh /srv/kids-points/deploy/caddy-kids-8443.snippet && \
+   sudo bash /srv/kids-points/deploy/ensure-kids-route.sh'
+```
+
+> `sed -i 's/\r$//'` 不是可选项：仓库 `.gitattributes` 把脚本标成 `eol=lf`，
+> 但 **scp 不做换行转换**，带 CRLF 的脚本会报 `set: pipefail`（已知坑见 §6 第 6 条）。
+
+**发布 APK：**
+
+```bash
+# 本机构建（不需要任何设备/孩子 id）
+flutter build apk --release \
+  --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
+
+scp build/app/outputs/flutter-apk/app-release.apk \
+  ubuntu@82.157.153.22:/tmp/kids-points-1.0.1.apk
+ssh ubuntu@82.157.153.22 \
+  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.1.apk /var/www/cline-hub/app/ && \
+   sudo cp /var/www/cline-hub/app/kids-points-1.0.1.apk /var/www/cline-hub/app/kids-points-app.apk'
+```
+
+- `kids-points-app.apk` 是**稳定地址**（`GET /app/version` 默认返回它）；
+- 版本化的 `kids-points-X.Y.Z.apk` 保留，便于回滚 / 对比；
+- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.1.apk` 应为 `200` + `content-length` ≈ 包大小。
+
+**版本信息（`/srv/kids-points/kids.env`，改完 `docker compose up -d`）：**
+
+```dotenv
+APP_LATEST_VERSION="1.0.1"
+APP_LATEST_BUILD="2"
+APP_MINIMUM_VERSION="1.0.0"
+APP_MINIMUM_BUILD="1"
+APP_DOWNLOAD_URL="https://hub.littlewish.top:8443/app/kids-points-app.apk"
+APP_RELEASE_NOTES="支持运行时建立家庭会话；新增检查更新入口。"
+APP_PUBLISHED_AT=""
+```
+
+**四条探针：**
+
+```bash
+curl -s -o /dev/null -w 'kids=%{http_code}\n' https://hub.littlewish.top:8443/kids/app/version   # 200
+curl -s https://hub.littlewish.top:8443/kids/app/version | head -c 200                            # JSON
+curl -s -o /dev/null -w 'apk=%{http_code}\n'  https://hub.littlewish.top:8443/app/kids-points-app.apk  # 200
+curl -s -o /dev/null -w 'hub=%{http_code}\n'  https://hub.littlewish.top:8443/api/v1/health      # 200（别挤掉 hub）
+```
+
+
 ## 7. 已知坑（按踩到的顺序）
 
 ### 1) `npm ci` 在 `prisma generate` 处失败：`schema.prisma: file not found`

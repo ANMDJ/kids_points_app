@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app_version.dart';
 import '../data/app_scope.dart';
 import '../data/app_store.dart';
 import '../theme/app_colors.dart';
@@ -9,6 +12,7 @@ import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
 import 'onboarding_screen.dart';
+import 'update_gate.dart';
 import 'sheets/consent_sheet.dart';
 import 'sheets/export_sheet.dart';
 import 'sheets/family_deletion_sheet.dart';
@@ -35,6 +39,8 @@ class ProfileScreen extends StatelessWidget {
     // W5-L：未读消息数（服务端下发的整份计数；0 时不画红点）。
     final int unreadNotifications = store.unreadNotificationCount;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    // W10-B：版本检查入口（`null` ⇒ 预览模式 / 未接后端，只显示当前版本）。
+    final AppUpdateScope? update = AppUpdateScope.maybeOf(context);
 
     // live 模式下昵称已经接了写端点（`PATCH /child`，W5-E）、回收站也接了
     // 后端（W5-F）；只剩「恢复演示数据」是纯本地操作 —— 它若在 live 模式下
@@ -356,6 +362,30 @@ class ProfileScreen extends StatelessWidget {
                       // 恢复 / 彻底删除），不再整入口拦截 —— 孩子也能看
                       // （矩阵 `view_trash`），恢复 / 彻底删除由服务端按角色判。
                       showTrashSheet(context);
+                    },
+                  ),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.divider,
+                    indent: 66,
+                  ),
+                  _MenuRow(
+                    icon: Icons.system_update_alt_rounded,
+                    color: AppColors.primaryDeep,
+                    label: '检查更新（$kAppVersionLabel）',
+                    onTap: () {
+                      // W10-B：与启动检查共用同一个控制器（`UpdateGate` 注入）。
+                      // 预览模式没有版本服务 ⇒ 只告诉用户当前版本，不假装在查。
+                      if (update == null) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text('当前版本 $kAppVersionLabel（未接版本服务）'),
+                          ),
+                        );
+                        return;
+                      }
+                      unawaited(update.onCheckManually());
                     },
                   ),
                 ],

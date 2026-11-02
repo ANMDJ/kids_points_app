@@ -1,0 +1,9 @@
+	# ── 积分小管家 API（W10-B，2026-11-02）─────────────────────────────────
+	# /kids/* → Nest（127.0.0.1:3000）。handle_path 会剥掉 /kids 前缀，
+	# 所以 Flutter App 的 baseUrl 是 https://hub.littlewish.top:8443/kids。
+	# ★ 必须排在下面的 catch-all reverse_proxy 之前（Caddy 按顺序匹配）。
+	# 与 /app/*（APK 静态目录）互不影响：一个反代 API，一个发文件。
+	handle_path /kids/* {
+		reverse_proxy 127.0.0.1:3000
+	}
+

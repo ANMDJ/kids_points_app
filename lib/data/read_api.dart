@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'http_transport.dart';
 import 'read_api_errors.dart';
 import 'read_dto.dart';
+import 'session_scope.dart';
 
 /// W10-A：传输层类型已搬到 `http_transport_types.dart`（Web 上没有 `dart:io`）。
 /// 这里保留同一个出口，`import 'read_api.dart'` 的调用方（含测试）一行不用改。
@@ -20,39 +21,69 @@ const String kChildIdHeader = 'x-kp-child-id';
 
 /// 只读 API 的连接配置。
 ///
-/// 配置来源**只有** `--dart-define`（不读本地存储、不读系统环境变量）：
-/// 设备身份是配对流程产出的凭据，不能由用户随手在界面上填。
+/// ── W10-B / P0-1 之后：**编译期只剩 `baseUrl`** ─────────────────────────────
+///   以前三项都来自 `--dart-define`，于是换一个家庭就要重新打一个包，公开发布
+///   的包只能连演示家庭（`43` §3 P0-1）。现在：
+///     · `baseUrl` —— 安装包属于哪个环境，确实是编译期决定（`KP_API_BASE_URL`）；
+///     · `deviceId` / `childId` —— **运行期**由 [SessionScope] 提供：
+///       设备 id 首启生成并持久化，孩子 id 登录后由 `POST /auth/child-session` 签发。
+///   构造里仍然保留 `deviceId` / `childId` 两个可选值：测试与旧调用点可以
+///   直接给值，行为逐字不变（没有 `session` 时就是固定值）。
 ///
 /// ```bash
-/// flutter run \
-///   --dart-define=KP_API_BASE_URL=http://127.0.0.1:3000 \
-///   --dart-define=KP_DEVICE_ID=<seed 里的设备 id> \
-///   --dart-define=KP_CHILD_ID=<孩子 id>
+/// flutter build apk --release \
+///   --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
 /// ```
+///
+/// ★ 预览模式的判据从「三项齐全」改成了 [hasBaseUrl]：没配 `baseUrl` 才是
+///   真的没接后端；配了后端但还没登录/还没孩子，是**登录闸门**要处理的状态，
+///   不是预览模式。
 class ReadApiConfig {
   const ReadApiConfig({
     required this.baseUrl,
-    required this.deviceId,
-    required this.childId,
-  });
+    String deviceId = '',
+    String childId = '',
+    this.session,
+  })  : _deviceId = deviceId,
+        _childId = childId;
 
-  /// 从编译期常量读取；未传时为空串（页面据此进入**预览数据**模式）。
-  factory ReadApiConfig.fromEnvironment() => const ReadApiConfig(
-        baseUrl: String.fromEnvironment('KP_API_BASE_URL'),
-        deviceId: String.fromEnvironment('KP_DEVICE_ID'),
-        childId: String.fromEnvironment('KP_CHILD_ID'),
+  /// 从编译期常量读取 `KP_API_BASE_URL`。
+  ///
+  /// 传入 [session] 后，设备/孩子身份就在运行期动态取值（生产路径）；
+  /// 不传则完全等同于旧行为（测试 / 预览）。
+  factory ReadApiConfig.fromEnvironment({SessionScope? session}) =>
+      ReadApiConfig(
+        baseUrl: const String.fromEnvironment('KP_API_BASE_URL'),
+        session: session,
       );
 
   final String baseUrl;
-  final String deviceId;
-  final String childId;
 
-  /// 三项都齐才接后端 —— 少一项就退回预览数据，**绝不**发一个会 401 的请求
-  /// 然后把 401 说成「网络错误」。
-  bool get isConfigured => validationError == null;
+  /// 运行期身份（生产路径）。`null` ⇒ 用下面两个固定值（测试 / 预览）。
+  final SessionScope? session;
 
-  /// 配置不完整时的**可执行**说明；完整时为 null。
-  String? get validationError {
+  final String _deviceId;
+  final String _childId;
+
+  /// 当前设备 id。`session` 存在时**每次读取都取最新值** ——
+  /// 客户端在构造时拿到的是配置对象，不是快照。
+  String get deviceId => session?.deviceId ?? _deviceId;
+
+  /// 当前孩子 id；没有选择孩子时为 `null`（注意与空串的区别）。
+  String? get childId {
+    final String? runtime = session?.childId;
+    if (runtime != null && runtime.trim().isNotEmpty) return runtime.trim();
+    return _childId.trim().isEmpty ? null : _childId.trim();
+  }
+
+  /// **只**校验 `baseUrl`（不涉及身份）。
+  ///
+  /// 判据用于：登录页要不要出现（没配后端 ⇒ 预览模式直接放行）、
+  /// 版本检查、以及 `POST /auth/login-account` 这类\"还没有身份\"的请求。
+  bool get hasBaseUrl => baseUrlError == null;
+
+  /// `baseUrl` 的问题；合法时为 null。
+  String? get baseUrlError {
     final String base = baseUrl.trim();
     if (base.isEmpty) {
       return '未配置 KP_API_BASE_URL：现在显示的是本地预览数据。\n'
@@ -64,14 +95,40 @@ class ReadApiConfig {
         parsed.host.isEmpty) {
       return 'KP_API_BASE_URL 不是合法的 http(s) 地址：$base。';
     }
+    return null;
+  }
+
+  /// 登录类请求（需要设备 id，但**不需要**孩子 id）的完整性。
+  ///
+  /// `POST /auth/login-account` / `POST /auth/child-session` 都在
+  /// 「还没有孩子」或「孩子还没签下来」时调用，用 [validationError]
+  /// 会把登录自己拦掉。
+  String? get transportValidationError {
+    final String? base = baseUrlError;
+    if (base != null) return base;
     if (deviceId.trim().isEmpty) {
-      return '未配置 KP_DEVICE_ID：请求需要设备身份（401 之前就拦下）。';
-    }
-    if (childId.trim().isEmpty) {
-      return '未配置 KP_CHILD_ID：请求必须指明操作哪个孩子。';
+      return '设备标识还没有就绪（首启生成失败）。请重启 App 再试。';
     }
     return null;
   }
+
+  /// 业务请求（读 / 写 / 引导 / 家长模式 / 推送登记）的完整性：
+  /// `baseUrl` + `deviceId` + `childId` **三样都要有**。
+  ///
+  /// ★ 没有 `childId` ⇒ `_send()` 会在这里返回错误、**一个请求都不发**。
+  ///   那是刻意的：`x-kp-child-id` 为空时后端只会回 500/403，把它显示成
+  ///   「网络错误」会让用户去检查 WiFi。
+  String? get validationError {
+    final String? transport = transportValidationError;
+    if (transport != null) return transport;
+    if (childId == null) {
+      return '还没有进入任何一个孩子：请先登录并完成本机会话建立。';
+    }
+    return null;
+  }
+
+  /// 三项都齐才接业务后端。
+  bool get isConfigured => validationError == null;
 
   /// 拼出请求地址：`baseUrl` 的尾斜杠与 `path` 的首斜杠都不会重复。
   Uri uri(String path, [Map<String, String>? query]) {
@@ -318,7 +375,9 @@ class ReadApiClient {
     final Map<String, String> headers = <String, String>{
       kAcceptHeader: 'application/json',
       kDeviceIdHeader: config.deviceId.trim(),
-      kChildIdHeader: config.childId.trim(),
+      // `validationError` 已经保证非空；`?? ''` 只是让类型收窄可见，
+      // 不会走到空值分支（真走到就是配置被并发改动）。
+      kChildIdHeader: config.childId ?? '',
       // W9-D：有 token 才发。空值会让 `Authorization: Bearer ` 变成畸形头。
       if (bearer != null && bearer.isNotEmpty)
         kAuthorizationHeader: 'Bearer $bearer',

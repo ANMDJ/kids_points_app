@@ -2,38 +2,54 @@ import 'package:flutter/material.dart';
 
 import 'data/app_scope.dart';
 import 'data/app_store.dart';
+import 'data/app_version_api.dart';
 import 'data/auth_api.dart';
 import 'data/date_code_api.dart';
 import 'data/device_token_api.dart';
+import 'data/identity_api.dart';
 import 'data/onboarding_api.dart';
 import 'data/parent_mode_api.dart';
 import 'data/push_token_lifecycle.dart';
 import 'data/push_token_registration.dart';
 import 'data/push_token_runtime.dart';
 import 'data/read_api.dart';
+import 'data/session_scope.dart';
 import 'data/token_store.dart';
 import 'data/write_api.dart';
 import 'screens/account_gate.dart';
 import 'screens/date_code_gate.dart';
 import 'screens/home_shell.dart';
 import 'screens/onboarding_gate.dart';
+import 'screens/update_gate.dart';
 import 'theme/app_theme.dart';
 
-void main() {
+Future<void> main() async {
   // W6-F：`PushTokenLifecycle` 要注册 `WidgetsBindingObserver`，必须先初始化绑定。
   // `runApp()` 内部也会初始化，但推送运行时在 `runApp()` 之前就要接上，所以显式调用。
   WidgetsFlutterBinding.ensureInitialized();
 
-  // W4-B / W4-E：只有三项 `--dart-define` 都配齐才接后端；否则保持本地预览数据，
-  // 不会出现「发了请求 → 401 → 页面显示成网络错误」的假象。
-  final ReadApiConfig config = ReadApiConfig.fromEnvironment();
-  final bool configured = config.isConfigured;
+  // W10-B / P0-1：运行期身份。设备 id 首启生成并持久化；孩子 id 登录后由
+  // `POST /auth/child-session` 签发。**不再从 `--dart-define` 读这两个值。**
+  final SessionScope session = SessionScope();
+  await session.restore();
 
-  // W9-D：**唯一**的 token 持有者。四个 API 客户端都拿它的取值函数，
+  // 编译期只剩 `baseUrl`：它决定这个安装包连哪个环境。
+  // 没配 ⇒ 预览模式（闸门直接放行、一个请求都不发）。
+  final ReadApiConfig config = ReadApiConfig.fromEnvironment(session: session);
+  final bool configured = config.hasBaseUrl;
+
+  // W9-D：**唯一**的 token 持有者。所有 API 客户端都拿它的取值函数，
   // 而不是各自读文件 —— 否则登录/登出之后会出现"有的页面能用、有的页面 401"。
   final AuthTokenHolder tokens = AuthTokenHolder();
   final AuthApiClient? authApi =
       configured ? AuthApiClient(config: config, holder: tokens) : null;
+  // W10-B：把 token 落到这台设备 / 这个孩子上（`GET /auth/session` +
+  // `POST /auth/child-session`）。没有它，真机上的第一个业务请求必然 401。
+  final IdentityApiClient? identityApi =
+      configured ? IdentityApiClient(config: config, holder: tokens) : null;
+  // W10-B：版本检查（匿名端点，登录前也要能查）。
+  final AppVersionApi? versionApi =
+      configured ? AppVersionApi(config: config) : null;
   // 没配后端 ⇒ 不发 Authorization 头（预览模式本来就没有 token）。
   final String? Function()? bearerToken =
       configured ? () => tokens.token : null;
@@ -45,32 +61,37 @@ void main() {
   // 这里刻意不 `await`：推送登记最多 10 秒，不能把首帧压在它后面。
   if (configured) _startPushToken(config, bearerToken);
 
+  final AppStore store = AppStore(
+    readApi: configured
+        ? ReadApiClient(config: config, tokenProvider: bearerToken)
+        : null,
+    writeApi: configured
+        ? WriteApiClient(config: config, tokenProvider: bearerToken)
+        : null,
+    // W8-B：引导闸门。只在配置齐全时注入 —— 预览模式没有服务端状态，
+    // 编一个「未引导」会把人推进一个永远完不成的流程。
+    onboardingApi: configured
+        ? OnboardingApiClient(config: config, tokenProvider: bearerToken)
+        : null,
+    // W8-C：切家长模式 + 设 / 改家长 PIN。同样只在配置齐全时注入 ——
+    // 预览模式没有会话、没有 PIN，画一个点了必然失败的入口比不画更糟。
+    parentModeApi: configured
+        ? ParentModeApiClient(config: config, tokenProvider: bearerToken)
+        : null,
+    // W9-C：启动闸门用的 6 位验证码。注入的**唯一**后果是「启动时先要一次
+    // 今天的码」；它不产生凭据，也不改变身份（见 `date_code_gate.dart` 文件头）。
+    dateCodeApi: configured ? DateCodeApiClient(config: config) : null,
+  );
+
   runApp(
     PointsApp(
-      store: AppStore(
-        readApi: configured
-            ? ReadApiClient(config: config, tokenProvider: bearerToken)
-            : null,
-        writeApi: configured
-            ? WriteApiClient(config: config, tokenProvider: bearerToken)
-            : null,
-        // W8-B：引导闸门。只在配置齐全时注入 —— 预览模式没有服务端状态，
-        // 编一个「未引导」会把人推进一个永远完不成的流程。
-        onboardingApi: configured
-            ? OnboardingApiClient(config: config, tokenProvider: bearerToken)
-            : null,
-        // W8-C：切家长模式 + 设 / 改家长 PIN。同样只在配置齐全时注入 ——
-        // 预览模式没有会话、没有 PIN，画一个点了必然失败的入口比不画更糟。
-        parentModeApi: configured
-            ? ParentModeApiClient(config: config, tokenProvider: bearerToken)
-            : null,
-        // W9-C：启动闸门用的 6 位验证码。注入的**唯一**后果是「启动时先要一次
-        // 今天的码」；它不产生凭据，也不改变身份（见 `date_code_gate.dart` 文件头）。
-        dateCodeApi: configured ? DateCodeApiClient(config: config) : null,
-      ),
+      store: store,
       tokens: configured ? tokens : null,
       authApi: authApi,
+      identityApi: identityApi,
+      session: session,
       config: config,
+      appVersionApi: versionApi,
     ),
   );
 }
@@ -121,7 +142,10 @@ class PointsApp extends StatelessWidget {
     required this.store,
     this.tokens,
     this.authApi,
+    this.identityApi,
+    this.session,
     this.config,
+    this.appVersionApi,
   });
 
   final AppStore store;
@@ -132,8 +156,17 @@ class PointsApp extends StatelessWidget {
   /// W9-D：账号登录客户端。`null` ⇒ 登录页会说明"这个版本没有配置账号登录"。
   final AuthApi? authApi;
 
+  /// W10-B：运行期身份客户端（会话 / 建孩子）。
+  final IdentityApi? identityApi;
+
+  /// W10-B：运行期身份（设备 id / 孩子 id）。
+  final SessionScope? session;
+
   /// 配置来源（省略时闸门自己读 `--dart-define`）。
   final ReadApiConfig? config;
+
+  /// W10-B：版本检查客户端。`null` ⇒ 不做更新检查（预览 / 离线测试）。
+  final AppVersionApi? appVersionApi;
 
   @override
   Widget build(BuildContext context) {
@@ -143,20 +176,25 @@ class PointsApp extends StatelessWidget {
         title: '积分小管家',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
-        // W9-D：**最外层**是账号闸门（你是谁）。没有 token ⇒ 登录页。
-        //   ★ 三层闸门的方向性约束各不相同，别把它们合并：
-        //     · AccountGate：没配后端 ⇒ **放行**（预览模式没有账号这回事）；
-        //     · DateCodeGate：拿不到状态 ⇒ **继续锁着**（它是门锁）；
-        //     · OnboardingGate：拿不到状态 ⇒ **放行**（别把家长挡在引导外面）。
-        home: AccountGate(
-          holder: tokens,
-          authApi: authApi,
-          config: config,
-          child: const DateCodeGate(
-            child: OnboardingGate(child: HomeShell()),
+        // W10-B：版本检查在**所有闸门之外**：旧版本可能连登录都过不去，
+        // 必须让用户在登录页也能看到"去下载新版"。
+        home: UpdateGate(
+          api: appVersionApi,
+          child: AccountGate(
+            holder: tokens,
+            authApi: authApi,
+            identityApi: identityApi,
+            session: session,
+            config: config,
+            // 换账号 / 建孩子后清空首页缓存，避免上一个孩子的数据残留。
+            onIdentityChanged: store.resetForIdentity,
+            child: const DateCodeGate(
+              child: OnboardingGate(child: HomeShell()),
+            ),
           ),
         ),
       ),
     );
   }
 }
+

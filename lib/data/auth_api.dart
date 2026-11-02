@@ -159,7 +159,9 @@ class AuthApiClient implements AuthApi {
     bool authenticated = false,
     bool expectEmptyBody = false,
   }) async {
-    final String? configError = config.validationError;
+    // W10-B：登录 / child-session / 账号绑定都发生在“还没有孩子”的阶段，
+    // 只能要求 baseUrl + deviceId，不能复用业务请求的 `validationError`。
+    final String? configError = config.transportValidationError;
     if (configError != null) {
       throw WriteApiException(
         WriteFailureKind.badRequest,
@@ -183,7 +185,9 @@ class AuthApiClient implements AuthApi {
       if (body != null)
         kContentTypeHeader: 'application/json; charset=utf-8',
       kDeviceIdHeader: config.deviceId.trim(),
-      kChildIdHeader: config.childId.trim(),
+      // ★ 登录 / child-session / 账号绑定都发生在“还没有孩子”的阶段，
+      //   所以这里**不能**要求 childId；有才发，没有就不发。
+      if (config.childId != null) kChildIdHeader: config.childId!,
       // ★ `token == null` 时**不发**这个头：`Authorization: Bearer `（空值）
       //   是畸形头，有些网关会直接 400，而错误会指向"凭据非法"。
       if (token != null) kAuthorizationHeader: 'Bearer $token',

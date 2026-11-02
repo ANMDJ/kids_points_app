@@ -188,7 +188,7 @@ class ParentModeApiClient implements ParentModeApi {
       if (body != null)
         kContentTypeHeader: 'application/json; charset=utf-8',
       kDeviceIdHeader: config.deviceId.trim(),
-      kChildIdHeader: config.childId.trim(),
+      kChildIdHeader: config.childId ?? '',
       // W9-D：有 token 才发（空值会让 `Authorization: Bearer ` 变成畸形头）。
       if (bearer != null && bearer.isNotEmpty)
         kAuthorizationHeader: 'Bearer $bearer',

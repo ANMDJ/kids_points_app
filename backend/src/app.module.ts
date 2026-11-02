@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { APP_GUARD } from '@nestjs/core'
+import { AppVersionModule } from './app-version/app-version.module'
 import { ApprovalsModule } from './approvals/approvals.module'
 import { AuditModule } from './audit/audit.module'
 import { AuthModule } from './auth/auth.module'
@@ -48,6 +49,9 @@ import { WishesModule } from './wishes/wishes.module'
 @Module({
   imports: [
     PrismaModule,
+    // ★ W10-B（2026-11-02）：App 自更新信息 `GET /app/version`（**匿名**）。
+    //   版本号 / 下载地址来自环境变量（`APP_LATEST_VERSION` 等），不碰数据库。
+    AppVersionModule,
     // ★ 动态模块（W2-D，2026-10-16）：有 DATABASE_URL ⇒ PrismaMembershipRepository
     //   （真查 ChildMember，屏障一读的就是库）；没有 ⇒ NotImplementedMembershipRepository（501）。
     MembershipModule.register(),

@@ -23,6 +23,10 @@ import { SetMetadata } from '@nestjs/common'
  *       · `POST /auth/date-code`（`identity.controller.ts`）—— 只回
  *         `{ valid, serverDate, weekDay, … }`：固定规则的码可推导，它**不是**
  *         认证凭据，任何"通过后给你点什么"的改动都会让它失去匿名的资格；
+ *       · `GET /app/version`（`app-version.controller.ts`，W10-B）—— 只回公开的
+ *         版本号 / 下载地址 / 更新说明，**不读用户数据、不签发凭据、不改变状态**。
+ *         客户端必须在登录**之前**就能检查更新：否则"版本太旧登不进去"时
+ *         没有任何自救路径。★ 它是第四条，判据与上面三条完全相同；
  *       · `GET /health`（若将来加健康检查）。
  *     ★ "客户端现在还没登录"**不是**可以匿名的理由 —— 那条理由会让每一条新路由
  *       都想匿名。判据只看响应形状。
