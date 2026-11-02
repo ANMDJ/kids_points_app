@@ -42,11 +42,26 @@ GRANT USAGE ON SCHEMA public TO kids_points_app;
 
 -- ② 先给全部表正常 CRUD（含未来新建的表）
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO kids_points_app;
+--   ★ 下面这条 **不够**（2026-11-03 W12 上线时实测踩到）：
+--     `ALTER DEFAULT PRIVILEGES` 只对**执行者自己**新建的表生效。本脚本以 postgres 执行，
+--     而迁移是以表所有者 `kids_migrator` 跑的 ⇒ kids_migrator 新建的表**不会**自动授权，
+--     应用一读就 `42501 permission denied for table ...`（W12 的两张新表就是这样 500 的）。
+--     所以必须再按**迁移角色**补一条默认权限，见 ②b。
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO kids_points_app;
 
+-- ②b 迁移角色（kids_migrator）新建的表也要自动可读写
+--     FOR ROLE kids_migrator 需要执行者是超级用户（本脚本以 postgres 执行，满足）。
+--     角色由部署链创建（见 deploy/README §2 / MIGRATOR_PW）；不存在时这条会报错，
+--     那正是期望的行为 —— 不要在缺少迁移角色时假装授权成功。
+ALTER DEFAULT PRIVILEGES FOR ROLE kids_migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO kids_points_app;
+
+
 -- ③ 再**逐张收回**追加式表的 UPDATE / DELETE
 --    （顺序不能反：② 会覆盖 ③，所以必须先授后撤）
+--    ★ 重跑是安全的：本脚本每次部署迁移后都要跑一遍（新增表的 GRANT 只有 ② 能做），
+--      REVOKE / GRANT 都是幂等的，不会产生重复授权。
 REVOKE UPDATE, DELETE ON "PointRecord"      FROM kids_points_app;
 REVOKE UPDATE, DELETE ON "PointRuleVersion" FROM kids_points_app;
 REVOKE UPDATE, DELETE ON "AuditLog"         FROM kids_points_app;

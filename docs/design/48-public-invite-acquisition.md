@@ -1,7 +1,8 @@
 # 48 · 网站「邀请码获取」＋ 网站注册码（W12，2026-11-02）
 
-> **状态：后端、网站页面、App 文案、小程序注册页已实现。**
-> 证据见 §6（本轮实跑）。**并发由手工探针覆盖（60 → 恰好 50），`test-db` 常驻套件未写；未做真机走查、未部署**。
+> **状态：已实现并随 App 1.0.3+4 上线（2026-11-03）。**
+> 证据见 §6（本地实跑）与 §6.2（线上实跑）。**并发由手工探针覆盖（60 → 恰好 50），
+> `test-db` 常驻套件未写；仍未做真机走查**。
 >
 > 本文只回答五件事：**谁在什么时候、拿什么、走哪条路、失败看到什么、两端文案差在哪**。
 > 字段级契约以本文 + 代码为准；`45`（家庭邀请码注册）与 `47`（两个门）仍然有效，
@@ -257,6 +258,21 @@ RETURNING id
 6. 码形状错 ⇒ 400 `MALFORMED`，两次查码都没发生；
 7. 缺设备头 ⇒ 400；多余 `role` ⇒ 400。
 
+### 6.2 线上实跑（2026-11-03，App 1.0.3+4）
+
+| 层 | 证据 |
+|---|---|
+| 后端镜像 | `cd /srv/kids-points/deploy && sudo docker compose build && up -d` → `deploy-kids-api-1` 重建（日志 `数据库已连接` + `Nest application successfully started` + **五个** worker） |
+| 迁移 | `prisma migrate deploy` → `Applying migration 20261102090000_registration_invite`，共 **17** 个迁移 |
+| ★ 踩到的坑 | 迁移后第一次探针：`GET /kids/public/registration-invites/quota` → **500**，日志 `42501 permission denied for table RegistrationInviteQuota`。根因：新表由 `kids_migrator` 建，而 `GRANT ON ALL TABLES` 是迁移**之前**跑的；重跑 `900_ledger_revoke.sql` 后 **200**（该脚本已补 `ALTER DEFAULT PRIVILEGES FOR ROLE kids_migrator`，见 `deploy/README` §2） |
+| 权限判据 | `node scripts/verify-db.mjs` → **12 项 ALL PASS**（I5 仍在） |
+| 页面 | `GET https://hub.littlewish.top:8443/kids/invite` → **200**（`/k` 入口未恢复，见 §7） |
+| 额度 | `GET …/public/registration-invites/quota` → **200** `{"dailyLimit":50,"remainingToday":50,"resetsAt":"2026-11-03T16:00:00.000Z","timeZone":"Asia/Shanghai"}` |
+| 发码 | `POST …/public/registration-invites`（探针手机号/邮箱）→ **201** `{"code":"B4KA-RWKJ","expiresAt":"2026-11-09T23:37:00.093Z","phoneMasked":"139****0001","emailMasked":"p***@example.com","dailyLimit":50,"remainingToday":49}`；**探针数据已清理**（删码 + 额度回到 0） |
+| 版本端点 | `GET …/kids/app/version` → `latestVersion=1.0.3 / latestBuild=4 / publishedAt=2026-11-02T23:45:00Z`，说明文案与 §5 一致 |
+| APK | `/app/kids-points-1.0.3.apk` **200**，`content-length=52545942`，`sha256=5070a607…2e67e3`（与本地 `app-release.apk` 一致）；`output-metadata.json` 为 `versionCode=4 / versionName=1.0.3`；稳定地址 `kids-points-app.apk` 已指向同一包 |
+| 未验 | 真机安装 / 走查；小程序**上传**（`dist/` 已重新构建，仍需在微信开发者工具里点上传 —— 且 `.env.local` 的 `http://82.157.153.22/k` 在 `/k` 路由移除后不可用，见 §7） |
+
 ---
 
 ## 7. 未做 / 已知边界（每条都是明确取舍）
@@ -270,7 +286,8 @@ RETURNING id
 | 手机号/邮箱验证 | **不发短信、不发邮件** | 申请人可以填别人的邮箱；码只授权「建号 + 绑该标识」，不证明拥有它 |
 | 邀请家长 | **本轮不做** | 家庭邀请码 UI / 后端保持原样，未删未改 |
 | 真机走查 | 未做 | 小程序注册页仅有编译证据 |
-| 部署 | 未做 | `GET /invite` 随现有容器上线；无需新增 Caddy 规则 |
+| 部署 | **已上线（2026-11-03，App 1.0.3+4）**：17/17 迁移、容器重建、`/invite` 200、发码 201、APK 上传 | 逐项证据见 §6.2；无需新增 Caddy 规则（`/kids/*` 已存在） |
+| 小程序入口 | 构建产物已更新，**未上传**；且 `.env.local` 仍指向 `http://82.157.153.22/k`，而该 `/k` 路由在 2026-11-02 的 cline-console 部署中被移除（实测 **404**） | 小程序要真正可用，需要备案后的 HTTPS 域名（`deploy/README` §6.2）或把 `/k` 段加回 IP 站点 |
 
 ---
 

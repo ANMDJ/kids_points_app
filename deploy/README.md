@@ -62,7 +62,7 @@ sudo docker compose build          # 产物 kids-api:0.1.0（912MB / 压缩 198M
 ```bash
 cd /srv/kids-points/deploy
 
-# ① 建表（16 个迁移，走 MIGRATION_DATABASE_URL = 所有者 kids_migrator）
+# ① 建表（17 个迁移，走 MIGRATION_DATABASE_URL = 所有者 kids_migrator）
 sudo docker compose run --rm kids-api npx prisma migrate deploy
 
 # ② 播种规则模板（同一镜像里的 tsx，直连 TS 源码）
@@ -86,6 +86,19 @@ sudo docker compose run --rm kids-api node scripts/verify-db.mjs
 
 **2026-11-01 实测结果：** 迁移 16/16 全绿；seed `新增 18 条（reward 16 / penalty 2）`；
 verify-db **12 项 ALL PASS → "I5 在真实库上生效"**。
+
+**★ 2026-11-03 补（W12 上线当天踩到，别再踩）：③ 必须跟着 ① 重跑。**
+
+- `GRANT ... ON ALL TABLES` 只覆盖**执行那一刻已存在**的表。新迁移建的表若不再跑一遍 900，
+  应用读它就 `42501 permission denied for table ...` —— W12 的 `RegistrationInviteQuota`
+  正是这样让 `GET /public/registration-invites/quota` 直接 **500** 的（容器和迁移都"成功"）。
+- 根因：`ALTER DEFAULT PRIVILEGES`（不带 `FOR ROLE`）只对**执行者自己**（postgres）建的表生效；
+  而本项目的表全部由 `MIGRATION_DATABASE_URL` 的角色 **`kids_migrator`** 创建。
+  900 已补一条 `ALTER DEFAULT PRIVILEGES FOR ROLE kids_migrator ...`（②b）；
+  即便如此，**重跑 900 仍然是幂等且最便宜的那道保险**。
+- 判据：迁移之后 `verify-db` 必须仍是 **ALL PASS**（它现在也覆盖了「应用角色能读新表」）。
+- 2026-11-03 实测：迁移 17/17（新增 `20261102090000_registration_invite`）→ 重跑 900 →
+  `quota` 从 **500** 变 **200**，`verify-db` 12 项 **ALL PASS**。
 
 ---
 
