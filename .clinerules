@@ -1,0 +1,12 @@
+# 项目规则（精简版入口）
+
+完整约束见仓库根 [`AGENTS.md`](./AGENTS.md)，本节只钉住最容易反复犯的三条：
+
+1. **不搜编译产物**：`build/`、`.dart_tool/`、`.widget_preview/`、`*/dist/`、`node_modules/`、
+   `ios/Pods/`、`ios/Flutter/ephemeral/`、`*.log` —— 它们不入库（`git ls-files build .dart_tool` = 0 行），
+   搜到也不是证据。命中里出现这些路径一律当噪音丢弃。
+2. **仓库级检索用** `node tools/search-tracked.mjs '<正则>'`（文件集 = git 提交口径，
+   带产物硬黑名单 + `--self-test` 自检）。`search_codebase` 没有路径参数且不读 `.ignore`，
+   只在 pattern 带业务标识（如 `Idempotency-Key`）时使用，禁止用 `build`/`config`/`version` 这类泛词。
+3. **查编译类问题**看三样：编译器 `EXIT` 码 + 报错原文、被点名的源文件、相关配置；
+   不要为了「看看产物里有没有」去全仓搜产物。

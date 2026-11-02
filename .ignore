@@ -17,10 +17,17 @@
 /build/
 /.widget_preview/
 
-# iOS / Android 生成物
+# iOS / Android 生成物（Flutter 每次 build/pub get 都会重写，见 ios/.gitignore）
 /ios/Flutter/ephemeral/
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/flutter_export_environment.sh
+/ios/Flutter/flutter_assets/
 /ios/Pods/
 /android/.gradle/
+
+# 编译产物（测试用 tsc 输出、tsbuildinfo）
+/backend/.tmp_test_build/
+/backend/*.tsbuildinfo
 
 # 小程序 / H5 端：Chrome 用户数据目录（几万个碎文件，扫描噪音最大）
 /kids_points_mp/.tmp_test/chrome-profile/
@@ -45,5 +52,13 @@
 #      "bin","obj"] + 文本扩展名白名单在找文件，不读 .gitignore / .ignore。
 #     A/B 实测：加了 /.dart_tool/ 后，同一查询依然命中
 #     .dart_tool/flutter_build/*/outputs.json（依旧 "Searched 585 files"）。
-#   · 所以：搜代码时请【显式限定路径】，别依赖本文件兜底。
+#   · 2026-11-02 在 cline-core 4.1.26 复核（本机 PATH 上没有 rg，走的是内置遍历器）：
+#     黑名单里没有 `.dart_tool` / `.widget_preview` / `ios/Flutter/ephemeral`，于是
+#     `flutter_build|package_config` 的 17 条命中 100% 落在生成物里；它报
+#     "Searched 1519 files"，而提交口径（`git ls-files --cached --others
+#     --exclude-standard`）只有 793 个 —— 差额 726 个全是产物。
+#   · 结论（已写进 AGENTS.md §1）：仓库级检索改用命令
+#       node tools/search-tracked.mjs '<正则>'
+#     文件集就是「提交口径」（产物天然不在其中），另有产物硬黑名单兜底和
+#     --self-test 自检。本文件今后只负责文件选择器，不再指望它约束搜索。
 # ─────────────────────────────────────────────────────────────────────────────
