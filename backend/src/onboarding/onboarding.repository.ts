@@ -63,7 +63,7 @@ export interface CompleteOnboardingInput {
   focusAreas: string[]
   /** 已去重、至少 1 条；实现必须**重新校验**模板仍 active（防 TOCTOU）。 */
   templateSlugs: string[]
-  /** 已哈希的 PIN；`null` = 第⑥步跳过（`04` §2：允许跳过）。 */
+  /** 已哈希的 PIN；`null` = 旧版本客户端跳过了第⑥步（`04` §2；新客户端必填，见 DTO 注释）。 */
   parentPinHash: string | null
   operator: OnboardingOperator
 }

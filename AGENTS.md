@@ -59,6 +59,10 @@
 写法要求：
 
 - 每条形如 `编号 · 一句话 · 证据（文件:行 / 命令 / 文档锚点）`；**已完成的不列**。
+- **每条「未做」还必须标卡点类别**（2026-11-03 新增）：`A` 要用户凭据/本机 GUI ·
+  `B` 要产品裁定 · `C` 我能直接做但没排期 · `D` 只能真机/真库验收。归属与解锁条件见
+  [`docs/design/50-unfinished-reasons-and-unblock.md`](./docs/design/50-unfinished-reasons-and-unblock.md)。
+  只写「未做」不写卡点 = 下次会话仍然不知道能不能推进。
 - **禁止臆造与夸大**：清单里每条都要能指到代码或文档；本轮**没验证**的条目必须写
   「未复核」，不许把「文档说没做」说成「我刚验证过」。
 - **完成一条任务时，同一轮**就在 `43` §0 里划掉（或移到「已完成」行）并写日期 + 证据，
@@ -83,3 +87,9 @@
 | 2026-11-03 | **发布 1.0.4+5**（APK `/app/kids-points-1.0.4.apk` ＋ 稳定地址 `kids-points-app.apk`，`Content-Length 52578938`）；`kids.env` 的 `APP_LATEST_*` / `APP_PUBLISHED_AT` / `APP_RELEASE_NOTES` 同步；`/k/app/version` 实测 `1.0.4 / 5` | 1.0.3+4 的包**早于**今天的修复（密码提示、登录账号面板都在提交前），不发新包等于这些修复只存在于源码 |
 | 2026-11-03 | 记录 **git 推送的真实故障点**：本机 `http.proxy=http://127.0.0.1:7897`，代理没起时 `git push` 报 `Failed to connect to 127.0.0.1 port 7897`（很容易被误读成"没权限"）；`git -c http.proxy= -c https.proxy= push` 可直连 | 用户问「昨天还能发，今天说没权限」——检查后是本地代理未运行，不是账号权限 |
 | 2026-11-03 | **P0-3 双端「加入家庭」**（`POST /invites/accept`）：App 新增 `IdentityApi.acceptInvite()` ＋ `FamilyJoinActions` ＋ 「我的 → 加入家庭」面板；小程序新增 `WriteApi.acceptInvite()` ＋ `store.submitAcceptInvite()` ＋ `JoinFamilySheet` ＋ 同一入口；另加 `tools/invite-code-check.mjs`（邀请码形状三份逐字比对，篡改副本实测 exit 1），接进 `npm run invite:check` / `ci` | 邀请码只能**生成**不能**接受**：已有账号的亲戚拿到码后双端都没有入口（W11-A 只覆盖"还没有账号"）；形状规则一旦三份手抄漂移就是「本地放行、服务端 400」 |
+| 2026-11-03 | **「我的 → 立即锁定入口」按用户要求移除**（`profile_screen.dart` 不再渲染；`AppStore.lockDateCodeGate()` 仅留诊断/用例，生产 0 调用方；重开 App 仍会重新上锁） | 用户明确「这个功能不要」；它是给验证闸门用的开发入口，不该出现在产品界面 |
+| 2026-11-03 | **「记一笔」不再被全局只读误拦**（双端）：首页判据由 `isReadOnly`（`live ⇒ true`）改为 `isAdjustReadOnly`（仅 live 且无写客户端）；App `app_store.dart` / 小程序 `store.ts` ＋ `pages/home` | 用户实测「记一笔」提示「后端未就绪」——`POST /records/adjust` 早已上线，是界面判据把每个连后端的家庭都拦了 |
+| 2026-11-03 | **孩子新增心愿真的落审批单**（双端）：`submitAddWish` 在 403 `APPROVAL_REQUIRED` 后调用 `POST /approvals`（action=`add_wish`），返回 `pendingApproval`；成员级 DENY 仍原样报错 | 用户实测「提示需要家长审批，但切回家长模式收件箱里没有这条」——开了口子却没落单，等于假提示 |
+| 2026-11-03 | **D7 落地：引导第⑥步 PIN 必填（双端）＋ 家长模式面板的可执行出口**：新增 `validateRequiredParentPin()`（`lib/models/onboarding.dart`，不动「空串=没填」的旧判据）、`onboarding_screen.dart` 的 `_complete`/`_buildFooter`/`_stepPin`、小程序 `pages/onboarding/index.tsx` 的 `step === 5`；App 面板新增「退出登录，用手机号/密码重新登录」（借闸门那一份 `SessionActions.signOut`，`parent_mode_sheet.dart`），小程序把死文案改成指向「我的 → 退出登录」；服务端 `parentPin` 仍可省略，只为旧装机包保留（DTO 注释已写清）；证据 = `flutter test` **500**、`flutter analyze` 0 issue、小程序 `tsc` **EXIT=0**、后端 `typecheck` **0 error**，详见 `docs/design/49-bootstrap-guardian-window-pin.md` §5 | 网站码注册只发 5 分钟家长窗口（`identity.service.ts:791`），到期 `effectiveRole()` 回落 `child`（`session.gate.ts:117-131`），而设 PIN 要 `manage_parent_pin`（对孩子 DENY）⇒ 跳过 PIN 的账号 5 分钟后既进不了家长模式、也没权限补设，旧提示「请先用家长账号进入一次家长模式」是一句做不到的话 |
+| 2026-11-03 | **D7 提交入库 ＋ 新增 [`50-unfinished-reasons-and-unblock.md`](./docs/design/50-unfinished-reasons-and-unblock.md)**：把 `43` §0 每条未做项标成 **A 凭据/本机 GUI · B 产品裁定 · C 可代做 · D 真机验收**，并规定「只写未做、不写卡点」视为不合格汇报；`43` §0 顶部与 `docs/design/README.md` 同步索引 | 用户问「未完成的需求为什么没符合？你不能符合吗」，并担心上一轮说过的家长模式方案没落地。查后确认：D7 代码已在工作区但**未提交**（29 个文件未入库），本轮提交并补一份可查的卡点说明 |
+

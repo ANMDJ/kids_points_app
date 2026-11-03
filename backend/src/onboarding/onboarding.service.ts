@@ -98,7 +98,8 @@ export class OnboardingService {
       })
     }
 
-    // 第⑥步可跳过；但只要传了就必须是 4–6 位数字。
+    // 第⑥步：双端客户端自 2026-11-03 起必填（`43` §8 D7），但服务端仍允许省略 ——
+    // 那是**旧版本装机客户端**的路径，不是新客户端可以走的；只要传了就必须是 4–6 位数字。
     // ★ 这里再判一次（DTO 已判）：service 是唯一业务判据，将来非 HTTP 入口也走这里。
     if (dto.parentPin !== undefined && !isPinFormatValid(dto.parentPin)) {
       throw new BadRequestException({

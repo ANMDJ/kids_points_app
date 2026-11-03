@@ -66,7 +66,6 @@ export default function Onboarding() {
   const [focus, setFocus] = useState<string[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [pin, setPin] = useState('')
-  const [pinSet, setPinSet] = useState(false)
   const [ready, setReady] = useState(false)
 
   // 首帧之后：拉一次完整状态（可能是从「我的」进来的，闸门没拉过）+ 同意状态。
@@ -103,10 +102,11 @@ export default function Onboarding() {
   const footerLabel = useMemo(() => {
     if (step === 0) return granted ? '开始设置' : '同意并开始'
     if (step === 4) return `就是这几条（${selected.length}）`
-    if (step === 5) return pin.trim() === '' ? '跳过并完成' : '完成引导'
+    // PIN 必填（2026-11-03，`43` §8 D7）：没有「跳过并完成」这个状态。
+    if (step === 5) return '完成引导'
     if (step === 6) return '开始打卡'
     return '下一步'
-  }, [step, granted, selected.length, pin])
+  }, [step, granted, selected.length])
 
   /** 承载「在途 → 成功 / 失败」三段：失败留在原地。 */
   const run = async (
@@ -214,8 +214,17 @@ export default function Onboarding() {
 
     if (step === 5) {
       const trimmedPin = pin.trim()
-      if (trimmedPin !== '' && !/^\d{4,6}$/.test(trimmedPin)) {
-        setError('家长 PIN 必须是 4–6 位数字；不想设置就留空。')
+      // ★ PIN 必填（2026-11-03，`43` §8 D7）：网站码注册拿到的家长权限只有
+      //   5 分钟，跳过 PIN 的人窗口一过就回落 `child` —— 那时既进不了家长模式，
+      //   也没权限补设（`manage_parent_pin` 对孩子 DENY）。所以这里不再放行空串。
+      if (trimmedPin === '') {
+        setError(
+          '请设置家长 PIN（4–6 位数字）。引导期的家长权限只有 5 分钟，没有 PIN 之后就进不了家长模式。'
+        )
+        return
+      }
+      if (!/^\d{4,6}$/.test(trimmedPin)) {
+        setError('家长 PIN 必须是 4–6 位数字。')
         return
       }
       const ordered = FOCUS_AREA_OPTIONS.filter((area) => focus.includes(area))
@@ -225,11 +234,9 @@ export default function Onboarding() {
             templateSlugs: selected,
             ageBand,
             focusAreas: [...ordered],
-            // 空串 ⇒ 跳过；绝不把 "" 发出去（后端 DTO 会 400）。
-            ...(trimmedPin === '' ? {} : { parentPin: trimmedPin })
+            parentPin: trimmedPin
           }),
         () => {
-          setPinSet(trimmedPin !== '')
           setStep(6)
         }
       )
@@ -525,11 +532,12 @@ export default function Onboarding() {
                   setPin(value.replace(/\D/g, '').slice(0, 6))
                   if (error !== null) setError(null)
                 }}
-                hint='可不填'
+                hint='4–6 位数字'
                 digit
               />
               <Text className='kp-onboarding__hint-block'>
-                保留 PIN 是为了在「切到家长模式」时确认身份。现在留空也可以，之后在设置里补；只是在那之前，切家长模式会要求先设置 PIN。
+                这一步必须设置。切到「家长模式」要用它确认身份；而引导期的家长权限只有 5
+                分钟，现在不设，之后再想补就得先退出登录、用手机号/密码重新登录。
               </Text>
             </>
           ) : null}
@@ -575,12 +583,6 @@ export default function Onboarding() {
                   {`这些约定没有加入「今天的习惯」：${store.lastOnboardingManualTitles.join(
                     '、'
                   )}。扣分约定本来就不该作为孩子的打卡项；其余可在「积分规则」页手动加入。`}
-                </Text>
-              ) : null}
-
-              {!pinSet ? (
-                <Text className='kp-onboarding__warn-block'>
-                  本次没有设置家长 PIN。切到家长模式前，需要先在设置里设置。
                 </Text>
               ) : null}
             </>

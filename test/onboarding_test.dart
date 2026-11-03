@@ -585,6 +585,26 @@ void main() {
       expect(validateParentPin('12a4'), isNotNull);
     });
 
+    // 2026-11-03 / `43` §8 D7：引导第⑥步改成必填，但**不改**上面那条判据 ——
+    // 家长模式面板与旧客户端的「省略」路径都还依赖「空串 = 没填」。
+    test('引导第⑥步：PIN 必填，空串不再等于「跳过」', () {
+      expect(validateRequiredParentPin(''), isNotNull);
+      expect(validateRequiredParentPin('   '), isNotNull);
+      expect(validateRequiredParentPin('123'), isNotNull);
+      expect(validateRequiredParentPin('1234567'), isNotNull);
+      expect(validateRequiredParentPin('12a4'), isNotNull);
+      expect(validateRequiredParentPin('1234'), isNull);
+      expect(validateRequiredParentPin('123456'), isNull);
+    });
+
+    test('引导第⑥步：空串的文案要说清「为什么不能跳过」（不是一句「请填写」）', () {
+      final String? empty = validateRequiredParentPin('');
+      expect(empty, contains('5 分钟'));
+      expect(empty, contains('家长模式'));
+      // 两条判据互不影响：面板里「空输入」仍然是「没填」，不是「格式错」。
+      expect(validateParentPin(''), isNull);
+    });
+
     test('模板文案由结构字段派生（不再拼字符串反解析）', () {
       const RuleTemplate template = RuleTemplate(
         slug: 'tidy-desk',

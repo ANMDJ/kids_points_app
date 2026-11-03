@@ -274,4 +274,34 @@ String? validateParentPin(String raw) {
   return null;
 }
 
+/// 引导第⑥步的**必填**判据（2026-11-03，`43` §8 D7 裁定）。
+///
+/// ── 为什么另开一个函数，而不是改 [validateParentPin] ──────────────────────────
+///   [validateParentPin] 的口径是「空串 = 跳过」：它同时服务
+///   `ParentModeSheet`（输入框为空要说「请输入家长 PIN」，不是「格式错」）与
+///   `POST /onboarding/complete` 的省略分支（旧版本装机的客户端仍会跳过）。
+///   把它改成必填，会把面板的空输入变成一句「格式错误」，也会让旧客户端
+///   永远提交不出请求 —— 两处都是回归。
+///   引导页当前只有一个调用方，所以必填口径只写在下面这一个函数里。
+///
+/// ── 为什么必须必填（不是偏好）────────────────────────────────────────────────
+///   用网站码注册 → 建孩子档案 ⇒ 服务端只发**5 分钟**家长窗口
+///   （`backend/src/identity/identity.prisma.repository.ts` 写
+///   `expiresAt = now + PARENT_MODE_TTL_MS`）。跳过 PIN 的人 5 分钟一到就回落
+///   `child`：既进不了家长模式，也没有权限在本机补设 PIN
+///   （`manage_parent_pin` 对孩子是 DENY），而唯一的自助出口是「退出登录 →
+///   用手机号/密码重新登录」（那时才是 30 天家长会话）。把一次设置挪到 5 分钟
+///   之后、还要家长知道密码，是一道没人会走的门。
+String? validateRequiredParentPin(String raw) {
+  final String pin = raw.trim();
+  if (pin.isEmpty) {
+    return '请设置家长 PIN（4–6 位数字）。引导期的家长权限只有 5 分钟，'
+        '没有 PIN 之后就进不了家长模式。';
+  }
+  if (!RegExp(r'^\d{4,6}$').hasMatch(pin)) {
+    return '家长 PIN 必须是 4–6 位数字。';
+  }
+  return null;
+}
+
 

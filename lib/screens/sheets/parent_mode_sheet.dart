@@ -9,17 +9,30 @@ import '../../models/onboarding.dart' show validateParentPin;
 import '../../theme/app_colors.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/sheet_frame.dart';
+import '../session_actions.dart';
 
 /// 打开「家长模式」面板（W8-C）—— 入口固定在「我的」页。
 Future<void> showParentModeSheet(BuildContext context) async {
   final AppStore store = AppScope.of(context);
   final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+  // D7（2026-11-03）：引导期跳过 PIN 的存量账号 5 分钟后会卡在
+  // 「没有 PIN ⇒ 进不去家长模式 ⇒ 也没权限设 PIN」。唯一能走的路是重新登录，
+  // 而「退出登录」只有 `AccountGate` 那一份实现 —— 在这里**借**它，不另写一份。
+  // `null`（预览 / 未登录）⇒ 面板不画那个按钮。
+  // 用 `findAncestorWidgetOfExactType`（而不是 `maybeOf` 的 `dependOnInherited…`）：
+  // 这里在回调里读一次就完事，不该在「我的」页上注册一条重建依赖。
+  final Future<void> Function()? signOut =
+      context.findAncestorWidgetOfExactType<SessionActions>()?.signOut;
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (BuildContext sheetContext) {
-      return ParentModeSheet(store: store, messenger: messenger);
+      return ParentModeSheet(
+        store: store,
+        messenger: messenger,
+        signOut: signOut,
+      );
     },
   );
 }
@@ -38,10 +51,23 @@ Future<void> showParentModeSheet(BuildContext context) async {
 ///   `02` §7：降级永远允许。孩子正拿着手机时，家长必须能立刻收回权限；
 ///   给"退出"加一道 PIN 等于把权限锁在家长模式里。
 class ParentModeSheet extends StatefulWidget {
-  const ParentModeSheet({super.key, required this.store, required this.messenger});
+  const ParentModeSheet({
+    super.key,
+    required this.store,
+    required this.messenger,
+    this.signOut,
+  });
 
   final AppStore store;
   final ScaffoldMessengerState messenger;
+
+  /// 「退出登录」——由 `showParentModeSheet()` 从 [SessionActions] 借来
+  /// （同一份实现，见 `session_actions.dart` 文件头）。
+  ///
+  /// 只在一种情况下用到：**没有家长 PIN、又不在家长模式**。这是引导期
+  /// 跳过 PIN 的存量账号的绝境（`43` §8 D7）：5 分钟窗口一过就回落 `child`，
+  /// 既进不了家长模式，也没权限补设 PIN。`null` ⇒ 不画这个按钮。
+  final Future<void> Function()? signOut;
 
   @override
   State<ParentModeSheet> createState() => _ParentModeSheetState();
@@ -164,17 +190,26 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
           '这台设备已经有家长权限，但这个账号还没有家长 PIN。'
           '设置之后，同一账号在「孩子拿着手机」时也能凭 PIN 临时切回家长模式。',
         ),
+      // ★ 这一条以前写的是「请先用家长账号进入一次家长模式，再在下面设置」——
+      //   对引导期跳过 PIN 的账号**不可执行**：5 分钟窗口一过就回落 child，
+      //   而进家长模式本身就要 PIN（`43` §8 D7）。现在把唯一能走的路写出来，
+      //   并在下面给一个按钮（`_childModeRows`），不做「请去别处」的空提示。
       if (known && !parentMode && !store.isParentPinConfigured)
         _hint(
-          '这个账号还没有家长 PIN。孩子模式的会话没有设置权限 —— '
-          '请先用家长账号进入一次家长模式，再在下面设置。',
+          '这个账号还没有家长 PIN，而现在不是家长模式 —— 设置 PIN 需要家长权限。'
+          '引导期的 5 分钟家长权限已经到期，只能这样补：退出登录 → '
+          '用申请时的手机号/密码重新登录 → 再回到这里设置。',
           danger: true,
         ),
     ];
   }
 
-  /// 不在家长模式时：PIN 输入框。
+  /// 不在家长模式时：PIN 输入框（＋「没有 PIN」时的唯一自助出口）。
   List<Widget> _childModeRows(DateTime now, bool locked) {
+    final AppStore store = widget.store;
+    // `parentMode != null` ⇒ 状态已知，才敢判断「这个账号真的没有 PIN」。
+    final bool stuckWithoutPin =
+        store.parentMode != null && !store.isParentPinConfigured;
     return <Widget>[
       const SizedBox(height: 4),
       TextField(
@@ -196,6 +231,19 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
           _enter();
         },
       ),
+      // 没有 PIN 且不在家长模式 ⇒ 上面那行提示说的最后一步必须真的能点。
+      // 只有拿到 `signOut` 时才画（预览 / 未登录画了也没用）。
+      if (stuckWithoutPin && widget.signOut != null) ...<Widget>[
+        const SizedBox(height: 2),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _busy ? null : _signOutAndReLogin,
+            icon: const Icon(Icons.logout_rounded, size: 18),
+            label: const Text('退出登录，用手机号/密码重新登录'),
+          ),
+        ),
+      ],
     ];
   }
 
@@ -356,6 +404,28 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
       _error = failure;
     });
     if (failure == null) _toast('已退出家长模式');
+  }
+
+  /// 存量账号的唯一自助出口（`43` §8 D7）：退出登录，让家长用手机号/密码重登。
+  ///
+  /// ── 为什么不是「就在这里设 PIN」──────────────────────────────────────────────
+  ///   `POST /auth/parent-pin` 要 `manage_parent_pin`，而矩阵里孩子是 DENY。
+  ///   引导期跳过 PIN 的账号在 5 分钟窗口过后就是 `child`，本机没有任何办法
+  ///   提升权限 —— 只有重新登录（登录签发的是 30 天家长会话）。
+  ///
+  /// ── 为什么先关面板再退出 ────────────────────────────────────────────────────
+  ///   退出后 `AccountGate` 会把整棵子树换成登录页，这个面板已经不在树上；
+  ///   留在面板里等 `signOut()` 只会对着一个卸载后的 context 报错。
+  Future<void> _signOutAndReLogin() async {
+    final Future<void> Function()? signOut = widget.signOut;
+    if (signOut == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final NavigatorState navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+    await signOut();
   }
 
   Future<void> _savePin() async {

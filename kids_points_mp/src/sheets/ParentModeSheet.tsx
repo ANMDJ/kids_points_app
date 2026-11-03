@@ -139,8 +139,13 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
         : null}
       {known && !parentMode && !store.isParentPinConfigured
         ? hint(
-            '这个账号还没有家长 PIN。孩子模式的会话没有设置权限 —— ' +
-              '请先用家长账号进入一次家长模式，再在下面设置。',
+            // ★ 旧文案是「请先用家长账号进入一次家长模式，再在下面设置」——
+            //   对引导期跳过 PIN 的账号**不可执行**：5 分钟窗口一过就回落 child，
+            //   而进家长模式本身就要 PIN（`43` §8 D7）。这里写唯一能走的那条路：
+            //   「我的」页有「退出登录」，用手机号/密码重登后是 30 天家长会话。
+            '这个账号还没有家长 PIN，而现在不是家长模式 —— 设置 PIN 需要家长权限。' +
+              '引导期的 5 分钟家长权限已经到期，只能这样补：回到「我的」页点「退出登录」，' +
+              '用申请时的手机号/密码重新登录，再回到这里设置。',
             true
           )
         : null}

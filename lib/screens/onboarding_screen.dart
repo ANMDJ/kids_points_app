@@ -75,10 +75,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // 第⑥步
   late final TextEditingController _pinController;
 
-  /// 第⑦步要显示「是否设了 PIN」—— 只记本次是否提交了 PIN，不缓存服务端状态
-  /// （服务端只存哈希，客户端本来也读不回来）。
-  bool _pinSet = false;
-
   /// 每一步的标题 / 副标题（与 `04` §2 的七个步骤逐条对应）。
   static const List<String> _titles = <String>[
     '把约定变成看得见的成长',
@@ -368,9 +364,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   /// 第⑥步：完成引导（`POST /onboarding/complete`，非幂等，只调一次）。
+  ///
+  /// ★ PIN **必填**（2026-11-03，`43` §8 D7）：判据在
+  ///   `validateRequiredParentPin()` 一处，本地不通过就**不发请求**。
+  ///   放行空串等于让这个账号在 5 分钟后失去补设 PIN 的权限（见该函数注释）。
   Future<void> _complete(AppStore store) async {
     final String pin = _pinController.text.trim();
-    final String? invalid = validateParentPin(pin);
+    final String? invalid = validateRequiredParentPin(pin);
     if (invalid != null) {
       setState(() => _error = invalid);
       return;
@@ -382,11 +382,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         templateSlugs: _selectedSlugs.toList(growable: false),
         ageBand: _ageBand,
         focusAreas: selected,
-        // 空串 ⇒ 跳过第⑥步；**绝不**把 "" 发出去（后端 DTO 会 400）。
-        parentPin: pin.isEmpty ? null : pin,
+        // 必填之后这里永远是 4–6 位数字；`null` 分支只留给旧版本客户端。
+        parentPin: pin,
       ),
       onSuccess: () => setState(() {
-        _pinSet = pin.isNotEmpty;
         _step = 6;
       }),
     );
@@ -663,7 +662,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         label = '就是这几条（${_selectedSlugs.length}）';
         break;
       case 5:
-        label = _pinController.text.trim().isEmpty ? '跳过并完成' : '完成引导';
+        // PIN 必填（2026-11-03，`43` §8 D7）：没有「跳过并完成」这个状态 ——
+        // 按钮文案不再随输入框变化，否则家长会以为留空是受支持的。
+        label = '完成引导';
         break;
       case 6:
         label = '开始打卡';
@@ -994,10 +995,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  /// 第⑥步：家长 PIN（可跳过）。
+  /// 第⑥步：家长 PIN（**必填**，2026-11-03 / `43` §8 D7）。
   ///
-  /// ★ 必须说清「不设 PIN 的后果」：`02` §7 的家长模式需要 PIN；
-  ///   跳过不影响引导完成（`04` §2），但切家长模式时会被要求先设置。
+  /// ★ 必须说清「为什么不能跳过」：`02` §7 的家长模式要凭 PIN 进入，而用网站码
+  ///   注册 + 建孩子只发 **5 分钟**家长窗口（`POST /children` 写
+  ///   `now + PARENT_MODE_TTL_MS`）。窗口一过就回落 `child`，那时既进不了家长模式，
+  ///   也没有权限补设 PIN（`manage_parent_pin` 对孩子 DENY）—— 只剩「退出登录 →
+  ///   用手机号/密码重新登录」一条路。把这件事写在输入框下面，家长才知道为什么
+  ///   这一屏不能空着过。
   Widget _stepPin() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1012,7 +1017,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             LengthLimitingTextInputFormatter(6),
           ],
           onChanged: (_) {
-            // 底部按钮文案随「是否填了 PIN」变化（完成 / 跳过并完成）。
+            // 只清错误；底部按钮文案固定是「完成引导」（必填，没有跳过态）。
             if (_error != null) setState(() => _error = null);
           },
           style: const TextStyle(
@@ -1021,7 +1026,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             color: AppColors.textPrimary,
           ),
           decoration: InputDecoration(
-            hintText: '可不填',
+            hintText: '4–6 位数字',
             hintStyle: const TextStyle(
               fontSize: 13.5,
               letterSpacing: 0,
@@ -1047,8 +1052,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
         const SizedBox(height: 10),
         const Text(
-          '保留 PIN 是为了在「切到家长模式」时确认身份。现在留空也可以，'
-          '之后在设置里补；只是在那之前，切家长模式会要求先设置 PIN。',
+          '这一步必须设置。切到「家长模式」要用它确认身份；而引导期的家长权限只有 5 分钟，'
+          '现在不设，之后再想补就得先退出登录、用手机号/密码重新登录。',
           style: TextStyle(
             fontSize: 11.5,
             height: 1.6,
@@ -1149,17 +1154,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               fontSize: 11.5,
               height: 1.6,
               color: AppColors.textHint,
-            ),
-          ),
-        ],
-        if (!_pinSet) ...<Widget>[
-          const SizedBox(height: 12),
-          const Text(
-            '本次没有设置家长 PIN。切到家长模式前，需要先在设置里设置。',
-            style: TextStyle(
-              fontSize: 11.5,
-              height: 1.6,
-              color: AppColors.pointSpend,
             ),
           ),
         ],

@@ -21,6 +21,11 @@
 >
 > 证据列标注 **「本轮复核」**＝2026-11-03 用命令/代码实际查过；标注 **「未复核」**＝沿用
 > 2026-11-02 快照（§3–§6），没有重新验证，汇报时必须照实写。
+>
+> ★ **每条「未做」都要能回答「卡在哪一类」**（2026-11-03 新增）：A 要你的凭据/本机 GUI ·
+> B 要产品裁定 · C 我能直接做但没排期 · D 只能真机/真库验收。逐条归属与解锁条件见
+> [`50-unfinished-reasons-and-unblock.md`](./50-unfinished-reasons-and-unblock.md)。
+> 只写「未做」不写卡点 = 下次会话仍然不知道能不能推进。
 
 | 编号 | 任务 | 现状 | 证据 |
 |---|---|---|---|
@@ -32,6 +37,8 @@
 | **注册一致（小程序）** | 小程序注册页补本地密码校验 ＋ 完整要求文案（App 2026-11-03 已做） | ✅ **已完成（2026-11-03）** | 本轮复核：新增 `kids_points_mp/src/utils/password_rules.ts`（服务端规则镜像）；`pages/register/index.tsx` 提交前判强度 + 密码框下**常驻**要求文案；`sheets/AppAccountSheet.tsx` 的「设置/修改密码」同样走它（原来只查长度，`密码最多 64 位。` 与服务端文案本就漂移）；新增守门脚本 `tools/password-rules-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run password:check` 与 `npm run ci` |
 | **P0-4** | 数据库备份 ＋ 一次恢复演练 | ✅ **已完成（2026-11-03）** | 本轮复核（真机执行）：`deploy/backup-kids-db.sh` → 装到 `/usr/local/bin/kids-backup.sh`，root crontab `17 3 * * *`（保留 14 天）；实跑 `OK 备份完成 …/kids_points_2026-11-03_1226.sql.gz（10000 字节）`＋`OK 恢复演练：restore_test 恢复出 24 张表，PointRecord=0（与线上一致）`＋临时库已删。**仍未做**：备份离开本机（要 COS 密钥）、失败告警（同 P0-5 外部通道） |
 | **P0-5** | 探活 / 告警（`GET /health`、compose `healthcheck`） | 🟡 **代码侧 ＋ 自愈已上线（2026-11-03）**，告警通道仍缺 | 本轮复核（线上实测）：`https://hub.littlewish.top:8443/kids/health` → `200 {"status":"ok",…}`；`/kids/health/ready` → `200 {"checks":{"database":{"status":"up","latencyMs":1}}}`；`/k/health` 同 200（`/k` 段已恢复）；容器 `Up 19 seconds (healthy)`；root crontab 已装 `*/5 * * * * /usr/local/bin/kids-watchdog.sh`。**仍未做**：① 外部告警通道（要 webhook）；② uptime 监控（外部探针，整机挂了 watchdog 也一起挂） |
+| **家长模式（引导期 5 分钟窗口）** | 用**网站码**注册并建孩子档案后，家长权限只有 **5 分钟**；到期回落 `child`（不是退出登录） | ✅ **已按 D7 默认建议落地（2026-11-03）** | 本轮复核（行为）：`backend/src/identity/identity.prisma.repository.ts:321-330`（`POST /children` 写 `activeRole='guardian'` ＋ `expiresAt=parentModeUntil`＝5 分钟）；`backend/src/device-session/session.gate.ts:117-131`（`guardian` 且过期 ⇒ **回落 `child`**，不是 401）；`backend/src/auth/parent-mode.policy.ts:27-28`（`PARENT_MODE_TTL_MS=5min`）。**另一条路**：用**家庭邀请码（guardian）**注册 ⇒ `identity/invite-registration.prisma.repository.ts:108-124` 写 30 天家长会话，不受 5 分钟限制。**本轮已做**：① 双端引导第⑥步 PIN 改**必填**（`lib/models/onboarding.dart#validateRequiredParentPin()`、`kids_points_mp/src/pages/onboarding/index.tsx` 的 `step === 5`；按钮固定「完成引导」，留空即本地红字、零请求）；② **存量**「跳过 PIN」的账号在面板里有**可点的出口**（App `parent_mode_sheet.dart` 的「退出登录，用手机号/密码重新登录」，借闸门那一份 `SessionActions.signOut`；小程序文案指向「我的」页那条带二次确认的退出）；③ 服务端 `parentPin` 仍可省略，**只为旧版本装机包**保留（`complete-onboarding.dto.ts` 注释已写清）。证据 = `flutter test` **500 全通过**（新增 3：`test/onboarding_test.dart` 必填判据 2 条 ＋ `test/parent_mode_test.dart` 面板 widget 1 条）、`flutter analyze` **0 issue**、小程序 `tsc` **EXIT=0**、后端 `typecheck` **0 error**；详见 `49-bootstrap-guardian-window-pin.md`。**仍未做**：真机走查（新账号留空必须被拦；存量账号「退出 → 重登 → 设 PIN」全路径）、小程序上传 / 新 APK |
+| **P0-4 外发备份 / P0-5 外部告警** | 备份只落在本机；探活没有外部告警 | **未做**（要两样外部凭据） | 本轮复核：`deploy/backup-kids-db.sh` 的备份留在 `/var/backups/kids_points`（同一台机器），失败只写日志；`/kids/health` 只回答 HTTP，进程/整机挂了没有外部通道喊人。**P0-4 要的 “COS 密钥” = 腾讯云对象存储（Tencent Cloud Object Storage）**：把每日 `pg_dump` 的 `.sql.gz` 传到**另一台机器/另一个盘**，避免「服务器磁盘坏 = 家庭账本全丢」。只需要**一个桶的写权限**（子账号 SecretId/SecretKey ＋ 桶名 ＋ 地域），**不是**账号主密钥；**P0-5 只要求一个 webhook URL**（企业微信 / 钉钉 / Telegram 均可）。两项都**不影响 App 现有功能**，只决定「出事能不能恢复 / 出事有没有人知道」 |
 | **P0-6** | 法务文本定稿 ＋ 双端协议全文页 | **未做**（等法务，L5） | 用户 2026-11-03 明确：「法律文案这不用你管，到时候我就更新了」⇒ 本项**不由开发侧推进**；双端协议全文页（可点开的页面）仍缺，属工程侧可做部分，未开工（未复核） |
 | **P0-7** | pg18 网络附加自愈（`docker network connect` 是运行时状态） | ✅ **已完成（2026-11-03）** | 本轮复核（线上）：`deploy/ensure-kids-pg-network.sh` → `/usr/local/bin/kids-pg-network.sh`，root crontab `*/10 * * * *`；实跑 `run_exit=0`（当前已连接，静默退出）；`docker inspect pg18` 的 Networks 里确有 `deploy_default`。**仍未做**：把 pg18 搬进 compose（要动 hub 编排） |
 | **P1-1** | 推送落地（厂商 SDK / 小程序订阅消息） | **未做** | 本轮复核：`requestSubscribeMessage` 全仓只在 `43`/`design/README` 被**讨论**，`kids_points_mp/src/**` 0 命中 |
@@ -66,7 +73,17 @@ P1-8 邀请制注册（W11-A，`45`）· 网站发码 ＋ `/invite` 页面（W12
 **注册页本地密码校验 ＋ 要求文案**（2026-11-03：`lib/data/password_rules.dart` 镜像
 `validatePasswordStrength()`，`auth_api.dart` 的注册 / 改密也走同一份；注册页密码框下常驻
 「8–64 位、至少含一个字母…」；证据 = `test/password_rules_test.dart` **9 条**（含读后端 TS 的
-同源钉住）＋ `test/invite_register_test.dart` 新增「弱密码 ⇒ 本地提示、零请求」）。
+同源钉住）＋ `test/invite_register_test.dart` 新增「弱密码 ⇒ 本地提示、零请求」）·
+**「我的 → 立即锁定入口」已按用户要求移除**（2026-11-03：`lib/screens/profile_screen.dart` 不再渲染该行；
+`AppStore.lockDateCodeGate()` 仅留给诊断/用例，生产 0 调用方；重开 App 仍会重新上锁）·
+**「记一笔」不再被全局只读误拦**（2026-11-03：首页判据由 `store.isReadOnly`（`live ⇒ true`）改为
+`store.isAdjustReadOnly`（仅 live 且无写客户端）；证据 = `test/read_api_test.dart` 更新 +
+`test/write_api_test.dart` 新增「live 首页点记一笔打开弹层」）·
+**孩子新增心愿会真的落审批单**（2026-11-03：`submitAddWish` 收到 403 `APPROVAL_REQUIRED` 后调用
+`POST /approvals`（action=`add_wish`），返回 `pendingApproval` 而不是只说「需要家长确认」；
+App `lib/data/write_api.dart` ＋ 小程序 `src/data/write_api.ts` 双端同构；证据 =
+`test/write_api_test.dart` 新增 4 条（含「成员级 DENY 不得改走审批」）＋
+`kids_points_mp/.tmp_test/run-w5c.mjs` 同步改 3 条）。
 
 ### 0.1 「发布」到底卡在哪（2026-11-03 实测，别再靠印象）
 
@@ -566,7 +583,7 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
 
 ---
 
-## 8. 需要产品/运维裁定的 6 件事（**不裁定就别开工**）
+## 8. 需要产品/运维裁定的 7 件事（**不裁定就别开工**）
 
 | 编号 | 问题 | 为什么必须先定 | 默认建议 |
 |---|---|---|---|
@@ -576,6 +593,7 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
 | D4 | 回收站到期是「自动彻底删除」还是「只标记」 | 决定 P1-2 的数据风险 | 先归档到 `deletedAt` 90 天后**软删转硬删**，但保留审计摘要；不要无声抹掉 |
 | D5 | 是否坚持「零第三方依赖」 | 决定 P1-9（token 持久化）与 P1-1（推送 SDK）能不能做 | 推送必须破例；token 持久化跟着一起换，别分两次 |
 | D6 | 习惯能否独立于规则存在；头像是否做上传 | 决定 P1-4 与 P1-5 的接口形状与迁移 | 习惯允许独立（`Habit` 已是独立表）；头像先做预设、不做上传 |
+| D7 | 引导期的「5 分钟家长窗口」：跳过 PIN 的账号要不要一条自助补设通道 | 决定引导第⑥步是否改成**必填**，以及面板文案能不能执行。旧客户端跳过 PIN ⇒ 5 分钟后既进不了家长模式，也无法补设（旧文案「请先用家长账号进入一次家长模式」不可执行） | ✅ **2026-11-03 已按默认方案落地**（见 `49`）：引导第⑥步双端 PIN **必填**；存量无 PIN 账号在面板给「退出登录 → 用手机号/密码重新登录」；权限矩阵不动 |
 
 ---
 

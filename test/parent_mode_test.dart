@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kids_points_app/data/app_scope.dart';
 import 'package:kids_points_app/data/app_store.dart';
 import 'package:kids_points_app/data/parent_mode_api.dart';
 import 'package:kids_points_app/data/parent_mode_dto.dart';
@@ -8,6 +10,7 @@ import 'package:kids_points_app/data/read_api.dart';
 import 'package:kids_points_app/data/read_api_errors.dart';
 import 'package:kids_points_app/data/write_api.dart';
 import 'package:kids_points_app/data/write_api_errors.dart';
+import 'package:kids_points_app/screens/sheets/parent_mode_sheet.dart';
 
 /// W8-C：家长模式 ＋ 家长 PIN（Flutter 侧）。
 ///
@@ -697,6 +700,66 @@ void main() {
       store.dispose();
 
       expect(api.closed, isTrue);
+    });
+  });
+
+  // `43` §8 D7（2026-11-03）：引导期跳过 PIN 的存量账号在 5 分钟窗口过期后，
+  // 「没有 PIN ⇒ 进不了家长模式 ⇒ 也没权限设 PIN」。面板原来写的是
+  // 「请先用家长账号进入一次家长模式」—— 一句做不到的话。这里钉两件事：
+  //   ① 文案说清「退出登录 → 用手机号/密码重登」这条路；
+  //   ② 那个出口真的可点，并且调用的是闸门那一份 `signOut`。
+  group('ParentModeSheet：没有 PIN 时的出口必须可执行（D7）', () {
+    testWidgets('不在家长模式 + 没有 PIN ⇒ 显示原因与「退出登录」按钮，点了就退出', (
+      WidgetTester tester,
+    ) async {
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: ParentModeDto.fromJson(
+          // `remainingAttempts` 未锁定时只能是 1–5（DTO 会判 malformed），用默认 5。
+          modeJson(pinConfigured: false),
+          r'$',
+        ),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+
+      int signOuts = 0;
+      await tester.pumpWidget(
+        AppScope(
+          store: store,
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (BuildContext context) => ParentModeSheet(
+                  store: store,
+                  messenger: ScaffoldMessenger.of(context),
+                  signOut: () async {
+                    signOuts++;
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      // 首帧的 postFrame 回调发起 `refreshParentMode`；快照落地后**不会**自动重绘 ——
+      // 这个面板读的是传进来的 `store`（不走 `AppScope.of`），靠自己每秒的 ticker
+      // `setState` 才刷新。所以这里要推 1 秒，而不是多 pump 几次。
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(api.fetchCalls, 1);
+      expect(
+        find.textContaining('引导期的 5 分钟家长权限已经到期'),
+        findsOneWidget,
+      );
+      expect(find.text('退出登录，用手机号/密码重新登录'), findsOneWidget);
+
+      await tester.tap(find.text('退出登录，用手机号/密码重新登录'));
+      await tester.pump();
+      expect(signOuts, 1);
+
+      // 卸掉组件 ⇒ 面板里每秒重绘的 Timer 被取消（测试结束不允许残留 timer）。
+      await tester.pumpWidget(const SizedBox.shrink());
     });
   });
 }
