@@ -14,7 +14,7 @@
 
 ---
 
-## 0. 当前未开发任务（会话收尾必报 · 复核 2026-11-03）
+## 0. 当前未开发任务（会话收尾必报 · 复核 2026-11-04）
 
 > 本表是**「还没做什么」的唯一口径**，由 [`AGENTS.md`](../../AGENTS.md) §2 要求每次会话结束时汇报。
 > 每完成一条：在这里划掉或移到最下面的「已完成」，并写**日期 + 证据**；不要只改代码不改这张表。
@@ -33,7 +33,7 @@
 | **P0-2b** | App 内「登录账号」面板：绑定/换绑手机号邮箱、设置/修改密码（`PUT /auth/account`） | ✅ **已完成（2026-11-03）** | 本轮复核：`lib/data/auth_api.dart` 新增 `fetchAccount()`（`GET /auth/account`）；`lib/screens/sheets/account_sheet.dart`（先读再画、只提交改动过的字段、`403 CURRENT_PASSWORD_INVALID` 留在本页）；入口 = 「我的」页「登录账号」（`profile_screen.dart`），`SessionActions` 带上同一份 `AuthApi`（同一 holder，401 才会真的清 token）；证据 = `test/account_sheet_test.dart` **6 条** |
 | **P0-3** | 「已有账号 → 输入邀请码加入家庭」（`POST /invites/accept`）双端入口 | ✅ **已完成（2026-11-03，双端）** | 本轮复核：**App** —— `lib/data/identity_api.dart` 新增 `acceptInvite()`（`POST /invites/accept`，回包复用 `ChildSessionResult`）；新增 `lib/screens/family_join_actions.dart`（动作只有一份），`account_gate.dart` 的 `_joinFamily` 走完 accept → `SessionScope.adoptChild` → `onIdentityChanged`；`lib/screens/sheets/join_family_sheet.dart` + 「我的 → 加入家庭」（`profile_screen.dart`）；`write_api_errors.dart` 补 `ALREADY_MEMBER` 取服务端原文。**小程序** —— `kids_points_mp/src/utils/invite_code.ts`、`write_dto.ts` 的 `InviteAcceptDto`、`write_api.ts` 的 `acceptInvite()`（带 `x-kp-child-id`）、`store.ts` 的 `submitAcceptInvite()`（切换 `sharedDeviceContext` + 清上一个家庭缓存 + 拉新首页）、`sheets/JoinFamilySheet.tsx` + 「我的」入口；`write_api_errors.ts` 补 400 `INVITE_CODE_MALFORMED` / 409 `INVITE_CODE_UNAVAILABLE` / `ALREADY_MEMBER`。**守门** —— 新增 `tools/invite-code-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run invite:check` 与 `npm run ci`。**证据**：`flutter test` **492 全通过**（新增 `test/join_family_test.dart` **9 条**）、`flutter analyze` **0 issue**、`kids_points_mp` `tsc --noEmit` **0 error**、`backend npm run typecheck` **0 error**、`node tools/invite-code-check.mjs` **PASS**。**仍未做**：真机 / 真库走一次「A 生成 → B 接受 → B 能读」的端到端验收（本环境无 GUI，见 §9） |
 | **签名** | App release 包用的是 **debug 签名** | **未做**（要你决定 keystore 的保管与口令） | 本轮复核：`android/app/build.gradle.kts:34-36` —— `TODO: Add your own signing config` ＋ `signingConfig = signingConfigs.getByName("debug")`。后果：任何人都能用公开的 debug key 给同一包名签「更新」；换正式密钥又必须卸载重装 |
-| **注册闭环** | 真机用**网站码**走完一次注册（含用户 2026-11-03 报的那次 400 的真实原因） | **验收未完成** | 本轮复核（2026-11-03 二次发版）：线上 `GET /k/app/version` → **`1.0.4 / build 5`**（`pubspec.yaml` / `lib/app_version.dart` / `kids.env` 三处一致，APK `Content-Length: 52578938`）；线上探针三种拒绝的形状都对 —— 码形状错 `400 INVITE_CODE_MALFORMED`、码不存在 `409 INVITE_CODE_UNAVAILABLE`、弱口令 `400 WEAK_PASSWORD`。**2026-11-03 已做**：① `write_api_errors.dart` 显示服务端原文；② 注册页本地判密码强度（`lib/data/password_rules.dart`）＋ 密码要求**常驻**文案；③ 标识框下明确「网站码只认申请时填的手机号/邮箱」；④ 「我的 → 登录账号」（可在 App 内改密）。**仍缺**：真机用 1.0.4+5 走完一次**成功**注册；用户那次 400 的具体触发条件仍未取得（需其回报界面文案） |
+| **注册闭环** | 真机用**网站码**走完一次注册（含用户 2026-11-03 报的那次 400 的真实原因） | **验收未完成** | 本轮复核（2026-11-03 二次发版）：线上 `GET /k/app/version` → **`1.0.5 / build 6`**（2026-11-04 发版，`pubspec.yaml` / `lib/app_version.dart` / `kids.env` 三处一致，APK `Content-Length: 52808674`；1.0.4+5 为上一版 `52578938`）；线上探针三种拒绝的形状都对 —— 码形状错 `400 INVITE_CODE_MALFORMED`、码不存在 `409 INVITE_CODE_UNAVAILABLE`、弱口令 `400 WEAK_PASSWORD`。**2026-11-03 已做**：① `write_api_errors.dart` 显示服务端原文；② 注册页本地判密码强度（`lib/data/password_rules.dart`）＋ 密码要求**常驻**文案；③ 标识框下明确「网站码只认申请时填的手机号/邮箱」；④ 「我的 → 登录账号」（可在 App 内改密）。**仍缺**：真机用 1.0.5+6 走完一次**成功**注册；用户那次 400 的具体触发条件仍未取得（需其回报界面文案） |
 | **注册一致（小程序）** | 小程序注册页补本地密码校验 ＋ 完整要求文案（App 2026-11-03 已做） | ✅ **已完成（2026-11-03）** | 本轮复核：新增 `kids_points_mp/src/utils/password_rules.ts`（服务端规则镜像）；`pages/register/index.tsx` 提交前判强度 + 密码框下**常驻**要求文案；`sheets/AppAccountSheet.tsx` 的「设置/修改密码」同样走它（原来只查长度，`密码最多 64 位。` 与服务端文案本就漂移）；新增守门脚本 `tools/password-rules-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run password:check` 与 `npm run ci` |
 | **P0-4** | 数据库备份 ＋ 一次恢复演练 | ✅ **已完成（2026-11-03）** | 本轮复核（真机执行）：`deploy/backup-kids-db.sh` → 装到 `/usr/local/bin/kids-backup.sh`，root crontab `17 3 * * *`（保留 14 天）；实跑 `OK 备份完成 …/kids_points_2026-11-03_1226.sql.gz（10000 字节）`＋`OK 恢复演练：restore_test 恢复出 24 张表，PointRecord=0（与线上一致）`＋临时库已删。**仍未做**：备份离开本机（要 COS 密钥）、失败告警（同 P0-5 外部通道） |
 | **P0-5** | 探活 / 告警（`GET /health`、compose `healthcheck`） | 🟡 **代码侧 ＋ 自愈已上线（2026-11-03）**，告警通道仍缺 | 本轮复核（线上实测）：`https://hub.littlewish.top:8443/kids/health` → `200 {"status":"ok",…}`；`/kids/health/ready` → `200 {"checks":{"database":{"status":"up","latencyMs":1}}}`；`/k/health` 同 200（`/k` 段已恢复）；容器 `Up 19 seconds (healthy)`；root crontab 已装 `*/5 * * * * /usr/local/bin/kids-watchdog.sh`。**仍未做**：① 外部告警通道（要 webhook）；② uptime 监控（外部探针，整机挂了 watchdog 也一起挂） |
@@ -42,18 +42,18 @@
 | **P0-6** | 法务文本定稿 ＋ 双端协议全文页 | **未做**（等法务，L5） | 用户 2026-11-03 明确：「法律文案这不用你管，到时候我就更新了」⇒ 本项**不由开发侧推进**；双端协议全文页（可点开的页面）仍缺，属工程侧可做部分，未开工（未复核） |
 | **P0-7** | pg18 网络附加自愈（`docker network connect` 是运行时状态） | ✅ **已完成（2026-11-03）** | 本轮复核（线上）：`deploy/ensure-kids-pg-network.sh` → `/usr/local/bin/kids-pg-network.sh`，root crontab `*/10 * * * *`；实跑 `run_exit=0`（当前已连接，静默退出）；`docker inspect pg18` 的 Networks 里确有 `deploy_default`。**仍未做**：把 pg18 搬进 compose（要动 hub 编排） |
 | **P1-1** | 推送落地（厂商 SDK / 小程序订阅消息） | **未做** | 本轮复核：`requestSubscribeMessage` 全仓只在 `43`/`design/README` 被**讨论**，`kids_points_mp/src/**` 0 命中 |
-| **P1-2** | 回收站 90 天到期自动清理 worker | **未做** | 未复核（§4 P1-2） |
-| **P1-3** | 审批详情页 ＋ 通知深链 | **未做** | 未复核（§4 P1-3） |
-| **P1-4** | 习惯独立 CRUD（`POST/PATCH /habits`） | **未做** | 未复核（§4 P1-4） |
-| **P1-5** | 孩子头像（预设 / 上传二选一） | **未做** | 未复核（§4 P1-5） |
+| **P1-2** | 回收站 90 天到期自动清理 worker | **未做**（B 类：D4 裁定） | **本轮复核（2026-11-04，发版时顺手查）**：`backend/src/trash/` 只有手工 `DELETE /trash/:kind/:id`（`trash.controller.ts:67`，`@RequireAction('purge_trash_item')`），**无定时器 / worker**；`deletion.worker.ts` 是「家庭数据删除」，不是回收站到期清理 ⇒ 到期自动清理确实还没开工（不是「跑不了」，是没人排期 ＋ D4 没定） |
+| **P1-3** | 审批详情页 ＋ 通知深链 | **未做**（C 类，可直接开工） | **本轮复核（2026-11-04）**：App 只有收件箱列表 `lib/screens/approvals_screen.dart`（按 `pending/approved/rejected/all` 过滤，卡片只显示结构化 `summary`），`lib/screens/` 下**无详情页文件**；小程序 `kids_points_mp/src/pages/approvals/` 只有 `index.tsx` ＋ `index.scss` ⇒ 详情页与通知深链均未开工 |
+| **P1-4** | 习惯独立 CRUD（`POST/PATCH /habits`） | **未做**（B 类：D6 口径） | **本轮复核（2026-11-04）**：`backend/src/habits/habits.controller.ts` 只有 `POST check-in`（:60）与 `POST :id/reverse`（:97），`habits.lifecycle.controller.ts:50` 只有 `DELETE :id` ⇒ **没有** `POST /habits` / `PATCH /habits/:id`，独立 CRUD 未开工 |
+| **P1-5** | 孩子头像（预设 / 上传二选一） | **未做**（B 类：D6 口径） | **本轮复核（2026-11-04）**：`backend/src/children/dto/update-child-profile.dto.ts:23` 的字段只有 `name`，无 `avatar`；`children` 模块无上传端点 ⇒ 预设头像 / 上传都未开工 |
 | **P1-6** | 加分配额 / 金额阈值限制生效 | **未做** | 本轮复核：`backend/src/permissions/permissions.guard.ts:114` 仍写着「不传 `amount`」，`amount` 在 Guard 里无其他命中 |
 | **P1-7** | 忘记家长 PIN 的重置通道 | **未做** —— ★ 自 W14 起从 P1 变成**硬前置**：孩子模式到期后 PIN 是唯一出口，忘记 PIN = 这台设备停在 child 收不回来（缓解：没设 PIN 不许开孩子模式） | 本轮复核：`backend/src/auth/auth.service.ts` 的 `setParentPin` 注释仍写「没有找回通道」；全仓无 reset 端点 |
-| **P1-9** | App token 持久化（现在 `Directory.systemTemp`，清缓存即掉登录） | **未做**（有意等 P1-1 一起改） | 未复核（§4 P1-9） |
-| **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | **未做** | 未复核（§4 P1-10） |
-| **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **未做**（整张表都在） | 未复核（§5 ＋ `deploy/README.md` §8 P2） |
+| **P1-9** | App token 持久化（现在 `Directory.systemTemp`，清缓存即掉登录） | **未做**（有意等 P1-1 一起改；B 类：D5 口径） | **本轮复核（2026-11-04）**：`lib/data/token_store_io.dart:23` 仍是 `Directory.systemTemp.path`（文件落缓存目录）⇒ 清缓存 / 系统清临时目录就要重登，token 持久化确实未做 |
+| **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | **未做**（B 类：产品定位） | **本轮复核（2026-11-04）**：`web/` 只有 Flutter Web 壳（`index.html` ＋ 图标），无任何「仅联调 / 对外可用」的口径说明；`deploy/README.md` 也未写 ⇒ 定位仍未写死 |
+| **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **未做**（整张表都在；C 类 ＋ 部分 A） | **本轮复核（2026-11-04，只查了两项）**：① CI 平台 —— 仓库根 `Get-ChildItem -Directory -Force` **没有** `.github/`，全仓无 workflow；② requestId / 全局异常过滤器 —— `backend/src/app.setup.ts` 与 `main.ts` 对 `Filter|requestId|helmet|limit` **0 命中**。其余（登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E）**未复核**，沿用 `deploy/README.md` §8 P2 |
 | **W12 边界** | 网站发码 **IP 限流**、额度行清理、手机号/邮箱**不验证**、「重新申请」不吊销旧码 | **未做**（明确取舍） | 未复核（`48` §7） |
-| **发布边界** | 小程序 `dist/` 已构建但**未上传** | **未做** | 本轮复核：`kids_points_mp/dist/` 存在但未上传（微信开发者工具需要本机登录，见下「发布权限」）。★ `.env.local` 里的 `/k` 入口**已于 2026-11-03 恢复**：Caddyfile 备份 → 插入 `handle_path /k/*` → `caddy validate` 通过 → `reload`；实测 `/k/health` 200、`/k/app/version` 200、`/k/invite` 200 |
-| **网站入口** | `https://www.littlewish.top:8443/invite` 连不上（`curl` 超时 000）；`ip:80/k/invite` 与 `hub…:8443/kids/invite` 均 **200** | **文档已修 ＋ `/k` 已恢复**（2026-11-03）；`www:8443` 仍不通（要不要恢复它需运维裁定） | 本轮复核：`/k/invite` → 200（Caddy 恢复 `handle_path /k/*` 后）；`hub…:8443/kids/invite` → 200；`www:8443` 未重测（**未复核**） |
+| **发布边界** | 小程序 `dist/` 已构建但**未上传** | **未做** | 本轮复核：`kids_points_mp/dist/` 存在但未上传（微信开发者工具需要本机登录，见下「发布权限」）。**2026-11-04 已发 App 1.0.5+6（APK ＋ 后端镜像 ＋ `kid_mode` 迁移），小程序 `dist/` 仍未上传 —— A 类，只能你在开发者工具里点「上传」**。★ `.env.local` 里的 `/k` 入口**已于 2026-11-03 恢复**：Caddyfile 备份 → 插入 `handle_path /k/*` → `caddy validate` 通过 → `reload`；实测 `/k/health` 200、`/k/app/version` 200、`/k/invite` 200 |
+| **网站入口** | `https://www.littlewish.top:8443/invite` 连不上（`curl` 超时 000）；`ip:80/k/invite` 与 `hub…:8443/kids/invite` 均 **200** | **文档已修 ＋ `/k` 已恢复**（2026-11-03）；`www:8443` 仍不通（要不要恢复它需运维裁定） | **本轮复核（2026-11-04，发版后）**：`hub…:8443/kids/invite` → **200**；`www.littlewish.top:8443/invite` → **000**（curl 连接超时，仍不通，要不要恢复需运维裁定）；`www:8443` 的证书/反代未动 |
 | **测试边界** | `test-db/` 常驻套件补「网站发码并发」用例（目前只有手工探针 `npm run probe:invite-quota`） | **未做** | 未复核（`48` §7） |
 | **验收边界** | 真机走查 / 浏览器 E2E（**从未做过**） | **未做** | 未复核（§9） |
 
@@ -90,7 +90,13 @@ App `lib/data/write_api.dart` ＋ 小程序 `src/data/write_api.ts` 双端同构
 小程序 `npm test`、`tools/kid-mode-check.mjs`；详见 [`51`](./51-kid-mode-window.md)）·
 **小程序 `npm test` 终于存在**（2026-11-03：`kids_points_mp/package.json` 新增 `typecheck` / `test` /
 `test:kid-mode`，`test` = `tsc -p .tmp_test/tsconfig.test.json && node .tmp_test/run-all.mjs`，
-把 20 个 `run-*.mjs` 全部串起来；W10 之后的行为测试不再"写了没人跑"）。
+把 20 个 `run-*.mjs` 全部串起来；W10 之后的行为测试不再"写了没人跑"）·
+**前后端发布 1.0.5+6**（2026-11-04 实测：`pubspec.yaml` / `lib/app_version.dart` / `kids.env`
+三处 `1.0.5 / 6`；APK `/app/kids-points-1.0.5.apk` ＋ 稳定地址 `kids-points-app.apk`，
+`Content-Length 52808674`；后端镜像重建 → `prisma migrate deploy` 补 `20261103120000_kid_mode`
+→ 重跑 `900` → `verify-db` **ALL PASS** → `up -d` 后容器 `(healthy)`；`POST /kids/auth/kid-mode`
+从 **404** 变 **401 UNAUTHENTICATED**（= 新端点已上线）；`flutter test` **519 全通过**、
+小程序 `npm test` **ALL PASS**）。**仍未做**：小程序 `dist/` 上传（A 类，需微信开发者工具扫码）
 
 ### 0.1 「发布」到底卡在哪（2026-11-03 实测，别再靠印象）
 
