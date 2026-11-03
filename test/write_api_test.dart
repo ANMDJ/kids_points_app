@@ -506,6 +506,69 @@ void main() {
       expect(wish.coverStyle, 'A');
     });
 
+    test('申请新增心愿 POST /approvals：只发 action + title/cost/emoji，不发 autoApprove', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          return WriteHttpResponse(
+            statusCode: 202,
+            body: jsonEncode(<String, Object?>{
+              'id': 'approval-1',
+              'action': 'add_wish',
+              'status': 'pending',
+              'executedRecordId': null,
+              'autoReason': null,
+            }),
+          );
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      final ApprovalDto approval = await client.requestAddWish(
+        title: '  去游乐园  ',
+        cost: 40,
+        emoji: '🎡',
+        idempotencyKey: 'key-approval',
+      );
+
+      final _WriteCall call = transport.calls.single;
+      expect(call.method, 'POST');
+      expect(call.uri.path, '/api/approvals');
+      expect(call.headers['idempotency-key'], 'key-approval');
+      final Map<String, Object?> sent =
+          jsonDecode(call.body) as Map<String, Object?>;
+      expect(sent['action'], 'add_wish');
+      expect(sent['title'], '去游乐园');
+      expect(sent['cost'], 40);
+      expect(sent['emoji'], '🎡');
+      expect(sent.containsKey('autoApprove'), isFalse,
+          reason: '孩子没有批准资格，带 autoApprove 只会换来 400');
+      expect(sent.containsKey('payload'), isFalse,
+          reason: 'payload 由服务端快照，客户端不能决定批准时扣多少分');
+      expect(approval.status, 'pending');
+      expect(approval.id, 'approval-1');
+    });
+
+    test('申请新增心愿：空标题 / 越界成本在本地就拒，一次请求都不发', () async {
+      final _FakeWriteTransport transport = _FakeWriteTransport(
+        (Uri uri, Map<String, String> headers, String body) async {
+          fail('不该发出请求');
+        },
+      );
+      final WriteApiClient client =
+          WriteApiClient(config: config, transport: transport);
+
+      await expectLater(
+        client.requestAddWish(title: '   ', cost: 40, emoji: '🎡'),
+        throwsA(isA<ArgumentError>()),
+      );
+      await expectLater(
+        client.requestAddWish(title: '去游乐园', cost: 0, emoji: '🎡'),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(transport.calls, isEmpty);
+    });
+
     test('新增：空标题 / 0 分在本地就拒，一次请求都不发', () async {
       final _FakeWriteTransport transport = _FakeWriteTransport(
         (Uri uri, Map<String, String> headers, String body) async {
@@ -1471,14 +1534,16 @@ void main() {
       // 服务端此刻的「真相」：心愿已经落库，回到 /home 里。
       readTransport.homeJson = homeJson(wishes: <Object?>[wishJson()]);
 
-      final String? message = await store.submitAddWish(
+      final WishAddResult result = await store.submitAddWish(
         title: '  去游乐园  ',
         cost: 40,
         emoji: '🎡',
       );
 
-      expect(message, isNull);
+      expect(result.isSaved, isTrue);
+      expect(result.error, isNull);
       expect(writeApi.createWishCalls, 1);
+      expect(writeApi.requestAddWishCalls, 0, reason: '家长路径不该碰审批端点');
       expect(writeApi.lastTitle, '去游乐园');
       expect(writeApi.lastCost, 40);
       expect(writeApi.lastEmoji, '🎡');
@@ -1487,24 +1552,80 @@ void main() {
       expect(store.wishes.single.coverStyle, WishCoverStyle.a);
     });
 
-    test('新增心愿：孩子需审批（403 APPROVAL_REQUIRED）⇒ 返回可读原因，列表不变', () async {
+    test('新增心愿：孩子 403 APPROVAL_REQUIRED ⇒ 真的提交 add_wish 审批单，不本地落库', () async {
       final AppStore store = buildStore();
       await store.refreshFromServer();
       writeApi.wishError = WriteApiException.fromHttp(
         statusCode: 403,
         body: <String, Object?>{'code': 'APPROVAL_REQUIRED'},
       );
+      writeApi.requestAddWishResult = ApprovalDto(
+        id: 'approval-1',
+        action: 'add_wish',
+        status: 'pending',
+        executedRecordId: null,
+        autoReason: null,
+      );
 
-      final String? message = await store.submitAddWish(
+      final WishAddResult result = await store.submitAddWish(
         title: '去游乐园',
         cost: 40,
         emoji: '🎡',
       );
 
-      expect(message, contains('家长确认'));
-      expect(message, contains('没有保存'));
-      expect(store.wishes, isEmpty, reason: '没有保存就不能出现在心愿单里');
+      expect(result.isPendingApproval, isTrue);
+      expect(result.error, isNull);
+      expect(store.wishes, isEmpty, reason: '还没批准就不能出现在心愿单里');
       expect(writeApi.createWishCalls, 1);
+      expect(writeApi.requestAddWishCalls, 1, reason: '403 之后必须真的落审批单');
+      expect(writeApi.lastApprovalTitle, '去游乐园');
+      expect(writeApi.lastApprovalCost, 40);
+      expect(writeApi.lastApprovalEmoji, '🎡');
+      expect(writeApi.lastIdempotencyKey, startsWith('wish-approval-'));
+    });
+
+    test('新增心愿：成员级 DENY（不是 APPROVAL_REQUIRED）⇒ 不提交审批，原样报错', () async {
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      writeApi.wishError = WriteApiException.fromHttp(
+        statusCode: 403,
+        body: <String, Object?>{'code': 'FORBIDDEN'},
+      );
+
+      final WishAddResult result = await store.submitAddWish(
+        title: '去游乐园',
+        cost: 40,
+        emoji: '🎡',
+      );
+
+      expect(result.isFailed, isTrue);
+      expect(result.error, isNotEmpty);
+      expect(writeApi.requestAddWishCalls, 0,
+          reason: '「家长明确禁止」不能被说成「已提交，等家长批准」');
+      expect(store.wishes, isEmpty);
+    });
+
+    test('新增心愿：审批提交失败 ⇒ 说明两件事都没发生', () async {
+      final AppStore store = buildStore();
+      await store.refreshFromServer();
+      writeApi.wishError = WriteApiException.fromHttp(
+        statusCode: 403,
+        body: <String, Object?>{'code': 'APPROVAL_REQUIRED'},
+      );
+      writeApi.requestAddWishError = WriteApiException.fromHttp(
+        statusCode: 403,
+        body: <String, Object?>{'code': 'ACTION_NOT_ALLOWED'},
+      );
+
+      final WishAddResult result = await store.submitAddWish(
+        title: '去游乐园',
+        cost: 40,
+        emoji: '🎡',
+      );
+
+      expect(result.isFailed, isTrue);
+      expect(result.error, isNotEmpty);
+      expect(store.wishes, isEmpty);
     });
 
     test('新增心愿：空标题 / 0 分在本地就拒，一次请求都不发', () async {
@@ -1512,14 +1633,16 @@ void main() {
       await store.refreshFromServer();
 
       expect(
-        await store.submitAddWish(title: '   ', cost: 40, emoji: '🎡'),
+        (await store.submitAddWish(title: '   ', cost: 40, emoji: '🎡')).error,
         '先给心愿起个名字吧～',
       );
       expect(
-        await store.submitAddWish(title: '去游乐园', cost: 0, emoji: '🎡'),
+        (await store.submitAddWish(title: '去游乐园', cost: 0, emoji: '🎡'))
+            .error,
         '心愿需要的积分至少是 1 分',
       );
       expect(writeApi.createWishCalls, 0);
+      expect(writeApi.requestAddWishCalls, 0);
     });
 
     test('删除心愿：DELETE /wishes/:id，进回收站且不再出现在心愿单', () async {
@@ -1553,13 +1676,14 @@ void main() {
       addTearDown(store.dispose);
       await store.refreshFromServer();
 
-      final String? addMessage = await store.submitAddWish(
+      final WishAddResult addResult = await store.submitAddWish(
         title: '去游乐园',
         cost: 40,
         emoji: '🎡',
       );
 
-      expect(addMessage, contains('只读模式'));
+      expect(addResult.isFailed, isTrue);
+      expect(addResult.error, contains('只读模式'));
       expect(store.wishes, isEmpty, reason: '不能悄悄写进本地，让人以为保存了');
       expect(store.isWishWriteReadOnly, isTrue);
 
@@ -1799,6 +1923,52 @@ void main() {
 
     expect(writeApi.checkInCalls, 1, reason: 'live 模式必须真的写服务端');
     expect(find.textContaining('太棒了'), findsOneWidget);
+  });
+
+  testWidgets('live 首页：点「记一笔」打开弹层（不再被全局只读拦住）', (WidgetTester tester) async {
+    // 2026-11-03 回归：`POST /records/adjust` 早已上线，但首页判的是
+    // `store.isReadOnly`（live ⇒ true），结果每个连后端的家庭都只会看到
+    // 「写客户端未就绪或尚未接后端」。这条用例钉住「注入了写客户端就能打开表单」。
+    final _ScriptedReadTransport readTransport = _ScriptedReadTransport(
+      homeJson: jsonEncode(<String, Object?>{
+        'child': <String, Object?>{
+          'id': 'child-1',
+          'name': '小明',
+          'pointsBalance': 10,
+        },
+        'goodHabitCount': 0,
+        'rewardCount': 0,
+        'habits': <Object?>[],
+        'rules': <Object?>[],
+        'wishes': <Object?>[],
+      }),
+      pageJson: jsonEncode(<String, Object?>{
+        'records': <Object?>[],
+        'limit': 50,
+        'hasMore': false,
+        'nextCursor': null,
+      }),
+    );
+    final AppStore store = AppStore(
+      readApi: ReadApiClient(config: config, transport: readTransport),
+      writeApi: _FakeWriteApi(),
+    );
+    addTearDown(store.dispose);
+
+    await tester.pumpWidget(PointsApp(store: store));
+    await tester.pumpAndSettle();
+
+    final Finder quickNote = find.text('记一笔');
+    await tester.scrollUntilVisible(
+      quickNote,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(quickNote);
+    await tester.pumpAndSettle();
+
+    expect(find.text('家长手动加分或扣分，孩子立刻能看到'), findsOneWidget);
+    expect(find.text(store.adjustReadOnlyWriteMessage), findsNothing);
   });
 
   testWidgets('live 心愿单：点兑换先弹确认，取消不发请求，确认才提交审批', (WidgetTester tester) async {
@@ -3746,6 +3916,12 @@ class _FakeWriteApi implements WriteApi {
   int createWishCalls = 0;
   int deleteWishCalls = 0;
   int requestRedeemCalls = 0;
+  int requestAddWishCalls = 0;
+  ApprovalDto? requestAddWishResult;
+  Object? requestAddWishError;
+  String? lastApprovalTitle;
+  int? lastApprovalCost;
+  String? lastApprovalEmoji;
   String? lastWishId;
   ApprovalDto? requestRedeemResult;
   ApprovalDto? decideResult;
@@ -4034,6 +4210,29 @@ class _FakeWriteApi implements WriteApi {
     lastIdempotencyKey = idempotencyKey;
     if (wishError != null) throw wishError!;
     return createWishResult!;
+  }
+
+  @override
+  Future<ApprovalDto> requestAddWish({
+    required String title,
+    required int cost,
+    required String emoji,
+    String? idempotencyKey,
+  }) async {
+    requestAddWishCalls += 1;
+    lastApprovalTitle = title;
+    lastApprovalCost = cost;
+    lastApprovalEmoji = emoji;
+    lastIdempotencyKey = idempotencyKey;
+    if (requestAddWishError != null) throw requestAddWishError!;
+    return requestAddWishResult ??
+        ApprovalDto(
+          id: 'approval-1',
+          action: 'add_wish',
+          status: 'pending',
+          executedRecordId: null,
+          autoReason: null,
+        );
   }
 
   @override

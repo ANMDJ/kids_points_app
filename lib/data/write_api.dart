@@ -80,9 +80,28 @@ abstract class WriteApi {
   /// 新增心愿（`add_wish`）。
   ///
   /// 家长 ⇒ 直接落库；孩子的权限矩阵若为 `REQUIRE_APPROVAL`，服务端回
-  /// 403 `APPROVAL_REQUIRED` —— 这里**不吞**该业务码，由 store 翻成
-  /// 「需要家长确认」，界面据此提示去审批，而不是假装保存成功。
+  /// 403 `APPROVAL_REQUIRED` —— 这里**不吞**该业务码，由 store 改走
+  /// [requestAddWish]（真的提交审批单），而不是只提示一句「需要家长确认」。
   Future<WishDto> createWish({
+    required String title,
+    required int cost,
+    required String emoji,
+    String? idempotencyKey,
+  });
+
+  /// 申请新增心愿（`POST /approvals`，`action='add_wish'`，2026-11-03）。
+  ///
+  /// 为什么需要它：`add_wish` 在权限矩阵里对孩子是 `REQUIRE_APPROVAL`，
+  /// `POST /wishes` 只会回 403 **且不落任何审批行**。如果界面止步于那句
+  /// 提示，家长收件箱里就永远看不到这条申请（用户 2026-11-03 实测）。
+  ///
+  /// 只发 `action + title + cost + emoji`：
+  ///   · `payload` 由服务端快照，客户端不能自己决定「批准时扣多少分」；
+  ///   · `autoApprove` 不发（孩子没有批准资格）。
+  ///
+  /// 回包 `status === 'pending'` 时**心愿还没有创建**：界面必须说
+  /// 「已提交，等家长批准」，不能说「已添加」。
+  Future<ApprovalDto> requestAddWish({
     required String title,
     required int cost,
     required String emoji,
@@ -520,6 +539,39 @@ class WriteApiClient implements WriteApi {
       idempotencyKey: idempotencyKey,
     );
     return _parse(decoded, WishDto.fromJson);
+  }
+
+  @override
+  Future<ApprovalDto> requestAddWish({
+    required String title,
+    required int cost,
+    required String emoji,
+    String? idempotencyKey,
+  }) async {
+    final String trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw ArgumentError.value(title, 'title', '不能为空');
+    }
+    if (cost < 1 || cost > 100000) {
+      throw ArgumentError.value(cost, 'cost', '必须是 1..100000 的整数');
+    }
+    final String trimmedEmoji = emoji.trim();
+    if (trimmedEmoji.isEmpty) {
+      throw ArgumentError.value(emoji, 'emoji', '不能为空');
+    }
+    final Object? decoded = await _send(
+      'POST',
+      '/approvals',
+      <String, Object?>{
+        'action': 'add_wish',
+        'title': trimmedTitle,
+        'cost': cost,
+        'emoji': trimmedEmoji,
+        // 不发 `autoApprove`：孩子没有批准资格，带上只会换来 400。
+      },
+      idempotencyKey: idempotencyKey,
+    );
+    return _parse(decoded, ApprovalDto.fromJson);
   }
 
   @override

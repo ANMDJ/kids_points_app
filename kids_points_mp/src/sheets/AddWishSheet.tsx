@@ -33,15 +33,19 @@ export default function AddWishSheet({
     if (saving) return
     setSaving(true)
     try {
-      // 预览模式走本地；live 模式等服务端回包再关面板 ——
-      // 失败（含 403 需家长确认）时面板和输入都留着，用户可以直接改。
-      const message = await store.submitAddWish(trimmed, cost, emoji)
-      if (message !== null) {
-        toast(message)
+      // 预览模式走本地；live 模式等服务端回包再关面板。
+      // 三种结局分开说：存上了 / 已提交审批 / 没成（面板与输入都留着）。
+      const outcome = await store.submitAddWish(trimmed, cost, emoji)
+      if (outcome.error !== null) {
+        toast(outcome.error)
         return
       }
       onClose()
-      toast(`已添加心愿：${trimmed}（${cost} 积分）`)
+      toast(
+        outcome.pendingApproval
+          ? `已提交给家长审批：「${trimmed}」（${cost} 积分）。家长批准后会出现在心愿单里。`
+          : `已添加心愿：${trimmed}（${cost} 积分）`
+      )
     } finally {
       setSaving(false)
     }

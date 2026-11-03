@@ -181,6 +181,20 @@ export type AuthGateKind =
   | 'unreachable' // 网络 / 服务端问题：**保 token**，只给重试
 
 /**
+ * 「新增心愿」的结果（2026-11-03）。
+ *
+ * 与 Flutter `WishAddResult` 同构：`pendingApproval` 是**正常结局**，
+ * 不是失败 —— 孩子的心愿先变成一条审批申请，家长批准后才会落库。
+ * 之前只回一句「需要家长确认」，但没有提交审批单，家长收件箱里什么都没有。
+ */
+export interface AddWishOutcome {
+  /** 失败原因；成功 / 已提交审批时为 null。 */
+  error: string | null
+  /** true = 已提交审批，心愿**还没有**创建。 */
+  pendingApproval: boolean
+}
+
+/**
  * 应用状态中心：积分余额、习惯、心愿、流水、规则。
  *
  * 与 Flutter 版 lib/data/app_store.dart 一一对应，模块级单例，
@@ -553,6 +567,22 @@ export class AppStore {
   /** 首页打卡 / 长按撤销是否可用。 */
   get canWriteCheckIns(): boolean {
     return !this.isCheckInReadOnly
+  }
+
+  /**
+   * 「记一笔」是否被只读拦截（W5-B：live 模式下 `POST /records/adjust` 早已上线）。
+   *
+   * ★ 2026-11-03 修：首页原先判的是 `isReadOnly`（`live ⇒ true`），
+   * 于是每个连了后端的家庭点「记一笔」都只会看到「写客户端未就绪或尚未接后端」。
+   * 与打卡 / 心愿同一条判据：只有 live 但**没注入写客户端**时才拦。
+   */
+  get isAdjustReadOnly(): boolean {
+    return this.isLiveMode && this.writeApi === null
+  }
+
+  /** 只读模式下「记一笔」的文案 —— 页面直接展示，不另编理由。 */
+  get adjustReadOnlyWriteMessage(): string {
+    return '只读模式：记一笔还没有接上后端，这次操作没有保存到服务器。'
   }
 
   /**
@@ -3249,32 +3279,44 @@ export class AppStore {
   }
 
   /**
-   * 新增心愿（服务端写入口）。成功返回 null，失败返回可读原因。
+   * 新增心愿（服务端写入口）。
    *
-   * 三件必须钉住的事：
-   *   ① 预览模式仍走本地 [addWish]（配色由本地 `pickCoverStyle` 算，同一套算法）；
-   *   ② live 模式**不传** `coverStyle` —— 配色由服务端按「空档优先，否则 id 哈希」
-   *      决定；客户端再算一次只会和服务端打架；
-   *   ③ 403 `APPROVAL_REQUIRED`（孩子需家长确认）**不算成功**：返回原因让界面提示，
-   *      绝不能本地先插一条再被刷新打回 —— 那会让孩子以为存上了。
+   * 三种结局，不能再用 `string | null` 把「已存上」和「已提交审批」混成 null：
+   *   · 家长：`POST /wishes` 直接落库 ⇒ `pendingApproval: false`；
+   *   · 孩子：矩阵 `add_wish = REQUIRE_APPROVAL`，`POST /wishes` 回 403
+   *     `APPROVAL_REQUIRED` ⇒ **接着** `POST /approvals` 落一条 `add_wish`
+   *     审批单 ⇒ `pendingApproval: true`（心愿还没创建）；
+   *   · 其它失败 ⇒ `error` 说明原因，界面不关面板、不本地插假数据。
+   *
+   * ★ 2026-11-03 修：原来 403 后只返回一句「需要家长确认」，**没有落审批单**，
+   *   家长切回家长模式后收件箱里看不到任何东西。成员级收紧（`childCannotAddWish`
+   *   ⇒ 403 DENY）仍原样报错，不会被说成「已提交」。
    */
   async submitAddWish(
     title: string,
     cost: number,
     emoji: string,
     actor: ActorContext = { role: 'guardian' }
-  ): Promise<string | null> {
+  ): Promise<AddWishOutcome> {
     const trimmed = title.trim()
-    if (trimmed === '') return '心愿名称不能为空'
-    if (!Number.isInteger(cost) || cost < 1) return '所需积分要是 ≥ 1 的整数'
-    if (emoji.trim() === '') return '请挑一个图标'
+    if (trimmed === '') return { error: '心愿名称不能为空', pendingApproval: false }
+    if (!Number.isInteger(cost) || cost < 1) {
+      return { error: '所需积分要是 ≥ 1 的整数', pendingApproval: false }
+    }
+    if (emoji.trim() === '') {
+      return { error: '请挑一个图标', pendingApproval: false }
+    }
     if (!this.isLiveMode) {
       this.addWish(trimmed, cost, emoji, actor)
-      return null
+      return { error: null, pendingApproval: false }
     }
     const api = this.writeApi
-    if (api === null) return this.wishReadOnlyWriteMessage
-    if (this.writeInFlight) return '上一次操作正在保存中，请稍候…'
+    if (api === null) {
+      return { error: this.wishReadOnlyWriteMessage, pendingApproval: false }
+    }
+    if (this.writeInFlight) {
+      return { error: '上一次操作正在保存中，请稍候…', pendingApproval: false }
+    }
 
     this.writeInFlight = true
     try {
@@ -3286,10 +3328,39 @@ export class AppStore {
       })
       this.applyWishDto(dto)
       await this.refreshFromServer()
-      return null
+      return { error: null, pendingApproval: false }
     } catch (error) {
-      if (error instanceof WriteApiException) return error.userMessage
-      return '心愿请求已发出，但结果无法确认。请刷新后查看，避免重复提交。'
+      if (!(error instanceof WriteApiException)) {
+        return {
+          error: '心愿请求已发出，但结果无法确认。请刷新后查看，避免重复提交。',
+          pendingApproval: false
+        }
+      }
+      if (error.code !== 'APPROVAL_REQUIRED') {
+        return { error: error.userMessage, pendingApproval: false }
+      }
+      try {
+        const approval = await api.requestAddWish({
+          title: trimmed,
+          cost,
+          emoji,
+          idempotencyKey: this.newIdempotencyKey('wish-approval')
+        })
+        if (approval.status === 'pending') {
+          // **不**本地插一条心愿：还没落库。审批通过后由 /home 快照带回来。
+          return { error: null, pendingApproval: true }
+        }
+        await this.refreshFromServer()
+        return { error: null, pendingApproval: false }
+      } catch (approvalError) {
+        return {
+          error:
+            approvalError instanceof WriteApiException
+              ? approvalError.userMessage
+              : '审批申请已发出，但结果无法确认。请刷新后查看。',
+          pendingApproval: false
+        }
+      }
     } finally {
       this.writeInFlight = false
     }

@@ -60,6 +60,46 @@ const bool allowDemoReset = !_isReleaseBuild;
 /// `ready` 之后仍可能 `loadingMore`（追加下一页）或 `error`（保留已加载内容）。
 enum ReadStatus { idle, loading, ready, loadingMore, error }
 
+/// 「新增心愿」的三种结局 —— 不能再用 `String?` 把「已保存」和「已提交审批」混成 null。
+///
+/// 背景（2026-11-03 用户实测）：孩子点「保存心愿」被服务端拦成 403
+/// `APPROVAL_REQUIRED`，界面只提示「需要家长确认，这次没有保存」——
+/// 但**没有生成任何审批单**，家长切回家长模式后收件箱里什么都没有。
+/// 权限矩阵里 `add_wish` 对孩子本来就是 `REQUIRE_APPROVAL`：正确做法不是
+/// 把入口藏起来，而是把这次操作真的落成一条审批申请。
+enum WishAddStatus {
+  /// 心愿已经落库（家长直接新增，或审批当场通过）。
+  saved,
+
+  /// 已提交给孩子所在的家庭，等家长在「家长审批」里处理。**还没有落库**。
+  pendingApproval,
+
+  /// 没保存，也没有提交审批；[WishAddResult.error] 是可展示原因。
+  failed,
+}
+
+/// [AppStore.submitAddWish] 的返回值。
+class WishAddResult {
+  const WishAddResult.saved()
+      : status = WishAddStatus.saved,
+        error = null;
+
+  const WishAddResult.pending()
+      : status = WishAddStatus.pendingApproval,
+        error = null;
+
+  const WishAddResult.failed(String message)
+      : status = WishAddStatus.failed,
+        error = message;
+
+  final WishAddStatus status;
+  final String? error;
+
+  bool get isSaved => status == WishAddStatus.saved;
+  bool get isPendingApproval => status == WishAddStatus.pendingApproval;
+  bool get isFailed => status == WishAddStatus.failed;
+}
+
 /// 应用状态中心：积分余额、习惯、心愿、流水、规则。
 ///
 /// 目前是纯内存实现（会话内有效）。要落地持久化时，
@@ -512,6 +552,18 @@ class AppStore extends ChangeNotifier {
 
   /// 首页打卡 / 长按撤销是否可用。
   bool get canWriteCheckIns => !isCheckInReadOnly;
+
+  /// 「记一笔」是否被只读拦截（W5-B：live 模式下 `POST /records/adjust` 早已上线）。
+  ///
+  /// ★ 2026-11-03 修：首页原先判的是 [isReadOnly]（`live ⇒ true`），
+  /// 于是**每个连了后端的家庭**点「记一笔」都只会看到
+  /// 「写客户端未就绪或尚未接后端」—— 端点明明可用。与打卡 / 心愿同一条判据：
+  /// 只有 live 但**没注入写客户端**时才拦。
+  bool get isAdjustReadOnly => isLiveMode && _writeApi == null;
+
+  /// 只读模式下「记一笔」的文案 —— 页面直接展示，不另编理由。
+  String get adjustReadOnlyWriteMessage =>
+      '只读模式：记一笔还没有接上后端，这次操作没有保存到服务器。';
 
   /// 仍未接后端的本地写入口（回收站 / 恢复演示数据）是否被只读拦截。
   /// 本地预览数据不受影响，可以随便点 —— 那本来就是演示。
@@ -2191,22 +2243,29 @@ class AppStore extends ChangeNotifier {
 
   /// 新增心愿（服务端写入口）。
   ///
-  /// · 预览模式：走本地 [addWish]，返回值语义不变（null = 成功）；
-  /// · live 模式：POST `/wishes`。服务端在同一事务里写心愿 + 审计日志，
-  ///   配色由服务端按「空档优先，否则 id 哈希」决定（不传 coverStyle）。
+  /// · 预览模式：走本地 [addWish]，结果语义不变（`saved`）；
+  /// · live 模式：先 `POST /wishes`。家长 ⇒ 直接落库；
+  ///   孩子（矩阵 `add_wish = REQUIRE_APPROVAL`）⇒ 服务端回 403
+  ///   `APPROVAL_REQUIRED`，此时**接着** `POST /approvals` 落一条审批单，
+  ///   返回 [WishAddStatus.pendingApproval]。
   ///
-  /// 家长 ⇒ 直接生效；孩子的权限矩阵若是 `REQUIRE_APPROVAL`，服务端回
-  /// 403 `APPROVAL_REQUIRED` —— 这里**不吞**它，原样把可读文案交回界面，
-  /// 让家长知道「没保存」而不是以为已经加上了。
-  Future<String?> submitAddWish({
+  /// ★ 2026-11-03 修：之前只把 403 的文案返回界面，**没有提交审批单**。
+  ///   用户看到「需要家长确认」，家长切回家长模式却发现收件箱里没有这条 ——
+  ///   「开了口子却不落单」比一开始就禁用按钮更糟。现在的口径是：
+  ///   要么真的存上，要么真的提交，要么说清为什么两件事都没发生。
+  Future<WishAddResult> submitAddWish({
     required String title,
     required int cost,
     required String emoji,
     ActorContext actor = const ActorContext(),
   }) async {
     final String trimmedTitle = title.trim();
-    if (trimmedTitle.isEmpty) return '先给心愿起个名字吧～';
-    if (cost < 1) return '心愿需要的积分至少是 1 分';
+    if (trimmedTitle.isEmpty) {
+      return const WishAddResult.failed('先给心愿起个名字吧～');
+    }
+    if (cost < 1) {
+      return const WishAddResult.failed('心愿需要的积分至少是 1 分');
+    }
     if (!isLiveMode) {
       addWish(
         title: trimmedTitle,
@@ -2214,11 +2273,15 @@ class AppStore extends ChangeNotifier {
         emoji: emoji,
         actor: actor,
       );
-      return null;
+      return const WishAddResult.saved();
     }
     final WriteApi? api = _writeApi;
-    if (api == null) return wishReadOnlyWriteMessage;
-    if (_writeInFlight) return '上一次操作正在保存中，请稍候…';
+    if (api == null) {
+      return WishAddResult.failed(wishReadOnlyWriteMessage);
+    }
+    if (_writeInFlight) {
+      return const WishAddResult.failed('上一次操作正在保存中，请稍候…');
+    }
 
     _writeInFlight = true;
     try {
@@ -2228,14 +2291,43 @@ class AppStore extends ChangeNotifier {
         emoji: emoji,
         idempotencyKey: _newIdempotencyKey('wish-create'),
       );
-      if (_disposed) return null;
+      if (_disposed) return const WishAddResult.saved();
       _applyWishDto(dto);
       await refreshFromServer();
-      return null;
+      return const WishAddResult.saved();
     } on WriteApiException catch (error) {
-      return error.userMessage;
+      // 只有「缺审批」这一种拒绝可以改走审批流。成员级收紧
+      // （`childCannotAddWish` ⇒ 403 DENY）必须原样报错 ——
+      // 否则会把「家长明确禁止」说成「已提交，等家长批准」。
+      if (error.code != 'APPROVAL_REQUIRED') {
+        return WishAddResult.failed(error.userMessage);
+      }
+      try {
+        final ApprovalDto approval = await api.requestAddWish(
+          title: trimmedTitle,
+          cost: cost,
+          emoji: emoji,
+          idempotencyKey: _newIdempotencyKey('wish-approval'),
+        );
+        if (_disposed) return const WishAddResult.saved();
+        if (approval.status == 'pending') {
+          // **不**本地插一条心愿：还没落库。审批通过后由 /home 快照带回来。
+          return const WishAddResult.pending();
+        }
+        // 家长自批等极少数情况（孩子路径不会走到）：以服务端为准刷新。
+        await refreshFromServer();
+        return const WishAddResult.saved();
+      } on WriteApiException catch (approvalError) {
+        return WishAddResult.failed(approvalError.userMessage);
+      } catch (error) {
+        return const WishAddResult.failed(
+          '审批申请已发出，但结果无法确认。请刷新后查看。',
+        );
+      }
     } catch (error) {
-      return '心愿请求已发出，但结果无法确认。请刷新后查看，避免重复提交。';
+      return const WishAddResult.failed(
+        '心愿请求已发出，但结果无法确认。请刷新后查看，避免重复提交。',
+      );
     } finally {
       _writeInFlight = false;
     }
@@ -4403,10 +4495,11 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  /// 重新锁上闸门（「我的」页的「重新锁定」入口）。
+  /// 重新锁上闸门（仅供测试 / 诊断使用）。
   ///
-  /// 只改本地内存，**不发请求**：服务端本来就没有「已解锁」这个状态
-  /// （见本块开头的边界说明）。
+  /// ★ 2026-11-03：用户要求**去掉**「我的 → 立即锁定入口」这个功能，
+  /// 所以生产界面不再有调用方。方法保留是因为重开 App 本来就是同一条路径，
+  /// 用例靠它断言「清回锁着之后还能再次校验」；它不发任何请求。
   void lockDateCodeGate() {
     if (_dateCodeUnlockedAt == null) return;
     _dateCodeUnlockedAt = null;

@@ -301,32 +301,6 @@ class ProfileScreen extends StatelessWidget {
                       indent: 66,
                     ),
                   ],
-                  if (store.hasDateCodeGate && store.isDateCodeGateUnlocked)
-                    ...<Widget>[
-                      _MenuRow(
-                        icon: Icons.lock_outline_rounded,
-                        // W9-C：立刻把启动闸门锁回去。只清本地内存 —— 服务端
-                        // 根本没有「已解锁」这个状态（见 app_store 里那块的边界）。
-                        // 有了它，家长不必重启 App 就能验证「码到底管不管用」。
-                        color: AppColors.primaryDeep,
-                        label: '立即锁定入口',
-                        onTap: () {
-                          store.lockDateCodeGate();
-                          messenger.hideCurrentSnackBar();
-                          messenger.showSnackBar(
-                            const SnackBar(
-                              content: Text('已锁定：下次打开 App 需要重新输入验证码'),
-                            ),
-                          );
-                        },
-                      ),
-                      const Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: AppColors.divider,
-                        indent: 66,
-                      ),
-                    ],
                   if (store.hasOnboarding &&
                       (store.needsOnboarding || store.onboardingError != null))
                     ...<Widget>[

@@ -109,7 +109,12 @@ function fakeReadApi(getHome = () => homeDto(), getRecords = () => pageDto()) {
 }
 
 function fakeWriteApi(input = {}) {
-  const calls = { createWish: [], deleteWish: [], requestRedeem: [] }
+  const calls = {
+    createWish: [],
+    deleteWish: [],
+    requestRedeem: [],
+    requestAddWish: []
+  }
   return {
     calls,
     async createWish(args) {
@@ -126,6 +131,11 @@ function fakeWriteApi(input = {}) {
       calls.requestRedeem.push({ id, key })
       if (input.requestRedeem) return input.requestRedeem(id, key)
       return approvalJson()
+    },
+    async requestAddWish(args) {
+      calls.requestAddWish.push(args)
+      if (input.requestAddWish) return input.requestAddWish(args)
+      return approvalJson({ action: 'add_wish' })
     }
   }
 }
@@ -482,8 +492,9 @@ await checkAsync(
     await store.refreshFromServer()
     assert.strictEqual(store.wishes.length, 0)
 
-    const message = await store.submitAddWish('  去游乐园  ', 40, '🎡')
-    assert.strictEqual(message, null, String(message))
+    const outcome = await store.submitAddWish('  去游乐园  ', 40, '🎡')
+    assert.strictEqual(outcome.error, null, String(outcome.error))
+    assert.strictEqual(outcome.pendingApproval, false)
 
     assert.strictEqual(writeApi.calls.createWish.length, 1, '只发一次请求')
     const args = writeApi.calls.createWish[0]
@@ -502,7 +513,7 @@ await checkAsync(
 )
 
 await checkAsync(
-  'W5-C store：孩子需审批（403 APPROVAL_REQUIRED）⇒ 返回可读原因，列表不变',
+  'W5-C store：孩子需审批（403 APPROVAL_REQUIRED）⇒ 真的提交 add_wish 审批单，列表不变',
   async () => {
     const readApi = fakeReadApi()
     const writeApi = fakeWriteApi({
@@ -516,11 +527,17 @@ await checkAsync(
     const store = new AppStore(readApi, writeApi)
     await store.refreshFromServer()
 
-    const message = await store.submitAddWish('去游乐园', 40, '🎡')
-    assert.strictEqual(typeof message, 'string')
-    assert.ok(message.includes('家长'), String(message))
+    const outcome = await store.submitAddWish('去游乐园', 40, '🎡')
+    assert.strictEqual(outcome.error, null, String(outcome.error))
+    assert.strictEqual(outcome.pendingApproval, true, '必须真的落到审批流')
     assert.strictEqual(store.wishes.length, 0, '被拒的写入不许本地先插一条')
     assert.strictEqual(writeApi.calls.createWish.length, 1)
+    assert.strictEqual(writeApi.calls.requestAddWish.length, 1)
+    const args = writeApi.calls.requestAddWish[0]
+    assert.strictEqual(args.title, '去游乐园')
+    assert.strictEqual(args.cost, 40)
+    assert.strictEqual(args.emoji, '🎡')
+    assert.ok(args.idempotencyKey.startsWith('wish-approval-'), args.idempotencyKey)
   }
 )
 
@@ -532,14 +549,15 @@ await checkAsync(
     await store.refreshFromServer()
 
     assert.strictEqual(
-      typeof (await store.submitAddWish('   ', 40, '🎡')),
+      typeof (await store.submitAddWish('   ', 40, '🎡')).error,
       'string'
     )
     assert.strictEqual(
-      typeof (await store.submitAddWish('去游乐园', 0, '🎡')),
+      typeof (await store.submitAddWish('去游乐园', 0, '🎡')).error,
       'string'
     )
     assert.strictEqual(writeApi.calls.createWish.length, 0)
+    assert.strictEqual(writeApi.calls.requestAddWish.length, 0)
     assert.strictEqual(store.wishes.length, 0)
   }
 )
@@ -585,10 +603,9 @@ await checkAsync(
     await store.refreshFromServer()
 
     assert.strictEqual(store.isWishWriteReadOnly, true)
-    assert.strictEqual(
-      await store.submitAddWish('去游乐园', 40, '🎡'),
-      store.wishReadOnlyWriteMessage
-    )
+    const addOutcome = await store.submitAddWish('去游乐园', 40, '🎡')
+    assert.strictEqual(addOutcome.error, store.wishReadOnlyWriteMessage)
+    assert.strictEqual(addOutcome.pendingApproval, false)
     assert.strictEqual(
       await store.submitRemoveWish('wish-1'),
       store.wishReadOnlyWriteMessage

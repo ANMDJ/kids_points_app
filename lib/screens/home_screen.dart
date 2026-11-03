@@ -26,13 +26,6 @@ class HomeScreen extends StatelessWidget {
     final int doneCount =
         habits.where((HabitView habit) => habit.checked).length;
 
-    void showReadOnlyHint() {
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.readOnlyWriteMessage)),
-      );
-    }
-
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
@@ -114,8 +107,11 @@ class HomeScreen extends StatelessWidget {
                 label: '记一笔',
                 icon: Icons.edit_note_rounded,
                 onTap: () {
-                  if (store.isReadOnly) {
-                    showReadOnlyHint();
+                  if (store.isAdjustReadOnly) {
+                    messenger.hideCurrentSnackBar();
+                    messenger.showSnackBar(
+                      SnackBar(content: Text(store.adjustReadOnlyWriteMessage)),
+                    );
                     return;
                   }
                   showQuickNoteSheet(context);

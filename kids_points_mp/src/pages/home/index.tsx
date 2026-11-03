@@ -109,8 +109,8 @@ export default function Home() {
               label='记一笔'
               icon='editNote'
               onClick={() => {
-                if (store.isReadOnly) {
-                  toast(store.readOnlyWriteMessage)
+                if (store.isAdjustReadOnly) {
+                  toast(store.adjustReadOnlyWriteMessage)
                   return
                 }
                 sheet.show()

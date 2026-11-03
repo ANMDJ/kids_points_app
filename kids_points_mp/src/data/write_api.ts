@@ -214,6 +214,24 @@ export interface WriteApi {
   requestRedeem(wishId: string, idempotencyKey?: string): Promise<ApprovalDto>
 
   /**
+   * 申请新增心愿（`POST /approvals`，`action='add_wish'`，2026-11-03）。
+   *
+   * `add_wish` 对孩子是 `REQUIRE_APPROVAL`：`POST /wishes` 只会回 403
+   * **且不落任何审批行**。只提示一句「需要家长确认」的话，家长收件箱里
+   * 永远看不到这条申请 —— 所以 store 在 403 `APPROVAL_REQUIRED` 之后
+   * 必须调用本方法，把这次操作真的落成审批单。
+   *
+   * 只发 `action + title + cost + emoji`（payload 由服务端快照）；
+   * 不发 `autoApprove`（孩子没有批准资格）。
+   */
+  requestAddWish(input: {
+    title: string
+    cost: number
+    emoji: string
+    idempotencyKey?: string
+  }): Promise<ApprovalDto>
+
+  /**
    * 家长批准 / 拒绝一条申请（`POST /approvals/:id/decide`，W5-D）。
    *
    * `decision` 只接受 `approved` / `rejected` —— 其他终态（`expired` /
@@ -706,6 +724,34 @@ export class WriteApiClient implements WriteApi {
       },
       (raw) => this.parseApproval(raw),
       idempotencyKey
+    )
+  }
+
+  async requestAddWish(input: {
+    title: string
+    cost: number
+    emoji: string
+    idempotencyKey?: string
+  }): Promise<ApprovalDto> {
+    const title = input.title.trim()
+    if (title === '') throw new Error('title 不能为空')
+    if (!Number.isInteger(input.cost) || input.cost < 1 || input.cost > 100000) {
+      throw new Error('cost 必须是 1..100000 的整数')
+    }
+    const emoji = input.emoji.trim()
+    if (emoji === '') throw new Error('emoji 不能为空')
+    return this.send<ApprovalDto>(
+      'POST',
+      '/approvals',
+      {
+        action: 'add_wish',
+        title,
+        cost: input.cost,
+        emoji
+        // 不发 `autoApprove`：孩子没有批准资格，带上只会换来 400。
+      },
+      (raw) => this.parseApproval(raw),
+      input.idempotencyKey
     )
   }
 

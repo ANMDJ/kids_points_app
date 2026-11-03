@@ -154,9 +154,11 @@ class WriteApiException implements Exception {
         );
       }
       if (code == 'APPROVAL_REQUIRED') {
-        // 孩子在 `REQUIRE_APPROVAL` 下直接写心愿 / 规则时被拦 —— 这不是故障，
+        // 孩子在 `REQUIRE_APPROVAL` 下直接写规则等动作时被拦 —— 这不是故障，
         // 而是约定：同一次操作必须走审批流。文案要给出**下一步**，但**不能**
         // 说“已提交”（403 时并没有生成审批单），否则家长会去审批页找不到任何东西。
+        // ★ 2026-11-03：**新增心愿**已由 `AppStore.submitAddWish` 单独处理 ——
+        //   收到本码后会真的调用 `POST /approvals` 落单；这里只剩其它动作的兜底。
         return fail(
           WriteFailureKind.forbidden,
           '这个操作需要家长确认，这次没有保存。请让家长直接操作（或由家长在「审批」里处理后再试）。',

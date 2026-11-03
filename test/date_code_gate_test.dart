@@ -22,7 +22,9 @@ import 'package:kids_points_app/screens/date_code_gate.dart';
 ///      入口闸门遇到「不知道」必须拦着 —— 见 `date_code_gate.dart` 文件头）；
 ///   ⑥ 429 ⇒ 说明「还要等多久」，且期间不再发请求；
 ///   ⑦ 容差内的昨天的码 ⇒ 也放行（这是后端 ±1 天的既定行为）；
-///   ⑧ 「立即锁定入口」把本地放行状态清回锁着（重开 App 一样的路径）。
+///   ⑧ 清空本地放行状态（`lockDateCodeGate()`）⇒ 回到锁着（重开 App 一样的路径）。
+///      注：2026-11-03 起「我的 → 立即锁定入口」这个界面功能已按用户要求移除，
+///      方法只保留给诊断 / 用例；生产界面不再有调用方。
 void main() {
   const ReadApiConfig config = ReadApiConfig(
     baseUrl: 'http://127.0.0.1:3999/api',

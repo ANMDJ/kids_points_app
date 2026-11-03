@@ -140,7 +140,7 @@ POST /auth/date-code          （@Public，HTTP 200）
 | `lib/screens/date_code_gate.dart` | `DateCodeGate`：挂在 `home` 最外层。没注入客户端 / 已放行 ⇒ 直接显示 `child`；否则整页锁屏（规则卡 ＋ 6 位输入 ＋ 「进入」） |
 | `lib/main.dart` | 注入 `dateCodeApi`（仅 `configured` 时）；`home: DateCodeGate(child: OnboardingGate(child: HomeShell()))` —— **验证在前（谁能用这台手机），引导在后（家长要完成的事）** |
 | `lib/data/app_store.dart` | `verifyDateCodeGate(code)`（本地预检 → POST → **只在校验通过时**置 `_dateCodeUnlockedAt`）、`lockDateCodeGate()`、`dateCodeRetrySecondsAt(now)`、`dateCodeError`、`lastDateCodeVerdict` |
-| `lib/screens/profile_screen.dart` | 放行后「我的」页多一行「立即锁定入口」：不必重启 App 就能验证闸门（只清本地内存，不发请求） |
+| `lib/screens/profile_screen.dart` | 放行后「我的」页多一行「立即锁定入口」：不必重启 App 就能验证闸门（只清本地内存，不发请求）。★ **2026-11-03 已按用户要求移除该入口**；`AppStore.lockDateCodeGate()` 保留给诊断/用例，重开 App 仍会重新上锁 |
 | `lib/widgets/form_fields.dart` | `SoftTextField` 新增**可选**参数 `textAlign` / `autofocus` / `inputFormatters` / `enabled` / `style` / `onSubmitted`（默认值不变 ⇒ 其余 4 处调用零改动） |
 
 ### 8.2 界面写的三句实话

@@ -602,7 +602,9 @@ void main() {
     expect(find.text('只读模式 · 数据来自服务器（写入口尚未接入）'), findsOneWidget);
     expect(find.text('当前可用积分'), findsOneWidget);
 
-    // live 模式点「记一笔」：必须明确拒绝，而不是打开一个只改内存的表单。
+    // live 但**没注入写客户端**：「记一笔」必须明确拒绝，而不是打开一个只改内存的表单。
+    // ★ 2026-11-03：文案改用 `adjustReadOnlyWriteMessage`。原来的判据是
+    // `isReadOnly`（live ⇒ true），导致注入了写客户端的家庭也被这句拦住。
     final Finder quickNote = find.text('记一笔');
     await tester.scrollUntilVisible(
       quickNote,
@@ -611,7 +613,7 @@ void main() {
     );
     await tester.tap(quickNote);
     await tester.pump();
-    expect(find.text(store.readOnlyWriteMessage), findsOneWidget);
+    expect(find.text(store.adjustReadOnlyWriteMessage), findsOneWidget);
   });
 
   // ============================================ W7-B：监护人同意

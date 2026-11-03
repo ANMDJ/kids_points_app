@@ -63,23 +63,33 @@ class _AddWishSheetState extends State<AddWishSheet> {
               );
               return;
             }
-            // W5-C：live 模式真的 POST /wishes；孩子的权限若是「需要审批」，
-            // 服务端 403 `APPROVAL_REQUIRED` ⇒ 返回可读原因，**弹窗不关、
-            // 输入不丢**，让家长知道这次没保存。
-            final String? message = await widget.store.submitAddWish(
+            // live 模式先真的 POST /wishes；孩子被矩阵拦成
+            // 403 `APPROVAL_REQUIRED` 时，store 会**接着**落一条审批单
+            // （`POST /approvals`，action=`add_wish`），返回 pendingApproval。
+            // 三种结局分开说：存上了 / 已提交等家长批 / 没成且原因如下。
+            final WishAddResult result = await widget.store.submitAddWish(
               title: title,
               cost: cost,
               emoji: emoji,
             );
             if (!sheetContext.mounted) return;
-            if (message != null) {
+            if (result.isFailed) {
               widget.messenger.hideCurrentSnackBar();
-              widget.messenger.showSnackBar(SnackBar(content: Text(message)));
+              widget.messenger.showSnackBar(
+                SnackBar(content: Text(result.error ?? '这次没有保存。')),
+              );
               return;
             }
             Navigator.of(sheetContext).pop();
+            widget.messenger.hideCurrentSnackBar();
             widget.messenger.showSnackBar(
-              SnackBar(content: Text('已添加心愿：$title（$cost 积分）')),
+              SnackBar(
+                content: Text(
+                  result.isPendingApproval
+                      ? '已提交给家长审批：「$title」（$cost 积分）。家长批准后会出现在心愿单里。'
+                      : '已添加心愿：$title（$cost 积分）',
+                ),
+              ),
             );
           },
           child: Column(
