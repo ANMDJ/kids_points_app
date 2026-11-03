@@ -12,6 +12,7 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
+import 'family_join_actions.dart';
 import 'session_actions.dart';
 import 'onboarding_screen.dart';
 import 'update_gate.dart';
@@ -20,6 +21,7 @@ import 'sheets/consent_sheet.dart';
 import 'sheets/export_sheet.dart';
 import 'sheets/family_deletion_sheet.dart';
 import 'sheets/invite_sheet.dart';
+import 'sheets/join_family_sheet.dart';
 import 'sheets/member_sheet.dart';
 import 'sheets/my_applications_sheet.dart';
 import 'sheets/notifications_sheet.dart';
@@ -46,6 +48,8 @@ class ProfileScreen extends StatelessWidget {
     final AppUpdateScope? update = AppUpdateScope.maybeOf(context);
     // P0-2：登录态下的「退出登录」。`null` ⇒ 预览模式 / 未登录，不画这一行。
     final SessionActions? sessionActions = SessionActions.maybeOf(context);
+    // P0-3：登录态下的「加入家庭」。`null` ⇒ 预览模式 / 未登录，不画这一行。
+    final FamilyJoinActions? joinActions = FamilyJoinActions.maybeOf(context);
 
     // live 模式下昵称已经接了写端点（`PATCH /child`，W5-E）、回收站也接了
     // 后端（W5-F）；只剩「恢复演示数据」是纯本地操作 —— 它若在 live 模式下
@@ -261,6 +265,24 @@ class ProfileScreen extends StatelessWidget {
                     color: AppColors.divider,
                     indent: 66,
                   ),
+                  // P0-3：加入另一个家庭（`POST /invites/accept`）。
+                  // 与「邀请码」相反的方向：那一行是**发**码，这一行是**收**码。
+                  // 只有真能加入时才画：`joinActions == null`（未登录/无运行期身份）
+                  // 或预览模式（没配 `KP_API_BASE_URL`，点了必然得到一句"没接后端"）。
+                  if (joinActions != null && store.isLiveMode) ...<Widget>[
+                    _MenuRow(
+                      icon: Icons.group_add_rounded,
+                      color: AppColors.primaryDeep,
+                      label: '加入家庭',
+                      onTap: () => showJoinFamilySheet(context),
+                    ),
+                    const Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: AppColors.divider,
+                      indent: 66,
+                    ),
+                  ],
                   if (store.hasParentMode) ...<Widget>[
                     _MenuRow(
                       icon: Icons.admin_panel_settings_outlined,

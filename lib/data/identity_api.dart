@@ -54,6 +54,24 @@ abstract class IdentityApi {
   /// `POST /auth/child-session` —— 在这台设备上建立 `(deviceId, childId)` 会话。
   Future<ChildSessionResult> establishChildSession(String childId);
 
+  /// `POST /invites/accept` —— 用家长发的邀请码**加入一个已有家庭**（P0-3）。
+  ///
+  /// ── 为什么它挂在这里，而不是 `WriteApi` / `AuthApi` ────────────────────────
+  ///   · 回包与 [establishChildSession] 同构（`childId` / `role` /
+  ///     `sessionExpiresAt`）：它**签发一条本机会话**，属于"把身份落到这台
+  ///     设备上"；服务端在同一个事务里写成员位 + `DeviceSession` + 审计。
+  ///   · 它发生在"我还不是这个孩子的成员"的时刻，所以不能走
+  ///     `MembershipGuard`，但**仍然要求我已经登录**（`AuthGuard`）且
+  ///     本机有一个有效会话（`DeviceSessionGuard` 读 `x-kp-child-id`）。
+  ///     ⇒ D3（`43` §8）走默认："先登录、再输码"。
+  ///
+  /// 失败码（`write_api_errors.dart` 逐条翻成中文，**不要**在界面另编文案）：
+  ///   400 `INVITE_CODE_MALFORMED`（形状不对，不消耗名额）
+  ///   409 `INVITE_CODE_UNAVAILABLE`（不存在 / 过期 / 用完 / 吊销，四种同形）
+  ///   409 `ALREADY_MEMBER`（已经是成员，不消耗名额）
+  ///   401（token 失效 / 本机会话不存在 ⇒ 重新登录）
+  Future<ChildSessionResult> acceptInvite(String code);
+
   /// `POST /children` —— 还没有孩子的账号：接受同意 + 建占位档案。
   ///
   /// ★ 请求体里**没有昵称**："同意必须早于采集"（后端 `BootstrapChildDto`）。
@@ -120,6 +138,41 @@ class IdentityApiClient implements IdentityApi {
         body: <String, Object?>{'childId': target},
       ),
       'POST /auth/child-session',
+    );
+    return ChildSessionResult(
+      childId: readString(json, 'childId', r'$.childId'),
+      role: readString(json, 'role', r'$.role'),
+      sessionExpiresAt:
+          readDate(json, 'sessionExpiresAt', r'$.sessionExpiresAt'),
+    );
+  }
+
+  /// `POST /invites/accept`（P0-3）。
+  ///
+  /// ── 三个刻意的细节 ──────────────────────────────────────────────────────────
+  ///   ① **原样上送用户输入**（去首尾空白）：`normalizeInviteCodeInput()` 由调用方
+  ///      先做，这里不再改写一次 —— 两份归一化就会有两份边界（`ab-cd` vs `ab cd`）；
+  ///   ② 不传 `role` / `childId`：后端 `forbidNonWhitelisted` 会 400，
+  ///      而且角色**只能**来自邀请码行（客户端自报角色 = 提权）；
+  ///   ③ 回包缺字段 ⇒ 严格 DTO 报错，**不**把"回包截断"当成"加入失败"。
+  @override
+  Future<ChildSessionResult> acceptInvite(String code) async {
+    final String trimmed = code.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError.value(code, 'code', '不能为空');
+    }
+    // 长度粗上限与后端 `AcceptInviteDto` 的 `@MaxLength(32)` 同口径；
+    // 真正的形状判定由调用方用 `isWellFormedInviteCode()` 在本地先做一次。
+    if (trimmed.length > 32) {
+      throw ArgumentError.value(code, 'code', '不能超过 32 字符（后端同口径）');
+    }
+    final Map<String, Object?> json = _asObject(
+      await _send(
+        method: 'POST',
+        path: '/invites/accept',
+        body: <String, Object?>{'code': trimmed},
+      ),
+      'POST /invites/accept',
     );
     return ChildSessionResult(
       childId: readString(json, 'childId', r'$.childId'),

@@ -12,6 +12,7 @@ import ConsentSheet from '../../sheets/ConsentSheet'
 import ExportSheet from '../../sheets/ExportSheet'
 import FamilyDeletionSheet from '../../sheets/FamilyDeletionSheet'
 import InviteSheet from '../../sheets/InviteSheet'
+import JoinFamilySheet from '../../sheets/JoinFamilySheet'
 import MemberSheet from '../../sheets/MemberSheet'
 import MyApplicationsSheet from '../../sheets/MyApplicationsSheet'
 import NotificationsSheet from '../../sheets/NotificationsSheet'
@@ -75,6 +76,9 @@ export default function Profile() {
   // W5-I：邀请码面板自己先确认角色（`invite_member` 仅家长 ALLOW），
   // 所以入口对所有角色可见 —— 孩子点进去看到的是说明，不是 403。
   const inviteSheet = useSheet()
+  // P0-3：「加入家庭」与上面那一行方向相反（我输码加入别人家）。
+  // 只有真有一个本机会话时才给入口（预览模式点了必然失败，不发那个请求）。
+  const joinFamilySheet = useSheet()
   // W8-C：家长模式。矩阵里 `switch_role_mode` 对孩子**也是** ALLOW —— PIN 才是
   // 那道门，所以这一行在孩子设备上同样显示：家长可以把手机接过去自己输 PIN，
   // 不必让孩子「先登出再登录」。
@@ -302,6 +306,27 @@ export default function Profile() {
               <Icon name='chevronRight' size={22} color='#b6bdb0' />
             </View>
             <View className='kp-profile__menu-divider' />
+            {/* P0-3：加入家庭（`POST /invites/accept`）。与「邀请码」相反：
+                那一行发码，这一行收码。只在真的登录且有本机会话时渲染 ——
+                预览模式 / 未登录时点开只会得到一句「还没登录」。 */}
+            {store.isAuthenticated ? (
+              <>
+                <View
+                  className='kp-profile__menu'
+                  onClick={() => joinFamilySheet.show()}
+                >
+                  <View
+                    className='kp-profile__menu-icon'
+                    style={{ backgroundColor: withAlpha('#62c1b8', 34 / 255) }}
+                  >
+                    <Icon name='plus' size={19} color='#62c1b8' />
+                  </View>
+                  <Text className='kp-profile__menu-label'>加入家庭</Text>
+                  <Icon name='chevronRight' size={22} color='#b6bdb0' />
+                </View>
+                <View className='kp-profile__menu-divider' />
+              </>
+            ) : null}
             {/* W8-C：家长模式（PIN 换 5 分钟家长权限）。矩阵里 `switch_role_mode`
                 对孩子**也是** ALLOW —— PIN 才是那道门，所以孩子设备上同样显示。
                 `hasParentMode` 为假（预览模式 / 未配后端）时整行不渲染：点开只会
@@ -508,6 +533,13 @@ export default function Profile() {
           <InviteSheet
             visible={inviteSheet.visible}
             onClose={inviteSheet.hide}
+          />
+        ) : null}
+        {/* P0-3：加入家庭弹窗（本地先判形状，服务端原文显示在面板内） */}
+        {joinFamilySheet.open ? (
+          <JoinFamilySheet
+            visible={joinFamilySheet.visible}
+            onClose={joinFamilySheet.hide}
           />
         ) : null}
         {/* W8-C：家长模式弹窗。打开时才拉 `GET /auth/parent-mode`；

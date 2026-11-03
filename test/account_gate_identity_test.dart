@@ -308,6 +308,12 @@ class _FakeIdentityApi implements IdentityApi {
     return BootstrapChildResult(childId: bootstrapChildId, role: 'guardian');
   }
 
+  /// ★ P0-3（2026-11-03）：`IdentityApi` 多了 `acceptInvite()`；本文件不测加入家庭，
+  /// 所以这里**响亮地**失败（而不是返回一个假会话，让漏测变成假绿）。
+  @override
+  Future<ChildSessionResult> acceptInvite(String code) async =>
+      throw UnimplementedError('本文件不测加入家庭');
+
   @override
   Future<void> renameChild(String name) async {
     renamed.add(name);

@@ -11,6 +11,7 @@ import '../data/session_scope.dart';
 import '../data/token_store.dart' show AuthTokenHolder;
 import '../data/write_api_errors.dart' show WriteApiException, WriteFailureKind;
 import 'create_child_screen.dart';
+import 'family_join_actions.dart';
 import 'login_screen.dart';
 import 'register_screen.dart';
 import 'session_actions.dart';
@@ -394,6 +395,54 @@ class _AccountGateState extends State<AccountGate> {
     });
   }
 
+  /// 用邀请码加入一个**已有家庭**（P0-3）。
+  ///
+  /// ── 为什么这一条必须在闸门里，而不是在「我的」页里 ──────────────────────────
+  ///   加入成功意味着"我在哪个孩子上"变了：必须同时做三件事 ——
+  ///   `acceptInvite` → `SessionScope.adoptChild` → `onIdentityChanged`。
+  ///   只做第一件（页面自己调 API）会让界面停在旧家庭：新会话行已经签发，
+  ///   但 App 还在用旧 childId 发请求（读到的仍是旧家庭，或 401）。
+  ///
+  /// ── 为什么不校验形状 ────────────────────────────────────────────────────────
+  ///   形状判定只有一份：`isWellFormedInviteCode()`（`models/invite.dart`，
+  ///   与后端 `invite-code.ts` 同源）。面板先做，这里只兜空值 ——
+  ///   在两层各写一套边界，迟早会出现"面板放行、这里拒绝"。
+  Future<String?> _joinFamily(String code) async {
+    final IdentityApi? identity = widget.identityApi;
+    if (identity == null) {
+      return '这个版本没有接后端（缺 KP_API_BASE_URL），无法加入家庭。';
+    }
+    if (code.trim().isEmpty) return '请先输入邀请码。';
+    try {
+      final ChildSessionResult result = await identity.acceptInvite(code);
+      // 服务端在同一个事务里已写 `DeviceSession(deviceId, newChildId)`：
+      // 把回包收下来即可，**不需要**再调 `POST /auth/child-session`。
+      await widget.session?.adoptChild(
+        childId: result.childId,
+        role: result.role,
+      );
+      widget.onIdentityChanged?.call();
+      if (!mounted) return null;
+      // `signedIn` 分支的子树以 childId 为 key（见 build）：这一行会让
+      // 首页按新家庭重建，而不是继续画上一个家庭的缓存。
+      setState(() {
+        _phase = _Phase.signedIn;
+        _banner = null;
+      });
+      return null;
+    } on WriteApiException catch (error) {
+      if (!mounted) return error.userMessage;
+      // 401 ⇒ 凭据已失效，`IdentityApiClient` 已清 token；
+      // 闸门的监听器会把界面切回登录页。这里仍把原文交给面板显示。
+      if (error.kind == WriteFailureKind.unauthenticated) {
+        setState(() => _phase = _Phase.needLogin);
+      }
+      return error.userMessage;
+    } on ArgumentError catch (error) {
+      return error.message?.toString() ?? '邀请码格式不对。';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     switch (_phase) {
@@ -407,15 +456,20 @@ class _AccountGateState extends State<AccountGate> {
         return KeyedSubtree(
           key: ValueKey<String>(
               'kp-session-${widget.session?.childId ?? 'static'}'),
-          // P0-2：把「退出登录」交给下层页面（「我的」页），动作仍只有这一份
-          // 实现（见 `session_actions.dart` 文件头）。
-          child: SessionActions(
-            signOut: _signOut,
-            // P0-2b：账号绑定 / 改密走的必须是**同一个** holder（见
-            // `session_actions.dart` 里 `authApi` 的说明）；`null` ⇒ 预览模式，
-            // 「我的」页不会画「登录账号」。
-            authApi: widget.authApi,
-            child: widget.child,
+          // P0-3：把「输邀请码加入家庭」交给下层页面；动作仍只有这一份
+          // 实现（见 `family_join_actions.dart` 文件头）。
+          child: FamilyJoinActions(
+            joinFamily: _joinFamily,
+            // P0-2：把「退出登录」交给下层页面（「我的」页），动作仍只有这一份
+            // 实现（见 `session_actions.dart` 文件头）。
+            child: SessionActions(
+              signOut: _signOut,
+              // P0-2b：账号绑定 / 改密走的必须是**同一个** holder（见
+              // `session_actions.dart` 里 `authApi` 的说明）；`null` ⇒ 预览模式，
+              // 「我的」页不会画「登录账号」。
+              authApi: widget.authApi,
+              child: widget.child,
+            ),
           ),
         );
       case _Phase.needLogin:

@@ -1097,3 +1097,28 @@
   font-weight: 600;
   color: $primary-text;
 }
+
+// ── 「加入家庭」面板（P0-3，2026-11-03）──────────────────────────────────────
+// 说明文字与错误块各一条：形状规则写在提示里（本地拦），服务端原文放错误块。
+.kp-join-family__hint {
+  display: block;
+  margin-top: f2r(8);
+  font-size: f2r(11.5);
+  line-height: 1.6;
+  color: $text-secondary;
+}
+
+.kp-join-family__error {
+  margin-top: f2r(12);
+  padding: f2r(11) f2r(14);
+  background-color: $chip-bg;
+  border: 1px solid rgba(233, 131, 75, 0.25);
+  border-radius: f2r(12);
+}
+
+.kp-join-family__error-text {
+  display: block;
+  font-size: f2r(12.5);
+  line-height: 1.5;
+  color: $point-spend;
+}

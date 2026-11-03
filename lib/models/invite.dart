@@ -1,5 +1,37 @@
 import 'point_record.dart' show MemberRole;
 
+/// 邀请码的**形状**（长度 / 字符表）—— 与后端
+/// `backend/src/invites/invite-code.ts` 同源（P0-3，2026-11-03）。
+///
+/// ── 为什么客户端也要有一份 ──────────────────────────────────────────────────
+///   `POST /invites/accept` 对形状错误回 400 `INVITE_CODE_MALFORMED`。
+///   用户少抄一位时就先等一次往返、再被拒，是可避免的等待；但客户端抄错
+///   一个字符就会变成「本地放行、服务端 400」—— 所以这三份（backend / App /
+///   小程序）由 `tools/invite-code-check.mjs` **逐字比对**，不靠"下次记得同步"。
+const int kInviteCodeLength = 8;
+
+/// 31 个易辨认字符：去掉 `0 O 1 I L`（爷爷在电话里念、家长手动抄）。
+const String kInviteCodeAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+/// 规范化用户输入（与后端 `normalizeInviteCode()` 同一条规则）：
+/// 去空白与连字符、转大写。
+///
+/// **不做** `O→0` / `l→1` 这类猜测：字母表里本来就没有它们，
+/// 猜错了只会把「输错了」变成「码无效但看起来对」。
+String normalizeInviteCodeInput(String raw) =>
+    raw.replaceAll(RegExp(r'[\s-]'), '').toUpperCase();
+
+/// 形状是否合法（应先 [normalizeInviteCodeInput]）。
+///
+/// `false` ⇒ 本地就能说「还差几位 / 有非法字符」，不必发一次必然 400 的请求。
+bool isWellFormedInviteCode(String code) {
+  if (code.length != kInviteCodeLength) return false;
+  for (final String char in code.split('')) {
+    if (!kInviteCodeAlphabet.contains(char)) return false;
+  }
+  return true;
+}
+
 /// 一个邀请码最多能被几个人用（与 `backend/src/invites/invite-code.ts` 的
 /// `MAX_INVITE_USES` 同口径；后端 DTO 用 `@Max(10)` 兜底）。
 const int kMaxInviteUses = 10;

@@ -98,6 +98,9 @@ export class WriteApiException extends Error {
     }
 
     const base = { statusCode, code, detail }
+    /** 服务端已经写好的中文（空串按"没有"处理，避免界面出现一条空提示）。 */
+    const serverMessage =
+      detail !== null && detail.trim() !== '' ? detail : null
 
     if (statusCode === 401) {
       return new WriteApiException(
@@ -218,6 +221,16 @@ export class WriteApiException extends Error {
           base
         )
       }
+      // ── 加入家庭（P0-3）：形状不对（400）──────────────────────────────────
+      // 服务端把「8 位 / 31 字符表 / 你输入的是什么」写在同一句中文里；
+      // 取原文，不抄第二份 —— 抄一份就会漂移成「本地放行、服务端 400」。
+      if (code === 'INVITE_CODE_MALFORMED') {
+        return new WriteApiException(
+          'badRequest',
+          serverMessage ?? '邀请码形状不对（400），这次没有提交。',
+          base
+        )
+      }
       return new WriteApiException(
         'badRequest',
         '请求参数不被服务端接受（400），这次操作没有保存。',
@@ -324,6 +337,26 @@ export class WriteApiException extends Error {
         return new WriteApiException(
           'conflict',
           '这个成员已经被移出家庭了，请刷新成员列表。',
+          base
+        )
+      }
+      // ── 加入家庭（P0-3，2026-11-03）──────────────────────────────────────
+      // 后端故意把「不存在 / 过期 / 用完 / 吊销」收敛成同一个 409（区分它们
+      // 等于给端点一个「哪些码存在」的探测面）；「已经是成员」是另一件事：
+      // 它**不消耗名额**，而且用户下一步是"直接进那个家庭"，不是"再要一张码"。
+      if (code === 'INVITE_CODE_UNAVAILABLE') {
+        return new WriteApiException(
+          'conflict',
+          serverMessage ??
+            '这张邀请码现在不能用（不存在 / 已过期 / 已用完 / 已吊销），这次没有提交。',
+          base
+        )
+      }
+      if (code === 'ALREADY_MEMBER') {
+        return new WriteApiException(
+          'conflict',
+          serverMessage ??
+            '你已经是这个家庭的成员了，这次没有消耗邀请码，角色也没有被改变。',
           base
         )
       }

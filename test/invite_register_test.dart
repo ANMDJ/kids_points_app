@@ -298,6 +298,11 @@ class _FakeIdentityApi implements IdentityApi {
   Future<BootstrapChildResult> bootstrapChild({String relation = 'other'}) async =>
       const BootstrapChildResult(childId: 'child-new', role: 'guardian');
 
+  /// ★ P0-3（2026-11-03）：`IdentityApi` 多了 `acceptInvite()`；本文件不测加入家庭。
+  @override
+  Future<ChildSessionResult> acceptInvite(String code) async =>
+      throw UnimplementedError('本文件不测加入家庭');
+
   @override
   Future<void> renameChild(String name) async {}
 

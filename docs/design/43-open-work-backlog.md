@@ -24,9 +24,9 @@
 
 | 编号 | 任务 | 现状 | 证据 |
 |---|---|---|---|
-| **P0-2** | App「登录账号」面板 ＋「我的 → 退出登录」 | **部分完成（2026-11-03）**：「退出登录」已做；「登录账号」（绑定手机号/邮箱 + 改密）面板**未做** | 本轮复核：新增 `lib/screens/session_actions.dart`，`account_gate.dart` 的 `signedIn` 分支注入 `SessionActions`、`_signOut()` 补 `onIdentityChanged`（清上一个孩子的缓存）；`profile_screen.dart` 末尾「退出登录」行 + 二次确认；`test/session_actions_test.dart` 2 条、`flutter test` **467 全通过**、`flutter analyze` 0 issue。**仍未做**：`auth/account` 在 `lib/**` 仍是 **0 命中**（`updateAccount()` 有客户端、没有界面） |
+| **P0-2** | App「登录账号」面板 ＋「我的 → 退出登录」 | ✅ **已完成（2026-11-03）**（拆成 P0-2a / P0-2b 两条落地） | 本轮复核：「退出登录」= `lib/screens/session_actions.dart`（`signedIn` 分支注入）＋ `account_gate.dart` 的 `_signOut()`（清 childId + `onIdentityChanged`）＋ `profile_screen.dart` 的二次确认；「登录账号」= 下面的 P0-2b；证据 = `test/session_actions_test.dart` **2 条** ＋ `test/account_sheet_test.dart` **6 条**，`flutter test` **492 全通过**、`flutter analyze` 0 issue |
 | **P0-2b** | App 内「登录账号」面板：绑定/换绑手机号邮箱、设置/修改密码（`PUT /auth/account`） | ✅ **已完成（2026-11-03）** | 本轮复核：`lib/data/auth_api.dart` 新增 `fetchAccount()`（`GET /auth/account`）；`lib/screens/sheets/account_sheet.dart`（先读再画、只提交改动过的字段、`403 CURRENT_PASSWORD_INVALID` 留在本页）；入口 = 「我的」页「登录账号」（`profile_screen.dart`），`SessionActions` 带上同一份 `AuthApi`（同一 holder，401 才会真的清 token）；证据 = `test/account_sheet_test.dart` **6 条** |
-| **P0-3** | 「已有账号 → 输入邀请码加入家庭」（`POST /invites/accept`）双端入口 | **未做**（W11-A 注册门只覆盖「还没有账号」） | 本轮复核：`node tools/search-tracked.mjs 'invites/accept\|acceptInvite'` → 只命中 `docs/`（43/44–47 的讨论），`lib/**` 与 `kids_points_mp/src/**` **0 命中** |
+| **P0-3** | 「已有账号 → 输入邀请码加入家庭」（`POST /invites/accept`）双端入口 | ✅ **已完成（2026-11-03，双端）** | 本轮复核：**App** —— `lib/data/identity_api.dart` 新增 `acceptInvite()`（`POST /invites/accept`，回包复用 `ChildSessionResult`）；新增 `lib/screens/family_join_actions.dart`（动作只有一份），`account_gate.dart` 的 `_joinFamily` 走完 accept → `SessionScope.adoptChild` → `onIdentityChanged`；`lib/screens/sheets/join_family_sheet.dart` + 「我的 → 加入家庭」（`profile_screen.dart`）；`write_api_errors.dart` 补 `ALREADY_MEMBER` 取服务端原文。**小程序** —— `kids_points_mp/src/utils/invite_code.ts`、`write_dto.ts` 的 `InviteAcceptDto`、`write_api.ts` 的 `acceptInvite()`（带 `x-kp-child-id`）、`store.ts` 的 `submitAcceptInvite()`（切换 `sharedDeviceContext` + 清上一个家庭缓存 + 拉新首页）、`sheets/JoinFamilySheet.tsx` + 「我的」入口；`write_api_errors.ts` 补 400 `INVITE_CODE_MALFORMED` / 409 `INVITE_CODE_UNAVAILABLE` / `ALREADY_MEMBER`。**守门** —— 新增 `tools/invite-code-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run invite:check` 与 `npm run ci`。**证据**：`flutter test` **492 全通过**（新增 `test/join_family_test.dart` **9 条**）、`flutter analyze` **0 issue**、`kids_points_mp` `tsc --noEmit` **0 error**、`backend npm run typecheck` **0 error**、`node tools/invite-code-check.mjs` **PASS**。**仍未做**：真机 / 真库走一次「A 生成 → B 接受 → B 能读」的端到端验收（本环境无 GUI，见 §9） |
 | **签名** | App release 包用的是 **debug 签名** | **未做**（要你决定 keystore 的保管与口令） | 本轮复核：`android/app/build.gradle.kts:34-36` —— `TODO: Add your own signing config` ＋ `signingConfig = signingConfigs.getByName("debug")`。后果：任何人都能用公开的 debug key 给同一包名签「更新」；换正式密钥又必须卸载重装 |
 | **注册闭环** | 真机用**网站码**走完一次注册（含用户 2026-11-03 报的那次 400 的真实原因） | **验收未完成** | 本轮复核（2026-11-03 二次发版）：线上 `GET /k/app/version` → **`1.0.4 / build 5`**（`pubspec.yaml` / `lib/app_version.dart` / `kids.env` 三处一致，APK `Content-Length: 52578938`）；线上探针三种拒绝的形状都对 —— 码形状错 `400 INVITE_CODE_MALFORMED`、码不存在 `409 INVITE_CODE_UNAVAILABLE`、弱口令 `400 WEAK_PASSWORD`。**2026-11-03 已做**：① `write_api_errors.dart` 显示服务端原文；② 注册页本地判密码强度（`lib/data/password_rules.dart`）＋ 密码要求**常驻**文案；③ 标识框下明确「网站码只认申请时填的手机号/邮箱」；④ 「我的 → 登录账号」（可在 App 内改密）。**仍缺**：真机用 1.0.4+5 走完一次**成功**注册；用户那次 400 的具体触发条件仍未取得（需其回报界面文案） |
 | **注册一致（小程序）** | 小程序注册页补本地密码校验 ＋ 完整要求文案（App 2026-11-03 已做） | ✅ **已完成（2026-11-03）** | 本轮复核：新增 `kids_points_mp/src/utils/password_rules.ts`（服务端规则镜像）；`pages/register/index.tsx` 提交前判强度 + 密码框下**常驻**要求文案；`sheets/AppAccountSheet.tsx` 的「设置/修改密码」同样走它（原来只查长度，`密码最多 64 位。` 与服务端文案本就漂移）；新增守门脚本 `tools/password-rules-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run password:check` 与 `npm run ci` |
@@ -54,6 +54,9 @@
 P1-8 邀请制注册（W11-A，`45`）· 网站发码 ＋ `/invite` 页面（W12，`48`，2026-11-03 已上线）·
 **P0-2a App「我的 → 退出登录」**（2026-11-03）· **P0-2b App「我的 → 登录账号」**
 （2026-11-03：`GET/PUT /auth/account` 都有了调用方；证据 = `test/account_sheet_test.dart` **6 条**）·
+**P0-3 双端「加入家庭」**（2026-11-03：`POST /invites/accept` 在 `lib/**` 与
+`kids_points_mp/src/**` 都有调用方；App `join_family_sheet.dart` / 小程序 `JoinFamilySheet.tsx`；
+证据 = `test/join_family_test.dart` **9 条** ＋ `tools/invite-code-check.mjs` 三份形状守门）·
 **小程序密码规则与 App / 服务端三份一致**（2026-11-03：`kids_points_mp/src/utils/password_rules.ts`
 ＋ 守门脚本 `tools/password-rules-check.mjs`，`npm run password:check`）· **注册/登录失败原因透传**
 （2026-11-03：`lib/data/write_api_errors.dart` 对 `WEAK_PASSWORD` / `INVITE_CODE_MALFORMED` /
@@ -236,10 +239,30 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
 
 **验收判据**
 
-- [ ] 双端各有入口（建议：登录后「我的 → 输入邀请码」；是否允许未登录先输入见 §8 决策 3）。
-- [ ] 成功：加入成员位 → 刷新 `/home` 能看到新家庭的数据；不需要重启。
-- [ ] 四种不可用（过期 / 已用完 / 已吊销 / 已是成员）文案可区分，且**不消耗名额**。
+- [x] 双端各有入口（2026-11-03 落地：「我的 → 加入家庭」；D3 按默认走**先登录再输码**，
+      入口只在 `isAuthenticated` / `FamilyJoinActions != null` 时渲染）。
+- [x] 加入成功后客户端**切换**到新家庭：App 走 `SessionScope.adoptChild` +
+      `onIdentityChanged`（子树以 childId 为 key，整体重建并重拉 `/home`）；
+      小程序走 `sharedDeviceContext.applyChild` + `resetToEmpty()` + `refreshFromServer()`。
+      ⚠️ 真机数据验收（B 真看到 A 家的积分）**尚未**跑，见 §9。
+- [x] 三类可区分、且失败**不消耗**名额：400 `INVITE_CODE_MALFORMED`（形状）/ 409
+      `INVITE_CODE_UNAVAILABLE`（不存在 / 过期 / 用完 / 吊销，**后端故意同形**，
+      避免成为「哪些码存在」的探针）/ 409 `ALREADY_MEMBER`。
 - [ ] 一条端到端用例：A 生成 → B 接受 → B 能读 → A 能在成员列表看到 B。
+      后端真库用例已有（`backend/test-db/invites-db.dbtest.ts`）；客户端本次只覆盖到
+      「accept → adoptChild → 清缓存」（`test/join_family_test.dart`），**跨端端到端未跑**
+      （需要活 PostgreSQL + 两台设备，见 §9）。
+
+> **已知边界（不是本次遗漏，是后端契约）**：`accept` 挂着 `DeviceSessionGuard`，
+> 要求本机已有一条 `(deviceId, childId)` 会话行 —— 因此**零孩子的账号**走不了这条路
+> （它要么先 `POST /children` 建一个孩子，要么用网站码重新注册）。
+> D3 的默认（先登录再输码）与这个约束一致：入口只画在有会话的「我的」页。
+>
+> **另一个已知体验点**：加入成功后走的是 `AppStore.resetForIdentity()`（与登录 / 换账号
+> 同一条），它会把**日期码闸门**一并重置 ⇒ 用户会遇到一次「请再输今天 6 位码」。
+> 这是刻意的：同一个 reset 也用于换账号，若在这里保留取巧的"解锁"标记，
+> 换账号后下一个人就能绕过闸门。要改成"换孩子不重锁"需要给闸门加一个设备级状态
+> 与一条产品裁定，本轮**没有**做。
 
 **估计** 0.5–1 人日（双端）· **依赖** P0-1（App 侧需要真实会话）
 

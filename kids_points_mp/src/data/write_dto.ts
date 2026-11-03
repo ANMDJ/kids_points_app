@@ -250,6 +250,47 @@ export class InviteRevokeDto {
 }
 
 /**
+ * `POST /invites/accept` 的 200 响应（P0-3，2026-11-03）。
+ *
+ * 与 `auth_dto.ts` 的 `ChildSessionResultDto` 同构（服务端两条路由的回包形状
+ * 本来就一样：加入家庭 ⇒ 同时签发一条 `DeviceSession`），但这里**不复用**那个类：
+ * 它抛的是 `AuthApiException`，而本层（写端点）的调用方只处理
+ * `WriteApiException` —— 一次严格解析失败会变成"页面不认识的异常"。
+ *
+ * 三个字段都要当真：
+ *   · `childId` 必须非空 —— 空的回包等于「加入了但没有家」，不能静默采用；
+ *   · `role` 只认 `child` / `guardian`（`viewer` 从来不是邀请码的目标角色）；
+ *   · `sessionExpiresAt` 是**服务端**签发的到期时刻（epoch ms），本地不能改成"现在 + 30 天"。
+ */
+export class InviteAcceptDto {
+  constructor(
+    readonly childId: string,
+    readonly role: 'child' | 'guardian',
+    readonly sessionExpiresAt: number
+  ) {}
+
+  static fromJson(raw: unknown, path = '$'): InviteAcceptDto {
+    const json = readObject(raw, path)
+    const childId = readString(json, 'childId', `${path}.childId`)
+    if (childId === '') {
+      throw WriteApiException.malformed(`${path}.childId`, 'childId 不能为空')
+    }
+    const rawRole = json.role
+    if (rawRole !== 'child' && rawRole !== 'guardian') {
+      throw WriteApiException.malformed(
+        `${path}.role`,
+        `期望 child / guardian，实际 ${String(rawRole)}`
+      )
+    }
+    return new InviteAcceptDto(
+      childId,
+      rawRole,
+      readDate(json, 'sessionExpiresAt', `${path}.sessionExpiresAt`)
+    )
+  }
+}
+
+/**
  * `PATCH /notifications/:id/read` 的 200 响应（W5-L）。
  *
  * 只有两个字段，两个都要**当真**：

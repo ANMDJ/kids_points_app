@@ -25,6 +25,7 @@ import { WriteApiException } from './write_api_errors'
 import {
   ApprovalDto,
   ChildProfileDto,
+  InviteAcceptDto,
   InviteRevokeDto,
   MemberRemoveDto,
   NotificationReadDto,
@@ -33,6 +34,7 @@ import {
 } from './write_dto'
 import type { MemberRole, MutableMemberRole } from './types'
 import { INVITE_MAX_TTL_DAYS, INVITE_MAX_USES } from './types'
+import { normalizeInviteCodeInput } from '../utils/invite_code'
 
 /** 写端点用到的 HTTP 方法（与后端 REST 语义一致，幂等哈希按真实方法算）。 */
 export type WriteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -319,6 +321,24 @@ export interface WriteApi {
    * 理解成「这次真的改了一行」，也不要拿它去覆盖别的字段。
    */
   revokeInvite(inviteId: string): Promise<InviteRevokeDto>
+
+  /**
+   * 用邀请码**加入一个已有家庭**（`POST /invites/accept`，P0-3，2026-11-03）。
+   *
+   * ── 为什么它属于写层 ────────────────────────────────────────────────────────
+   *   `AuthApi` 的 `send()` 只带 token + deviceId，而这条路由要求
+   *   `x-kp-child-id`（`DeviceSessionGuard` 按 `(deviceId, childId)` 查会话行）。
+   *   写层的 `config.effectiveChildId` 正好就是"我现在在哪个孩子上"，
+   *   加入成功后立刻改成新孩子（`sharedDeviceContext.applyChild`）。
+   *
+   * ★ 请求体**只有** `code`：角色只能来自邀请码行；传 `role` / `childId`
+   *   会被后端 `forbidNonWhitelisted` 400，而且等于让客户端自报权限。
+   *
+   * 失败码（`write_api_errors.ts` 已逐条翻成中文）：
+   *   400 `INVITE_CODE_MALFORMED`、409 `INVITE_CODE_UNAVAILABLE`、
+   *   409 `ALREADY_MEMBER`（不消耗名额）、401（会话失效）。
+   */
+  acceptInvite(code: string): Promise<InviteAcceptDto>
 
   /**
    * 作出监护人同意（`POST /consent`，W7-B）。
@@ -845,6 +865,25 @@ export class WriteApiClient implements WriteApi {
       `/invites/${encodeURIComponent(id)}/revoke`,
       null,
       (raw) => this.parseInviteRevoke(raw, id)
+    )
+  }
+
+  async acceptInvite(code: string): Promise<InviteAcceptDto> {
+    const normalized = normalizeInviteCodeInput(code)
+    if (normalized === '') {
+      // 空输入是**编程/界面**问题：这里响亮失败，不发一个必然
+      // 400 `INVITE_CODE_MALFORMED` 的请求（界面已经先拦过空值）。
+      throw new Error('邀请码不能为空。')
+    }
+    // 粗上限与后端 `AcceptInviteDto` 的 `@MaxLength(32)` 同口径。
+    if (normalized.length > 32) {
+      throw new Error('邀请码不能超过 32 个字符。')
+    }
+    return this.send(
+      'POST',
+      '/invites/accept',
+      { code: normalized },
+      (raw) => InviteAcceptDto.fromJson(raw)
     )
   }
 

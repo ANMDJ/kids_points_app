@@ -51,6 +51,11 @@ import {
 import { createWriteApiFromEnvironment, WriteApi } from './write_api'
 import { WriteApiException } from './write_api_errors'
 import {
+  INVITE_CODE_LENGTH,
+  isWellFormedInviteCode,
+  normalizeInviteCodeInput
+} from '../utils/invite_code'
+import {
   createOnboardingApiFromEnvironment,
   OnboardingApi,
   type OnboardingResult,
@@ -353,6 +358,14 @@ export class AppStore {
 
   /** 是否正在生成邀请码（表单按钮据此禁用并显示「生成中…」）。 */
   private creatingInviteValue = false
+
+  /**
+   * 「加入家庭」在途（P0-3）。
+   *
+   * 与 `creatingInviteValue` 分开：一个是**发**码、一个是**收**码，
+   * 共用一个忙碌位会让「家长正在生成码」时孩子那一侧永远点不动加入。
+   */
+  private acceptInviteBusyValue = false
 
   // ------------------------------------------- 监护人同意（W7-B，服务端）
   //
@@ -721,6 +734,11 @@ export class AppStore {
   /** 生成 / 吊销任一在途 —— 表单与行按钮统一禁用。 */
   get isInviteWriteBusy(): boolean {
     return this.creatingInviteValue || this.busyInviteIdValue !== null
+  }
+
+  /** 「加入家庭」在途（P0-3）：面板按钮据此禁用并显示「正在加入…」。 */
+  get isAcceptInviteBusy(): boolean {
+    return this.acceptInviteBusyValue
   }
 
   /**
@@ -4127,6 +4145,82 @@ export class AppStore {
       return '吊销请求已发出，但结果无法确认。请刷新后查看。'
     } finally {
       this.busyInviteIdValue = null
+      this.persist()
+    }
+  }
+
+  /**
+   * 用邀请码加入一个**已有家庭**（`POST /invites/accept`，P0-3，2026-11-03）。
+   *
+   * ── 为什么它不是"再拉一次 /auth/session" ────────────────────────────────────
+   *   加入后这个账号通常会有**两个孩子**（自己的 + 刚加入的）。而
+   *   `AuthSessionMachine.restore()` 对 N>1 返回 `needs_child_selection`
+   *   （首版限 1 个孩子，选择器还没做）—— 走那条路等于把用户推进一个
+   *   不存在的界面。`accept` 的回包已经**明确**告诉我们"进了哪个孩子、
+   *   什么角色"，直接采用它，比重新猜一次更准。
+   *
+   * ── 三件事的顺序不能乱 ──────────────────────────────────────────────────────
+   *   ① 先把 `sharedDeviceContext.childId` 换成新孩子（服务端在同一事务里
+   *      已签发 `DeviceSession(deviceId, newChildId)`，不必再调 child-session）；
+   *   ② 再把**上一个家庭**的页面缓存全部作废（成员 / 邀请码 / 回收站 /
+   *      审批 / 通知 / 引导…）—— `resetToEmpty()` 是唯一把每一片都清干净的地方；
+   *   ③ 最后立刻拉新家庭的首页：用户点完「加入」，回到页面时数据已经在了。
+   *
+   * 返回 `null` = 已加入；字符串 = 可直接展示的失败文案（服务端原文）。
+   */
+  async submitAcceptInvite(rawCode: string): Promise<string | null> {
+    const code = normalizeInviteCodeInput(rawCode)
+    if (code === '') return '请先输入邀请码。'
+    if (!isWellFormedInviteCode(code)) {
+      return `邀请码是 ${INVITE_CODE_LENGTH} 位字母数字（不含 0/O/1/I/L），现在输入的是 ${code.length} 位。请检查是否抄漏或抄错了字符。`
+    }
+    const api = this.writeApi
+    if (api === null) return '还没有登录或页面还没加载完成，暂时不能加入家庭。'
+    if (this.acceptInviteBusyValue) return '正在加入，请稍候…'
+
+    this.acceptInviteBusyValue = true
+    this.persist()
+    try {
+      const result = await api.acceptInvite(code)
+      // ① 换孩子（设备 id 不变：它不是凭据，也不该因为换家庭而变化）。
+      sharedDeviceContext.applyChild(result.childId)
+      // ② 上一个家庭的一切页面级事实都作废。
+      this.resetToEmpty()
+      this.profile = { ...this.profile, childId: result.childId }
+      this.authMembershipValue = {
+        childId: result.childId,
+        // 名字先留空：`/home` 的回包会给出新家庭的真实昵称，
+        // 抄上一个家庭的名字是这里最不该出现的"串数据"。
+        name: '',
+        role: result.role
+      }
+      this.authChildrenValue = []
+      this.readStatusValue = 'idle'
+      this.readErrorValue = null
+      this.persist()
+
+      // ③ 立刻拉新家庭的首页；失败由 `readError` 上报（首页会显示错误条）。
+      await this.refreshFromServer()
+
+      // 名字补进成员位（`accountLabel` 用它兜底），其余字段仍以服务端为准。
+      const name = this.profile.name
+      if (this.authMembershipValue !== null && name !== '') {
+        this.authMembershipValue = { ...this.authMembershipValue, name }
+      }
+      this.persist()
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        // 401 ⇒ 会话失效：交给既有闸门（`handleLoginRequired`）去跳登录页，
+        // 不要让它变成一句"加入失败"然后用户反复重试。
+        if (error.kind === 'unauthenticated') {
+          this.handleLoginRequired('token_rejected', error.userMessage)
+        }
+        return error.userMessage
+      }
+      return '请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.acceptInviteBusyValue = false
       this.persist()
     }
   }

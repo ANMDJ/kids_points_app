@@ -371,6 +371,15 @@ class WriteApiException implements Exception {
             WriteFailureKind.conflict,
             '连续生成的邀请码都撞上了已有的码（极少见），这次没有创建成功，请再试一次。',
           );
+        // ── 加入家庭（P0-3，2026-11-03）──────────────────────────────────────
+        // 「已经在这个家庭里」不是错误，但它必须**说清**：用户会以为
+        // 刚才那次点击没生效，于是再点一次（服务端不会消耗名额，但体验很差）。
+        // 文案取服务端原文（`invites.prisma.repository.ts:220`），不另写一份。
+        case 'ALREADY_MEMBER':
+          return fail(
+            WriteFailureKind.conflict,
+            serverMessage() ?? '你已经是这个家庭的成员了，这次没有消耗邀请码。',
+          );
       }
       return fail(
         WriteFailureKind.conflict,
