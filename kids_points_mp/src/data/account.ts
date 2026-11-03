@@ -1,3 +1,8 @@
+import {
+  PASSWORD_MAX as ACCOUNT_PASSWORD_MAX,
+  PASSWORD_MIN as ACCOUNT_PASSWORD_MIN,
+  passwordProblem
+} from '../utils/password_rules'
 import type { AccountSnapshot } from './auth_dto'
 
 /**
@@ -9,10 +14,12 @@ import type { AccountSnapshot } from './auth_dto'
  *        省掉一次往返和一个更容易看错的错误框；
  *     ② 把**已经拿到的**服务端事实（手机号/邮箱）变成人话（掩码 + 能否登录）。
  *
- *   ★ 刻意**不**复制这三条服务端规则：纯数字 / 常见弱口令 / 与手机号或邮箱相同。
- *     它们会随产品口径调整（弱口令清单尤其），复制一份到小程序就一定会漂移 ——
- *     而漂移的表现是"本地放过了、服务端拒绝"，用户看到一次莫名其妙的失败。
- *     这类失败现在直接显示服务端 `message`（它每一支都写了"下一步怎么改"）。
+ *   ★ 2026-11-03 起，密码强度**不再只是长度**：`checkAccountPassword()` 转调
+ *     `utils/password_rules.ts`（服务端规则的镜像）。起因与 App 完全一样 ——
+ *     用户看到 `400 WEAK_PASSWORD` 却不知道要求是什么，只能反复试。
+ *     镜像的代价被三道同源闸门兜住：`tools/password-rules-check.mjs`
+ *     逐字比对后端 / 小程序 / App 三份文案与阈值；真正不一致时以服务端
+ *     `message` 为准（它每一条都写了"下一步怎么改"）。
  *
  * ── 提交的是**用户原文**，不是这里处理过的值 ────────────────────────────────
  *   `normalizePhonePreview` 只用于判断"像不像个手机号"；请求体里发的始终是
@@ -20,9 +27,13 @@ import type { AccountSnapshot } from './auth_dto'
  *   客户端再归一一次就是两份真相：两边规则哪天不一致，绑上去的号就登不进来。
  */
 
-/** 与后端 `account-identifier.ts` 的 `PASSWORD_MIN` / `PASSWORD_MAX` **同值**。 */
-export const ACCOUNT_PASSWORD_MIN = 8
-export const ACCOUNT_PASSWORD_MAX = 64
+/**
+ * 密码长度边界**从 `utils/password_rules.ts` 再导出**（不在这里另写一份）。
+ *
+ * ★ 以前这里写着 `= 8` / `= 64` 两个字面量 —— 那正是"两处真相"的形状：
+ *   服务端把 `PASSWORD_MAX` 从 64 改成 72 时，没人会想到还有一份在小程序里。
+ */
+export { ACCOUNT_PASSWORD_MAX, ACCOUNT_PASSWORD_MIN }
 
 /**
  * 判断用的手机号（去掉空格 / 短横 / 括号 / 前置 `+86`）。
@@ -63,15 +74,23 @@ export function checkAccountEmail(raw: string): string | null {
 }
 
 /**
- * 新密码预检：只查长度（那条最稳定、也最不容易误伤的规则）。
+ * 新密码预检：**完整镜像服务端规则**（`utils/password_rules.ts`）。
  *
- * 全数字 / 常见弱口令 / 与手机号相同这几条**交给服务端**（见文件头）。
+ * ── 为什么不再只查长度 ──────────────────────────────────────────────────────
+ *   只查长度时，`12345678` 在本地是绿的、服务端回 `400 WEAK_PASSWORD`，
+ *   用户看到的是"保存失败"而不是"密码不能全是数字"（2026-11-03 App 的现场）。
+ *
+ * `identifier` 传用户这次要绑的手机号/邮箱原文（有就传）—— 它让
+ * `same_as_identifier` 这一条也能本地判出来；不传就跳过那一条，
+ * 由服务端对着库里的值回答。
+ *
+ * ★ 服务端仍然是唯一裁定者：这里只是"少一次必然失败的往返"。
  */
-export function checkAccountPassword(raw: string): string | null {
-  const length = [...raw].length
-  if (length < ACCOUNT_PASSWORD_MIN) return `密码至少 ${ACCOUNT_PASSWORD_MIN} 位。`
-  if (length > ACCOUNT_PASSWORD_MAX) return `密码最多 ${ACCOUNT_PASSWORD_MAX} 位。`
-  return null
+export function checkAccountPassword(
+  raw: string,
+  identifier?: string | null
+): string | null {
+  return passwordProblem(raw, identifier)
 }
 
 /** `13800138000` ⇒ `138****8000`（列表/状态行显示用）。 */

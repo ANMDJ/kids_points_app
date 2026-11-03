@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/password_rules.dart';
 import '../theme/app_colors.dart';
 import '../widgets/form_fields.dart';
 import '../widgets/soft_button.dart';
@@ -29,8 +30,15 @@ typedef RegisterSubmit = Future<String?> Function(
 ///   前者要开放平台审核 + 300 元/年（`42` §1）；后者要短信服务商，而本项目
 ///   刻意零第三方通道（`42` §0）。忘记密码的兜底是回小程序重设，不在这里。
 ///
+/// ── 密码：本地先说清要求，再提交 ───────────────────────────────────────────
+///   2026-11-03 用户反馈「拿到邀请码来注册，只说我这有问题」：当时 App 把
+///   请求直接发出去，再把服务端的 `400 WEAK_PASSWORD` 原文显示出来 ——
+///   他知道密码不合格，却不知道**要求是什么**。
+///   现在提交前用 `password_rules.dart`（服务端规则的镜像）判一次，
+///   并在密码框下面常驻一行要求；服务端仍然是唯一裁定者。
+///
 /// ── 密码不回显在任何错误里 ─────────────────────────────────────────────────
-///   本地提示只说「请填写密码」，服务端文案由 `account-identifier.ts` 统一给出；
+///   本地提示只说「请填写密码 / 密码至少 8 位」这类**规则**，
 ///   两处都不拼接用户输入（提示可能被截图 / 进日志）。
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({
@@ -78,9 +86,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final String password = _password.text;
     final String name = _displayName.text.trim();
 
-    // 本地只拦**空**：码形状、标识形状、密码强度都只有服务端一份规则
-    // （`invite-code.ts` / `account-identifier.ts`）。在客户端再抄一遍，
-    // 两边迟早不一致，而用户会看到「本地说可以、服务端说不行」。
+    // 本地拦两件事：
+    //   ① **空**（码 / 标识 / 密码）；
+    //   ② **密码强度** —— 规则是 `password_rules.dart` 里服务端那份的镜像。
+    //      提交前就说清「差在哪」，而不是发一次必然 400 的请求再显示原文。
+    // 码形状、标识形状仍然只有服务端一份规则（`invite-code.ts` /
+    // `account-identifier.ts`）：那两条一旦客户端抄写漂移，用户会看到
+    // 「本地说可以、服务端说不行」。
     if (code.isEmpty) {
       setState(() => _error = '请填写邀请码（向已经在用的家长要一个）。');
       return;
@@ -91,6 +103,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
     if (password.isEmpty) {
       setState(() => _error = '请填写密码。');
+      return;
+    }
+    final PasswordCheck strength =
+        checkPasswordStrength(password, identifier: who);
+    if (!strength.ok) {
+      setState(() => _error = strength.message);
       return;
     }
 
@@ -185,15 +203,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     keyboardType: TextInputType.emailAddress,
                     onSubmitted: (_) => _submit(),
                   ),
+                  // 网站码是**绑定**在一组手机号 + 邮箱上的（`48` §2）：注册时
+                  // 必须填申请时填过的其中一个。App 以前没写这句，用户换一个
+                  // 号码就会拿到「邀请码无效 / 已过期」（四种原因故意同形），
+                  // 完全推断不出真正的原因是「号码对不上」。
+                  const _FieldHint('用网站码注册时，这里要填申请邀请码时填过的手机号或邮箱。'),
                   const SizedBox(height: 14),
                   const FieldLabel('设置密码'),
                   SoftTextField(
                     controller: _password,
-                    hint: '至少 8 位，别用纯数字',
+                    // ★ 与后端 `account-identifier.ts#validatePasswordStrength` 的
+                    //   六条拒绝口径逐条对齐（8–64 位 / ≠手机号邮箱 / 非同一字符 /
+                    //   非纯数字 / 非常见弱口令）。判定已抽到 `password_rules.dart`，
+                    //   提交前本地先判一次；服务端仍然是唯一裁定者。
+                    hint: '8–64 位，至少含一个字母',
                     enabled: !_busy,
                     obscureText: _obscure,
                     onSubmitted: (_) => _submit(),
                   ),
+                  const _FieldHint(kPasswordRequirementHint),
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
@@ -239,6 +267,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 输入框下面的一行小字（要求 / 说明，**常驻**而不是占位符）。
+///
+/// ── 为什么不用 `hint` 代替 ──────────────────────────────────────────────────
+///   `hint` 在用户开始输入的那一刻就消失了 —— 而密码要求恰恰是「输入到一半
+///   才发现不合规」时才最需要看见的那句话。占位符里塞长句子还会被截断。
+class _FieldHint extends StatelessWidget {
+  const _FieldHint(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 7, left: 2, right: 2),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 11.5,
+          height: 1.5,
+          color: AppColors.textHint,
         ),
       ),
     );

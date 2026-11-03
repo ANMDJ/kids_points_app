@@ -99,6 +99,11 @@ class _FakeAuthApi implements AuthApi {
     );
   }
 
+  /// ★ P0-2b（2026-11-03）：`AuthApi` 多了 `fetchAccount()`；本文件不测账号读取。
+  @override
+  Future<AccountInfo> fetchAccount() async =>
+      throw UnimplementedError('本文件不测账号读取');
+
   @override
   Future<AccountInfo> updateAccount({
     String? phone,

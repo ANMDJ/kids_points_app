@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kids_points_app/data/auth_api.dart';
 import 'package:kids_points_app/data/auth_dto.dart';
 import 'package:kids_points_app/data/identity_api.dart';
+import 'package:kids_points_app/data/password_rules.dart';
 import 'package:kids_points_app/data/read_api.dart';
 import 'package:kids_points_app/data/session_scope.dart';
 import 'package:kids_points_app/data/token_store.dart';
@@ -15,11 +16,12 @@ import 'package:kids_points_app/screens/register_screen.dart';
 
 /// W11-A：**邀请码注册**的客户端用例（2026-11-02 / `docs/design/45-invite-registration.md`）。
 ///
-/// ── 这里钉的四件事（每一件都能失败）─────────────────────────────────────────
+/// ── 这里钉的五件事（每一件都能失败）─────────────────────────────────────────
 ///   ① 登录页有「第一次用？用邀请码注册」，且能返回登录（注册是可放弃的）；
 ///   ② 空邀请码 ⇒ 本地拦下，**零请求**（不浪费一次限流额度，也不误导用户）；
 ///   ③ 注册成功 ⇒ token 写进 holder、child-session 真的建立、然后进首页；
-///   ④ 码不可用（409）⇒ **留在注册页**并显示服务端那句话（不把输入全丢掉）。
+///   ④ 码不可用（409）⇒ **留在注册页**并显示服务端那句话（不把输入全丢掉）；
+///   ⑤ 弱密码 ⇒ 本地拦下并说清「差在哪」，同样**零请求**（2026-11-03）。
 const String _token = 'kps_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ';
 
 AuthTokenHolder _holderWithoutToken() =>
@@ -154,6 +156,34 @@ void main() {
     expect(holder.hasToken, isFalse);
     expect(find.text('HOME'), findsNothing);
   });
+
+  testWidgets('★ 弱密码 ⇒ 本地就说清哪一条不合格，且**一个请求都不发**（2026-11-03）',
+      (tester) async {
+    final AuthTokenHolder holder = _holderWithoutToken();
+    addTearDown(holder.dispose);
+    final _FakeAuthApi api = _FakeAuthApi(holder: holder);
+
+    await tester.pumpWidget(gate(holder: holder, authApi: api));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('第一次用？用邀请码注册'));
+    await tester.tap(find.text('第一次用？用邀请码注册'));
+    await tester.pumpAndSettle();
+
+    // 密码要求必须**常驻**在密码框下面（不是输入就消失的占位符）。
+    expect(find.text(kPasswordRequirementHint), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).at(0), 'MAMA2345');
+    await tester.enterText(find.byType(TextField).at(1), '13800138000');
+    await tester.enterText(find.byType(TextField).at(2), '12345678');
+    await tester.ensureVisible(find.text('注册并登录'));
+    await tester.tap(find.text('注册并登录'));
+    await tester.pumpAndSettle();
+
+    // 用户报障的现场：以前只显示「HTTP 400」，他不知道要改什么。
+    expect(find.text('密码不能全是数字，请至少带一个字母。'), findsOneWidget);
+    expect(api.registerCalls, 0);
+    expect(holder.hasToken, isFalse);
+  });
 }
 
 
@@ -220,6 +250,11 @@ class _FakeAuthApi implements AuthApi {
   }) async {
     throw UnimplementedError('本文件不测登录');
   }
+
+  /// ★ P0-2b（2026-11-03）：`AuthApi` 多了 `fetchAccount()`；本文件不测账号读取。
+  @override
+  Future<AccountInfo> fetchAccount() async =>
+      throw UnimplementedError('本文件不测账号读取');
 
   @override
   Future<AccountInfo> updateAccount({

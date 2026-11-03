@@ -91,6 +91,25 @@ class WriteApiException implements Exception {
       }
     }
 
+    /// 服务端已经写好的**给人看的中文**（`code` 与 `message` 一一对应：
+    /// `backend/src/identity/account-identifier.ts` 的 `passwordMessage()` /
+    /// `identifierMessage()`、`backend/src/identity/identity.service.ts` 的
+    /// `INVITE_CODE_MALFORMED` 等）。
+    ///
+    /// ── 为什么这几支要**取服务端原文**而不是在客户端再写一遍 ────────────────
+    ///   注册 / 登录的规则（8 位码形状、密码 8–64 位且不能是纯数字或常见弱口令、
+    ///   标识必须像手机号或邮箱）只允许有一份实现。客户端抄一份文案就必然漂移，
+    ///   漂移的现场正是 2026-11-03 用户遇到的：服务端返回了
+    ///   `{"code":"WEAK_PASSWORD","message":"这个密码太常见了…"}`，
+    ///   而 App 只显示「请求参数不被服务端接受（400）」—— 用户无法自查。
+    ///
+    /// ★ 只给**明确列入下面分支**的业务码用；Nest `ValidationPipe` 的
+    ///   通用 400（`message` 是英文数组）仍然走客户端自己的中文兜底。
+    String? serverMessage() {
+      final String? raw = detail?.trim();
+      return raw == null || raw.isEmpty ? null : raw;
+    }
+
     WriteApiException fail(WriteFailureKind kind, String message) =>
         WriteApiException(
           kind,
@@ -101,12 +120,39 @@ class WriteApiException implements Exception {
         );
 
     if (statusCode == 401) {
+      // ── 账号密码登录（W9-D）──────────────────────────────────────────────
+      // 登录失败与「设备会话不存在」都是 401，但下一步完全不同：
+      // 前者去检查手机号/密码（或去小程序重设密码），后者是设备没配对。
+      // 以前这里只有后者，结果是**密码输错也会被告知「请重新配对设备」**。
+      if (code == 'ACCOUNT_INVALID_CREDENTIALS') {
+        return fail(
+          WriteFailureKind.unauthenticated,
+          serverMessage() ??
+              '手机号/邮箱或密码不对（也可能是这个号还没有设置过密码）。'
+                  '请重试；忘记密码的话请在小程序「我的 → 登录账号」里重设。',
+        );
+      }
       return fail(
         WriteFailureKind.unauthenticated,
         '设备身份无效或会话不存在（401），这次操作没有保存。请重新配对设备后再试。',
       );
     }
     if (statusCode == 403) {
+      if (code == 'USER_NOT_ACTIVE') {
+        // 账号被停用 —— 重试没有意义，要给出「找谁」而不是「稍后再试」。
+        return fail(
+          WriteFailureKind.forbidden,
+          serverMessage() ?? '这个账号已被停用，无法登录。请联系家庭里的其他家长。',
+        );
+      }
+      if (code == 'CURRENT_PASSWORD_INVALID') {
+        // 改密码要带当前密码；错了不能退化成「没有权限（403）」——
+        // 那会让用户以为自己不是家长。
+        return fail(
+          WriteFailureKind.forbidden,
+          serverMessage() ?? '当前密码不对，这次没有保存。',
+        );
+      }
       if (code == 'APPROVAL_REQUIRED') {
         // 孩子在 `REQUIRE_APPROVAL` 下直接写心愿 / 规则时被拦 —— 这不是故障，
         // 而是约定：同一次操作必须走审批流。文案要给出**下一步**，但**不能**
@@ -205,6 +251,26 @@ class WriteApiException implements Exception {
           '昵称最多 16 个字符（表情按 1 个算），这次没有保存。',
         );
       }
+      // ── 注册 / 登录 / 改绑定（W9-D、W11-A、W12）：形状与强度 ────────────────
+      // 这些码的文案**只**在后端有一份（`account-identifier.ts` 的
+      // `passwordMessage()` / `identifierMessage()`、`invite-code.ts`、
+      // `identity.service.ts` 的 `DEVICE_ID_REQUIRED`）。客户端取原文，
+      // 不再抄第二份 —— 抄一份就会漂移成「本地放行、服务端 400」。
+      switch (code) {
+        case 'INVITE_CODE_MALFORMED':
+        case 'WEAK_PASSWORD':
+        case 'INVALID_IDENTIFIER':
+        case 'INVALID_PHONE':
+        case 'INVALID_EMAIL':
+        case 'DEVICE_ID_REQUIRED':
+        case 'ACCOUNT_NOTHING_TO_UPDATE':
+        case 'CURRENT_PASSWORD_REQUIRED':
+        case 'CONSENT_NOT_ACCEPTED':
+          return fail(
+            WriteFailureKind.badRequest,
+            serverMessage() ?? '这次提交的内容不被接受（400），请检查后重试。',
+          );
+      }
       return fail(
         WriteFailureKind.badRequest,
         '请求参数不被服务端接受（400），这次操作没有保存。',
@@ -212,6 +278,16 @@ class WriteApiException implements Exception {
     }
     if (statusCode == 409) {
       switch (code) {
+        // ── 注册（W11-A / W12）的两个「换条路走」──────────────────────────
+        // 这两个码必须原样把服务端的话给用户：一个说「码不能用，找家长重发」，
+        // 一个说「这个号已经注册过，去登录」—— 混成「当前状态不允许这个操作」
+        // 等于让人反复重试同一件事。
+        case 'INVITE_CODE_UNAVAILABLE':
+        case 'IDENTIFIER_TAKEN':
+          return fail(
+            WriteFailureKind.conflict,
+            serverMessage() ?? '这张邀请码现在不能用，或这个手机号/邮箱已经注册过。',
+          );
         case 'HABIT_DAILY_LIMIT_REACHED':
           return fail(
             WriteFailureKind.conflict,
@@ -299,6 +375,15 @@ class WriteApiException implements Exception {
       return fail(
         WriteFailureKind.conflict,
         '当前状态不允许这个操作（409），这次操作没有保存。',
+      );
+    }
+    if (statusCode == 429) {
+      // 登录 / 注册 / 验证码共用一份额度（`backend` 的三条端点同源限流）。
+      // 429 是「等一会儿」，**不是**「参数错了」—— 以前它落进 badRequest，
+      // 用户看到「请求参数不被服务端接受（429/400）」，然后不停重试。
+      return fail(
+        WriteFailureKind.conflict,
+        serverMessage() ?? '操作太频繁了，请等一会儿再试（不要连续重试）。',
       );
     }
     if (statusCode == 503) {

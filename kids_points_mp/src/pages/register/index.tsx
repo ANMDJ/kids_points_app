@@ -8,6 +8,7 @@ import GradientPage from '../../components/GradientPage'
 import SoftButton from '../../components/SoftButton'
 import { useStore } from '../../data/store'
 import { LOGIN_PAGE, TAB_PAGES } from '../../utils/nav'
+import { PASSWORD_REQUIREMENT_HINT, passwordProblem } from '../../utils/password_rules'
 import './index.scss'
 
 /**
@@ -28,9 +29,12 @@ import './index.scss'
  *   本页**不**自己判断 membership，也不自己调 `POST /children` —— 那会把
  *   「注册」和「建档案」两件事混成一个不可重试的动作。
  *
- * ── 本地只拦「空」──────────────────────────────────────────────────────────
- *   码形状 / 标识形状 / 密码强度都只有服务端一份规则；客户端再抄一遍，
- *   两边迟早不一致，用户会看到「本地说可以、服务端说不行」。
+ * ── 本地先判「空」和「密码强度」────────────────────────────────────────────
+ *   码形状 / 标识形状只有服务端一份规则；密码强度则是**明确放宽了**的一条：
+ *   2026-11-03 用户拿网站码注册，服务端回 `400 WEAK_PASSWORD`，界面却只说
+ *   "HTTP 400" —— 他知道密码不合格，但不知道要求是什么（`43` §0）。
+ *   App 当天补了本地镜像；小程序这里同步跟上（`utils/password_rules.ts`），
+ *   并在密码框下**常驻**一行要求文案。服务端仍然是唯一裁定者。
  */
 export default function RegisterPage() {
   const store = useStore()
@@ -67,6 +71,15 @@ export default function RegisterPage() {
     }
     if (password === '') {
       setError('请填写密码。')
+      return
+    }
+    // ★ 与服务端 `validatePasswordStrength()` 同源的本地判定（镜像见
+    //   `utils/password_rules.ts`；`tools/password-rules-check.mjs` 逐字比对）。
+    //   目的不是"替服务端裁定"，而是**在提交前说清要求**：这条请求注定 400
+    //   时，让用户看到的是一句能照着改的话，而不是一个"注册失败"。
+    const weak = passwordProblem(password, identifier)
+    if (weak !== null) {
+      setError(weak)
       return
     }
 
@@ -151,10 +164,13 @@ export default function RegisterPage() {
               setPassword(value)
               setError(null)
             }}
-            hint='至少 8 位，别用纯数字'
+            hint='8–64 位，至少含一个字母'
             password
             maxLength={64}
           />
+          {/* ★ 要求**常驻**（不是 placeholder）：placeholder 在用户开始输入的那一刻
+              就消失，而"密码要什么"恰恰是输入到一半最需要看到的。 */}
+          <Text className='kp-register__fineprint'>{PASSWORD_REQUIREMENT_HINT}</Text>
 
           <View className='kp-register__gap' />
           <FieldLabel text='你的称呼（选填）' />

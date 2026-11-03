@@ -927,6 +927,109 @@ void main() {
     });
   });
 
+  group('注册 / 登录的失败原因：服务端原文必须到达界面（2026-11-03）', () {
+    test('★ 400 WEAK_PASSWORD ⇒ 显示服务端那句「太常见」，不再只剩「HTTP 400」', () {
+      final WriteApiException error = WriteApiException.fromHttp(
+        statusCode: 400,
+        body: <String, Object?>{
+          'code': 'WEAK_PASSWORD',
+          'reason': 'COMMON',
+          'message': '这个密码太常见了，很容易被猜到，请换一个。',
+        },
+      );
+
+      expect(error.kind, WriteFailureKind.badRequest);
+      expect(error.code, 'WEAK_PASSWORD');
+      // 用户报障的现场：只说「400」时无法自查；说清是密码问题才知道改哪里。
+      expect(error.userMessage, contains('太常见'));
+      expect(error.userMessage.contains('400'), isFalse);
+      expect(error.isRetryable, isFalse);
+    });
+
+    test('400 INVITE_CODE_MALFORMED 带原文 ⇒ 提示「8 位、不含 0/O/1/I/L」', () {
+      final WriteApiException error = WriteApiException.fromHttp(
+        statusCode: 400,
+        body: <String, Object?>{
+          'code': 'INVITE_CODE_MALFORMED',
+          'message': '邀请码是 8 位字母数字（不含容易认错的 0/O/1/I/L）。请检查是否抄漏或抄错了字符。',
+        },
+      );
+
+      expect(error.kind, WriteFailureKind.badRequest);
+      expect(error.userMessage, contains('8 位'));
+    });
+
+    test('400 没有已知业务码 ⇒ 仍然给中文兜底（不把英文校验列表丢给用户）', () {
+      final WriteApiException error = WriteApiException.fromHttp(
+        statusCode: 400,
+        body: <String, Object?>{
+          'message': <String>[
+            'inviteCode must be a string',
+            'identifier should not be empty',
+          ],
+        },
+      );
+
+      expect(error.kind, WriteFailureKind.badRequest);
+      expect(error.userMessage, contains('不被服务端接受'));
+      expect(error.userMessage.contains('must be'), isFalse);
+    });
+
+    test('409 INVITE_CODE_UNAVAILABLE / IDENTIFIER_TAKEN ⇒ 各说下一步，不混成一句', () {
+      final WriteApiException unavailable = WriteApiException.fromHttp(
+        statusCode: 409,
+        body: <String, Object?>{
+          'code': 'INVITE_CODE_UNAVAILABLE',
+          'message': '这张邀请码与这里填写的手机号/邮箱不一致（也可能已使用、过期或已吊销）。',
+        },
+      );
+      final WriteApiException taken = WriteApiException.fromHttp(
+        statusCode: 409,
+        body: <String, Object?>{
+          'code': 'IDENTIFIER_TAKEN',
+          'field': 'phone',
+          'message': '这个手机号已经注册过了，请直接用密码登录。',
+        },
+      );
+
+      expect(unavailable.kind, WriteFailureKind.conflict);
+      expect(unavailable.userMessage, contains('邀请码'));
+      expect(taken.kind, WriteFailureKind.conflict);
+      expect(taken.userMessage, contains('已经注册'));
+      // 「码不能用」是换码，不是「再点一次注册」—— 两者都不能说成可重试。
+      expect(unavailable.isRetryable, isFalse);
+      expect(taken.isRetryable, isFalse);
+    });
+
+    test('★ 401 ACCOUNT_INVALID_CREDENTIALS ⇒ 说「手机号/邮箱或密码不对」，不是「重新配对设备」', () {
+      final WriteApiException error = WriteApiException.fromHttp(
+        statusCode: 401,
+        body: <String, Object?>{
+          'code': 'ACCOUNT_INVALID_CREDENTIALS',
+          'message': '手机号/邮箱或密码不正确。',
+        },
+      );
+
+      expect(error.kind, WriteFailureKind.unauthenticated);
+      expect(error.userMessage, contains('密码'));
+      expect(error.userMessage.contains('设备'), isFalse);
+    });
+
+    test('429 ⇒ 等一会儿（conflict），不是「参数不被接受」', () {
+      final WriteApiException error = WriteApiException.fromHttp(
+        statusCode: 429,
+        body: <String, Object?>{
+          'code': 'LOGIN_RATE_LIMITED',
+          'message': '登录尝试过于频繁（按 IP 限流）。请等 30 秒再试。',
+        },
+      );
+
+      expect(error.kind, WriteFailureKind.conflict);
+      expect(error.userMessage, contains('频繁'));
+      expect(error.isRetryable, isFalse);
+    });
+  });
+
   group('WrittenRecordDto：解析失败必须显式', () {
     test('executedRecordId 与 record.id 不一致 ⇒ malformed', () {
       expect(

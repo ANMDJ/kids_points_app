@@ -12,8 +12,10 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
+import 'session_actions.dart';
 import 'onboarding_screen.dart';
 import 'update_gate.dart';
+import 'sheets/account_sheet.dart';
 import 'sheets/consent_sheet.dart';
 import 'sheets/export_sheet.dart';
 import 'sheets/family_deletion_sheet.dart';
@@ -42,6 +44,8 @@ class ProfileScreen extends StatelessWidget {
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     // W10-B：版本检查入口（`null` ⇒ 预览模式 / 未接后端，只显示当前版本）。
     final AppUpdateScope? update = AppUpdateScope.maybeOf(context);
+    // P0-2：登录态下的「退出登录」。`null` ⇒ 预览模式 / 未登录，不画这一行。
+    final SessionActions? sessionActions = SessionActions.maybeOf(context);
 
     // live 模式下昵称已经接了写端点（`PATCH /child`，W5-E）、回收站也接了
     // 后端（W5-F）；只剩「恢复演示数据」是纯本地操作 —— 它若在 live 模式下
@@ -421,6 +425,41 @@ class ProfileScreen extends StatelessWidget {
                       );
                     },
                   ),
+                  // P0-2b：登录账号（绑定 / 换绑手机号邮箱、设置 / 修改密码）。
+                  // 只有「已接后端且已登录」时才画 —— 预览模式没有账号这回事，
+                  // 画一个点了报错的入口比没有入口更糟（与下面的退出登录同判据）。
+                  if (sessionActions?.authApi != null) ...<Widget>[
+                    const Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: AppColors.divider,
+                      indent: 66,
+                    ),
+                    _MenuRow(
+                      icon: Icons.badge_outlined,
+                      color: AppColors.primaryDeep,
+                      // 文案不写「绑定」：有些人已经绑过，只是来改密码。
+                      label: '登录账号',
+                      onTap: () => showAccountSheet(context),
+                    ),
+                  ],
+                  // P0-2：退出登录 —— 只有在**真的能退**（闸门提供了动作）时才画。
+                  // 它是「换账号」的唯一入口：注册填错手机号、或想把 App 交给
+                  // 另一位家长时，没有这一行就只能清 App 数据。
+                  if (sessionActions != null) ...<Widget>[
+                    const Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: AppColors.divider,
+                      indent: 66,
+                    ),
+                    _MenuRow(
+                      icon: Icons.logout_rounded,
+                      color: AppColors.textSecondary,
+                      label: '退出登录',
+                      onTap: () => _confirmSignOut(context, sessionActions),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -454,6 +493,41 @@ class ProfileScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// P0-2：二次确认后再退出。
+  ///
+  /// ── 为什么要确认 ────────────────────────────────────────────────────────────
+  ///   退出后必须重新输入手机号/邮箱 + 密码（App **不存**密码，也没有短信验证码，
+  ///   见 `token_store.dart` 文件头）。误触一次就等于把家长挡在门外，直到他想
+  ///   起密码 —— 所以文案要同时说清「要重新登录」和「数据不会丢」。
+  Future<void> _confirmSignOut(
+    BuildContext context,
+    SessionActions actions,
+  ) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('退出登录？'),
+        content: const Text(
+          '退出后需要重新输入手机号/邮箱和密码才能进入。\n'
+          '孩子的习惯、积分和心愿都不会丢失。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('确认退出'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    // 退出成功后闸门会把整棵树换成登录页，这里**不要**再 setState。
+    await actions.signOut();
   }
 
   Future<void> _renameChild(BuildContext context, AppStore store) async {

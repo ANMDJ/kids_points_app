@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'auth_dto.dart';
 import 'http_transport.dart';
+import 'password_rules.dart';
 import 'read_api.dart' show ReadApiConfig, kChildIdHeader, kDeviceIdHeader;
 import 'token_store.dart' show AuthTokenHolder;
 import 'write_api_errors.dart';
@@ -63,6 +64,18 @@ abstract class AuthApi {
     required String password,
     String? displayName,
   });
+
+  /// `GET /auth/account` —— 我这个账号**现在绑了什么**（P0-2b，2026-11-03）。
+  ///
+  /// ── 为什么界面必须先读一次 ─────────────────────────────────────────────────
+  ///   「登录账号」那一屏要回答三个问题：绑的是哪个手机号、哪个邮箱、
+  ///   设过密码没有。不读就只能画空白输入框，而用户会读成「我根本没绑过」，
+  ///   然后再绑一次（换号 ⇒ 上一台设备的登录再也进不来）。
+  ///   `hasPassword` 还决定按钮写「设置密码」还是「修改密码」—— 后者必须带
+  ///   当前密码，猜错就是一次必然 400 的往返。
+  ///
+  /// 失败语义：`401`（token 失效，本地 token 已被清）/ `403 USER_NOT_ACTIVE`。
+  Future<AccountInfo> fetchAccount();
 
   /// `PUT /auth/account` —— 绑定手机号/邮箱、设置或修改密码。
   ///
@@ -144,6 +157,14 @@ class AuthApiClient implements AuthApi {
     if (password.isEmpty) {
       throw ArgumentError('请填写密码。');
     }
+    // 密码强度在**本地**先判一次（规则镜像见 `password_rules.dart`）：
+    // 注册页已经判过，这里再判是为了让任何调用方都绕不过去。
+    // ★ 服务端仍然是唯一裁定者；两边不一致时以它回的 `message` 为准。
+    final PasswordCheck strength =
+        checkPasswordStrength(password, identifier: who);
+    if (!strength.ok) {
+      throw ArgumentError(strength.message);
+    }
     final String name = displayName?.trim() ?? '';
 
     final Object? decoded = await _send(
@@ -165,6 +186,18 @@ class AuthApiClient implements AuthApi {
   }
 
   @override
+  Future<AccountInfo> fetchAccount() async {
+    final Object? decoded = await _send(
+      method: 'GET',
+      path: '/auth/account',
+      authenticated: true,
+    );
+    // ★ 与 `PUT` 同一份 `AccountInfo.fromJson()`：两条路由的回包形状必须
+    //   逐字一致，否则「保存成功」那一刻界面会少几个字段（后端注释同款说明）。
+    return AccountInfo.fromJson(decoded, r'$');
+  }
+
+  @override
   Future<AccountInfo> updateAccount({
     String? phone,
     String? email,
@@ -181,6 +214,16 @@ class AuthApiClient implements AuthApi {
     // 一次必然 400 的往返没有必要，而且用户会看到"请求失败"这种模糊说法。
     if (body.isEmpty) {
       throw ArgumentError('手机号、邮箱、密码至少要填一个。');
+    }
+    // 设置 / 修改密码同样在本地先判（与注册共用 `password_rules.dart`）。
+    // 手机号 / 邮箱这次没传时拿不到账号标识 ⇒ 跳过「不能与标识相同」那一条，
+    // 由服务端对着库里的手机号 / 邮箱回答（它始终是唯一裁定者）。
+    if (password != null) {
+      final PasswordCheck strength =
+          checkPasswordStrength(password, identifier: phone ?? email);
+      if (!strength.ok) {
+        throw ArgumentError(strength.message);
+      }
     }
 
     final Object? decoded = await _send(

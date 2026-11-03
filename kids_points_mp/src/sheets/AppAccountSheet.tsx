@@ -17,6 +17,7 @@ import { createAccountBinderFromEnvironment, type AccountBinder } from '../data/
 import { AuthApiException } from '../data/auth_api_errors'
 import { sharedAuthTokens } from '../data/auth_token_holder'
 import type { AccountSnapshot } from '../data/auth_dto'
+import { PASSWORD_REQUIREMENT_HINT } from '../utils/password_rules'
 import { toast } from '../utils/toast'
 import './sheets.scss'
 
@@ -138,7 +139,12 @@ export default function AppAccountSheet({ visible, onClose }: AppAccountSheetPro
     if (nextEmail !== '' && nextEmail !== (snapshot?.email ?? '')) input.email = nextEmail
 
     if (password !== '') {
-      const weak = checkAccountPassword(password)
+      // ★ 传上这次要绑的标识（有就传）：`same_as_identifier` 这一条要在本地
+      //   也判得出来，否则「密码 = 手机号」仍要撞一次 400。
+      const weak = checkAccountPassword(
+        password,
+        input.phone ?? input.email ?? snapshot?.phone ?? snapshot?.email
+      )
       if (weak !== null) {
         setError(weak)
         return
@@ -267,10 +273,13 @@ export default function AppAccountSheet({ visible, onClose }: AppAccountSheetPro
         <SoftTextField
           value={password}
           onChange={setPassword}
-          hint='至少 8 位，不要用生日或手机号本身'
+          hint='8–64 位，至少含一个字母'
           password
           maxLength={ACCOUNT_PASSWORD_MAX}
         />
+        {/* ★ 要求**常驻**（不是 placeholder）：placeholder 在用户开始输入的那一刻
+            就消失了，而密码要求恰恰是"输入到一半"最需要看到的东西。 */}
+        {hint(PASSWORD_REQUIREMENT_HINT)}
         {snapshot.hasPassword && password !== '' ? (
           <View>
             <View className='kp-sheet-gap-xs' />

@@ -45,8 +45,39 @@
    读相关配置（`pubspec.yaml`、`tsconfig`、`nest-cli.json`、`prisma/schema.prisma`）→ 必要时重跑命令。
    产物里永远不会写着「为什么编译不过」。
 
-## 2. 变更记录
+## 2. 会话收尾：每次都要报「还未开发的任务」
+
+**每次对话结束时（包括只问问题、一行代码都没改的那次），回答的最后必须有一节
+「当前还未开发的任务」。** 不是可选项，也不是「这次没改代码就不用报」。
+
+唯一口径（不要每次自己重新发明一份清单）：
+
+1. [`docs/design/43-open-work-backlog.md`](./docs/design/43-open-work-backlog.md) **§0 当前未开发任务快照** —— 主清单；
+2. [`deploy/README.md`](./deploy/README.md) §8 —— 线上/运维视角的补充（备份、探活、网络附加…）；
+3. 各交接单（`44`–`48` 等）的「未做 / 已知边界」小节 —— 功能细节与取舍。
+
+写法要求：
+
+- 每条形如 `编号 · 一句话 · 证据（文件:行 / 命令 / 文档锚点）`；**已完成的不列**。
+- **禁止臆造与夸大**：清单里每条都要能指到代码或文档；本轮**没验证**的条目必须写
+  「未复核」，不许把「文档说没做」说成「我刚验证过」。
+- **完成一条任务时，同一轮**就在 `43` §0 里划掉（或移到「已完成」行）并写日期 + 证据，
+  然后在回复里注明「`43` §0 已更新」。只改代码不改这张表 = 下一次会话会报错清单。
+- 清单只报**未开发/未验收**的事实，不加优先级建议以外的扩写；需要产品裁定的，
+  指向 `43` §8 的 D1–D6，不要自己替产品拍板。
+
+## 3. 变更记录
 
 | 日期 | 变更 | 起因 |
 |---|---|---|
 | 2026-11-02 | 新增本节 + `tools/search-tracked.mjs`；`.ignore` 头部的实测附注同步更新 | 检索命中被 `.dart_tool/**`、`.widget_preview/.dart_tool/**`、`ios/Flutter/ephemeral/**` 淹没（1519 vs 793）；`.ignore` 对 `search_codebase` 无效 |
+| 2026-11-03 | 新增 §2「会话收尾：每次都要报未开发任务」；`43` 增加 §0 当前快照；`README` 的网站邀请码入口改为实测可用地址 | 用户要求每次对话结束都汇报「当前还未开发的任务」，并要求写进规则 |
+| 2026-11-03 | App 补「我的 → 退出登录」（P0-2a）；注册/登录失败改为显示**服务端原文** | 用户报「App 注册报 400，但界面只写 HTTP 400」，无法自查 |
+| 2026-11-03 | 注册页**本地校验密码强度**（`lib/data/password_rules.dart`，服务端规则镜像）＋ 密码框下常驻要求文案 ＋ 标识框下「网站码只认申请时的手机号/邮箱」提示 | 用户报「拿到邀请码注册还是说我有问题」：他知道密码不合格，但不知道要求；且不知道网站码绑定申请时的标识 |
+| 2026-11-03 | **P0-2b**：App「我的 → 登录账号」面板（`GET/PUT /auth/account`）＋ `SessionActions` 带同一份 `AuthApi` | 后端两条端点早有、App 里 0 个调用方：改密码 / 换手机号只能回小程序，而小程序要先微信登录 |
+| 2026-11-03 | **小程序密码规则三份一致**：新增 `kids_points_mp/src/utils/password_rules.ts`，注册页 + `AppAccountSheet` 都改走它；新增守门脚本 `tools/password-rules-check.mjs`（三份逐字比对，篡改副本实测 exit 1），接进 `npm run password:check` / `npm run ci` | 小程序原来只查长度，`密码最多 64 位。` 与服务端文案已漂移；改一边忘另一边必然复发 |
+| 2026-11-03 | **P0-5 探活上线**：`backend/src/health/`（存活不查库 / 就绪 `SELECT 1` + 硬超时 + 脱敏）、compose `healthcheck`、`deploy/watchdog-kids-api.sh`、`smoke-8443.sh` 第 8 项；线上实测 `/k/health` 与 `/kids/health` 均 200，容器 `(healthy)`，watchdog cron 已装 | 之前只有 `restart: unless-stopped`（只认进程退出）；事件循环卡死时进程还活着，`docker ps` 永远显示 `Up` |
+| 2026-11-03 | **恢复 `/k/*` 公网入口**（Caddyfile 备份 → `handle_path /k/*` → `caddy validate` → `reload`）：`/k/health` `/k/app/version` `/k/invite` 实测 200 | 2026-11-02 该段被整段移除，小程序 `.env.local` 指向的入口全 404（表现为"连不上服务器"） |
+| 2026-11-03 | **P0-4 备份 + 恢复演练**：`deploy/backup-kids-db.sh`（`/usr/local/bin/kids-backup.sh`），root cron `17 3 * * *`；实跑 `restore_test` 恢复出 24 张表、`PointRecord` 行数与线上一致 | 线上一个 `pg18` 容器、零备份：误删/磁盘坏 = 家庭账本全丢 |
+| 2026-11-03 | `43` §0 新增 **0.1「发布」到底卡在哪**：能做的（SSH + `sudo docker`、镜像、APK、Caddy、备份）与只能你做的（微信开发者工具扫码上传、商店账号/正式签名）分开写清 | 用户问「昨天还能发版，今天怎么说没权限」——查后是 `docker.sock` 需要 `sudo`，不是账号被降权 |
+| 2026-11-03 | **P0-7 pg18 网络自愈**：`deploy/ensure-kids-pg-network.sh`（`/usr/local/bin/kids-pg-network.sh`），root cron `*/10 * * * *`；幂等、不重启容器 | `docker network connect` 是运行时状态：`compose down` / pg18 重建后 API `Up` 着刷 `P1001`，以前只能靠人记得 |

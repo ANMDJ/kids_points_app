@@ -36,6 +36,23 @@ services:
     mem_limit: 400m
     memswap_limit: 1200m
     cpus: 1.5
+    # ★ P0-5（2026-11-03）：探活走**存活**端点 `GET /health`（**不查库**）。
+    #   `/health/ready` 会 `SELECT 1` —— 拿它做 healthcheck 的话，库慢 / 备份恢复
+    #   期间 API 就会被标成 unhealthy，而重启 API 既救不了库，也把「只读降级」
+    #   一起停掉了（判据见 `backend/src/health/health.controller.ts` 文件头）。
+    #   ★ `restart: unless-stopped` 只认**进程退出**；事件循环卡死时进程还活着，
+    #     所以「卡死能被发现 / 被重启」靠的是这条 healthcheck + `watchdog-kids-api.sh`
+    #     （compose 自己不会因为 unhealthy 去重启容器）。
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     logging:
       driver: json-file
       options:

@@ -213,11 +213,30 @@ curl -s -X POST http://82.157.153.22/k/public/registration-invites \
   -H 'Content-Type: application/json' \
   -d '{"phone":"13800138000","email":"smoke@example.com"}'
 # 期望 201 + {"code":"ABCD-EFGH",...}；429 表示当天 50 个已发完（不是故障）
+
+# ⑥ 探活（P0-5，2026-11-03 起）
+curl -s http://82.157.153.22/k/health
+# 期望 200 + {"status":"ok","service":"kids-api","uptimeSeconds":N}
+#   ★ 这条**不查库**：用它判断"进程还活着"，不要用它判断"能不能办事"
+curl -s -o /dev/null -w '%{http_code}\n' http://82.157.153.22/k/health/ready   # 200
+curl -s http://82.157.153.22/k/health/ready
+# 期望 200 + {"status":"ok","checks":{"database":{"status":"up","latencyMs":N}}}
+#   503 + {"status":"degraded","checks":{"database":{"status":"down",...}}}
+#       ⇒ **先看 pg18**，不要重启 kids-api（重启救不了库）
+#   503 + status:"unconfigured" ⇒ 这个进程没有 DATABASE_URL（跑的是无库镜像）
 ```
 
-**★ 探活别用 `/health`** —— 这个端点**不存在**（`src/identity/public.decorator.ts`
-里只有一句"若将来加健康检查"的注释）。真实可用的匿名探针是 `POST /auth/login`
-（返回 401 即代表整条链路通）。
+**★ 探活判据（别再用 `POST /auth/login` 当探针）** —— 2026-11-03 之前
+`GET /health` 不存在，只能拿登录端点旁证，而它会真的去调微信 `code2session`
+（吃调用额度、污染限流器）。现在的两条端点：
+
+| 端点 | 查库 | 红了你该做什么 |
+|---|---|---|
+| `GET /k/health` | 否 | 重建镜像 / 看进程（`docker ps`、`docker logs`） |
+| `GET /k/health/ready` | `SELECT 1` | 看 pg18 与 `database.detail`；**不要**重启 API |
+
+容器假死（进程活着、HTTP 不应答）由 compose 的 `healthcheck` 标成 `unhealthy`；
+**让它真的被重启**要装 watchdog（`deploy/watchdog-kids-api.sh`，见 §8 P0②）。
 
 ---
 
@@ -497,12 +516,31 @@ RUN sed -i 's#http://deb.debian.org/debian#http://mirrors.cloud.tencent.com/debi
 
 ### P0 · 出事时才发现就晚了
 
-#### ① 数据库没有任何备份（最贵的一条）
+#### ① 数据库备份 ＋ 一次恢复演练
 
-`pg18` 是宿主机上的独立容器，数据卷在它自己名下；全仓 `pg_dump` **0 命中**，
-`deploy/` 里也没有备份脚本。也就是说：误删一条、`docker volume rm`、磁盘坏块 ——
-任何一种都等于**家庭账本全丢**。账本本身是不可改的（`900_ledger_revoke.sql` 连应用角色
-的 UPDATE/DELETE 都收走了），**但没有任何一份副本能回滚到昨天**。
+> ✅ **已完成（2026-11-03）**。脚本 `deploy/backup-kids-db.sh`（已装到
+> `/usr/local/bin/kids-backup.sh`），root crontab：`17 3 * * *`（保留 14 天）。
+>
+> 2026-11-03 实测（真库，非演练环境）：
+>
+> ```
+> OK 备份完成 /srv/backup/kids/kids_points_2026-11-03_1226.sql.gz（10000 字节，保留 14 天）
+> OK 恢复演练：restore_test 恢复出 24 张表，PointRecord=0（与线上一致）
+> OK 临时库 restore_test 已删除
+> ```
+>
+> 脚本里三条 fail-closed 判据（缺一条这套备份就是假的）：`gunzip -t` 之外还要
+> **在 dump 里找到账本表**（连错库时 gzip 依然"完整"）、**恢复后行数与线上逐字相等**
+> （0 对 0 也算，但必须比）。`--verify` 用临时库 `restore_test`，用完即删，不碰线上库。
+
+**当时的诊断（保留不改，历史可追溯）**：`pg18` 是宿主机上的独立容器，数据卷在它自己名下；全仓 `pg_dump` **0 命中**，`deploy/` 里也没有备份脚本。也就是说：误删一条、`docker volume rm`、磁盘坏块 —— 任何一种都等于**家庭账本全丢**。
+
+**仍未做（诚实标注）**：
+
+- [ ] **备份离开本机**：现在还在 `/srv/backup/kids`（同一块盘）。磁盘坏 / 整机丢时
+      备份一起没 —— 要对象存储（COS）的密钥，脚本里不凭空造。
+- [ ] **备份失败告警**：cron 只写 `/var/log/kids-backup.log`，失败不会主动通知人
+      （与 P0② 的外部告警通道是同一个缺口）。
 
 最小可用做法（每天 03:10 全量、保留 14 天）：
 
@@ -530,7 +568,16 @@ sudo chmod +x /usr/local/bin/kids-backup.sh
    改成 `docker exec -e PGPASSWORD="$(sudo cat /srv/kids-points/.secrets/pg-pw)" pg18 …`，
    并确认该文件 600、不在仓库里。
 
-#### ② 没有任何探活 / 告警，容器假死也不会自愈
+#### ② 探活 / 告警 / 卡死自愈
+
+> 🟡 **代码侧已完成（2026-11-03，P0-5）**，运维侧还剩两步，见本小节末尾。
+> 证据：`backend/src/health/`（`GET /health` 存活 + `GET /health/ready` 就绪，
+> `backend/test/health.test.ts` **9 条**用例钉住「存活不查库 / 三态可区分 / 硬超时 /
+> 脱敏」）；`deploy/compose.yaml` 的 `healthcheck`（30s 一轮，打 `/health`）；
+> `deploy/smoke-8443.sh` 第 8 项；`deploy/watchdog-kids-api.sh`（连续 3 次
+> unhealthy 才重启，重启前把 `/health/ready` 的 body 抄进日志）。
+
+**当时的诊断（保留不改，历史可追溯）**：
 
 - `GET /health` **不存在**（`backend/src/identity/public.decorator.ts` 里只有一句
   "若将来加健康检查"的注释）。
@@ -538,30 +585,55 @@ sudo chmod +x /usr/local/bin/kids-backup.sh
   Prisma 连接池卡死、事件循环堵塞时进程还活着，`restart` 永不触发，用户侧是"一直转圈"。
 - 没有 uptime 监控：挂了没人知道，用户也不会来告诉你。
 
-先做这个（**不改产品代码**，5 分钟一轮，探的是 Node 本身而不是 Caddy）：
+**现在怎么用**：
 
 ```bash
-# 401 = 链路通；429 = 限流器在正常工作（也算健康）；其它（000/5xx）= 告警
-code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST http://127.0.0.1:3000/auth/login \
-  -H 'Content-Type: application/json' -d '{"code":"probe"}')
-case "$code" in 401|429) ;; *) <企微机器人 / Server酱 / 邮件> ;; esac
+# 存活（不查库）：200 status=ok ⇒ 进程能处理 HTTP
+curl -s http://127.0.0.1:3000/health
+# 就绪（SELECT 1）：200 up / 503 down / 503 unconfigured
+curl -s http://127.0.0.1:3000/health/ready
+
+# 装 watchdog（把「unhealthy」翻译成一次重启；compose 自己不会做这件事）
+sudo install -m 755 deploy/watchdog-kids-api.sh /usr/local/bin/kids-watchdog.sh
+( crontab -l 2>/dev/null; \
+  echo "*/5 * * * * /usr/local/bin/kids-watchdog.sh >/dev/null 2>&1" ) | crontab -
+sudo tail -f /var/log/kids-watchdog.log
 ```
 
-（**不要**每分钟打公网 `/k/auth/login`：它会真的去调微信 `code2session`，
-既吃你的调用额度，也把限流器当成监控指标。）
+★ 三条判据（别搞反，搞反会制造事故）：
 
-真要做 `healthcheck`：先加 `GET /health`（匿名、不返回任何数据、只回 `{ok, uptime}`），
-再在 compose 里挂 `healthcheck` —— **别在线上直接改镜像**，走一轮 `npm run ci` 再重建。
+1. **compose `healthcheck` 只打 `/health`**。拿 `/health/ready` 当 healthcheck，
+   库一慢 API 就被判 unhealthy —— 重启救不了库，只是把「只读降级」也停掉。
+2. **`restart: unless-stopped` 不会因为 unhealthy 重启**。它只认进程退出；
+   「卡死自愈」靠的是上面那个 watchdog（连续 3 次才动手，抖动不放大）。
+3. 日志文件 `/var/lib/kids-watchdog.streak` 是**状态**，不是垃圾：删了等于把
+   「已经连续 unhealthy 2 次」清零，卡死会一直等到下一次才够 3 次。
+
+**仍未做（诚实标注）**：
+
+- [ ] **外部告警通道**（企微机器人 / Server酱 / 邮件）—— 需要你给一个 webhook，
+      仓库里不能凭空造一个；watchdog 目前只写日志，`unhealthy` 不会主动通知人。
+- [ ] **uptime 监控**（进程 down 也要告警）—— 需要外部服务（UptimeRobot 之类）
+      或一台不同机房的探针；watchdog 跑在本机，整机挂了它一起挂。
+- [x] watchdog 的 cron **已安装（2026-11-03）**：root crontab
+      `*/5 * * * * /usr/local/bin/kids-watchdog.sh >/dev/null 2>&1`；
+      容器 `Up … (healthy)` 实测（新镜像带 healthcheck 后 19 秒转 healthy）。
 
 #### ③ pg18 的网络附加是手工的，重启即失效
 
+> ✅ **已自愈（2026-11-03）**：`deploy/ensure-kids-pg-network.sh`
+> → `/usr/local/bin/kids-pg-network.sh`，root crontab `*/10 * * * *`。
+> 幂等：网络在就什么都不做；不在就 `docker network connect deploy_default pg18`
+> 并写 `/var/log/kids-pg-network.log`。**不重启任何容器**（重启 API 治不了网络，
+> 还会抹掉连接池里的现场）。2026-11-03 实跑 `run_exit=0`（当前已连接，静默退出）。
+
 第 0 节已写清，但失败模式值得再强调：pg18 重启 / 被重建 / `compose down` 之后，
 `kids-api` 会 **`Up` 着刷 `P1001`**，看起来像代码坏了，实际是网络没了。
-目前的唯一缓解是"人记得再跑一次"。
+以前唯一的缓解是"人记得再跑一次"；现在上面那个 cron 每 10 分钟兜一次。
 
-- **短期**：写进 pg18 的重启路径（systemd unit 的 `ExecStartPost`，或 `@reboot` cron）：
-  `docker network connect deploy_default pg18 || true`
-- **彻底**：把 pg18 搬进本 compose（第 0 节说过"要动 hub 编排，暂不做"）——
+- **判据**：`GET /k/health/ready` → `503` + `checks.database.status: "down"` 就是这种情形
+  （存活探针仍然 200 —— 这正是两条探针分开的价值）。
+- **彻底解法（仍未做）**：把 pg18 搬进本 compose（第 0 节说过"要动 hub 编排，暂不做"）——
   搬进来之后 `depends_on: condition: service_healthy` 才有意义。
 
 #### ④ 法务文本仍是占位版本，而且页面自己写着"占位"

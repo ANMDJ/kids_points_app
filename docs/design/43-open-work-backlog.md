@@ -1,4 +1,4 @@
-# 43 · 未完成事项与续开发清单（快照：2026-11-02）
+# 43 · 未完成事项与续开发清单（快照：2026-11-02；§0 于 2026-11-03 复核）
 
 > 本文是**跨会话的接力棒**：新开会话先读这一份，再按 §7 的「开场提示」启动。
 > 它不重复功能设计，只回答三件事：
@@ -11,6 +11,78 @@
 > 缺口（2026-11-01 体检）。本文把它们合并成一份可执行待办，并补上 W9 之后新出现的问题。
 > 三者冲突时：**功能实现**以代码 + `01`–`42` 为准，**线上**以 `deploy/README.md` 为准，
 > **优先级**以本文为准（本文日期最新）。
+
+---
+
+## 0. 当前未开发任务（会话收尾必报 · 复核 2026-11-03）
+
+> 本表是**「还没做什么」的唯一口径**，由 [`AGENTS.md`](../../AGENTS.md) §2 要求每次会话结束时汇报。
+> 每完成一条：在这里划掉或移到最下面的「已完成」，并写**日期 + 证据**；不要只改代码不改这张表。
+>
+> 证据列标注 **「本轮复核」**＝2026-11-03 用命令/代码实际查过；标注 **「未复核」**＝沿用
+> 2026-11-02 快照（§3–§6），没有重新验证，汇报时必须照实写。
+
+| 编号 | 任务 | 现状 | 证据 |
+|---|---|---|---|
+| **P0-2** | App「登录账号」面板 ＋「我的 → 退出登录」 | **部分完成（2026-11-03）**：「退出登录」已做；「登录账号」（绑定手机号/邮箱 + 改密）面板**未做** | 本轮复核：新增 `lib/screens/session_actions.dart`，`account_gate.dart` 的 `signedIn` 分支注入 `SessionActions`、`_signOut()` 补 `onIdentityChanged`（清上一个孩子的缓存）；`profile_screen.dart` 末尾「退出登录」行 + 二次确认；`test/session_actions_test.dart` 2 条、`flutter test` **467 全通过**、`flutter analyze` 0 issue。**仍未做**：`auth/account` 在 `lib/**` 仍是 **0 命中**（`updateAccount()` 有客户端、没有界面） |
+| **P0-2b** | App 内「登录账号」面板：绑定/换绑手机号邮箱、设置/修改密码（`PUT /auth/account`） | ✅ **已完成（2026-11-03）** | 本轮复核：`lib/data/auth_api.dart` 新增 `fetchAccount()`（`GET /auth/account`）；`lib/screens/sheets/account_sheet.dart`（先读再画、只提交改动过的字段、`403 CURRENT_PASSWORD_INVALID` 留在本页）；入口 = 「我的」页「登录账号」（`profile_screen.dart`），`SessionActions` 带上同一份 `AuthApi`（同一 holder，401 才会真的清 token）；证据 = `test/account_sheet_test.dart` **6 条** |
+| **P0-3** | 「已有账号 → 输入邀请码加入家庭」（`POST /invites/accept`）双端入口 | **未做**（W11-A 注册门只覆盖「还没有账号」） | 本轮复核：`Get-ChildItem lib,kids_points_mp/src -Recurse -Include *.dart,*.ts,*.tsx \| Select-String 'invites/accept\|acceptInvite'` → **0 命中** |
+| **注册闭环** | 真机用**网站码**走完一次注册（含用户 2026-11-03 报的那次 400 的真实原因） | **验收未完成** | 本轮复核：线上 `GET /kids/app/version` → `1.0.3 / build 4`（与 `pubspec.yaml`、`lib/app_version.dart` 一致）；线上探针三种拒绝的形状都对 —— 码形状错 `400 INVITE_CODE_MALFORMED`、码不存在 `409 INVITE_CODE_UNAVAILABLE`、弱口令 `400 WEAK_PASSWORD`。**2026-11-03 已做**三件降低盲试的事：① `write_api_errors.dart` 显示服务端原文；② 注册页本地判密码强度（`lib/data/password_rules.dart`，`test/password_rules_test.dart` 读后端 TS 钉住阈值 / 弱口令表 / 六句文案）＋ 密码要求**常驻**文案；③ 标识框下明确「网站码只认申请时填的手机号/邮箱」。**仍缺**：真机（1.0.3+4 或新包）走完一次**成功**注册；用户那次 400 的具体触发条件仍未取得（需其回报界面文案） |
+| **注册一致（小程序）** | 小程序注册页补本地密码校验 ＋ 完整要求文案（App 2026-11-03 已做） | ✅ **已完成（2026-11-03）** | 本轮复核：新增 `kids_points_mp/src/utils/password_rules.ts`（服务端规则镜像）；`pages/register/index.tsx` 提交前判强度 + 密码框下**常驻**要求文案；`sheets/AppAccountSheet.tsx` 的「设置/修改密码」同样走它（原来只查长度，`密码最多 64 位。` 与服务端文案本就漂移）；新增守门脚本 `tools/password-rules-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run password:check` 与 `npm run ci` |
+| **P0-4** | 数据库备份 ＋ 一次恢复演练 | ✅ **已完成（2026-11-03）** | 本轮复核（真机执行）：`deploy/backup-kids-db.sh` → 装到 `/usr/local/bin/kids-backup.sh`，root crontab `17 3 * * *`（保留 14 天）；实跑 `OK 备份完成 …/kids_points_2026-11-03_1226.sql.gz（10000 字节）`＋`OK 恢复演练：restore_test 恢复出 24 张表，PointRecord=0（与线上一致）`＋临时库已删。**仍未做**：备份离开本机（要 COS 密钥）、失败告警（同 P0-5 外部通道） |
+| **P0-5** | 探活 / 告警（`GET /health`、compose `healthcheck`） | 🟡 **代码侧 ＋ 自愈已上线（2026-11-03）**，告警通道仍缺 | 本轮复核（线上实测）：`https://hub.littlewish.top:8443/kids/health` → `200 {"status":"ok",…}`；`/kids/health/ready` → `200 {"checks":{"database":{"status":"up","latencyMs":1}}}`；`/k/health` 同 200（`/k` 段已恢复）；容器 `Up 19 seconds (healthy)`；root crontab 已装 `*/5 * * * * /usr/local/bin/kids-watchdog.sh`。**仍未做**：① 外部告警通道（要 webhook）；② uptime 监控（外部探针，整机挂了 watchdog 也一起挂） |
+| **P0-6** | 法务文本定稿 ＋ 双端协议全文页 | **未做**（等法务，L5） | 用户 2026-11-03 明确：「法律文案这不用你管，到时候我就更新了」⇒ 本项**不由开发侧推进**；双端协议全文页（可点开的页面）仍缺，属工程侧可做部分，未开工（未复核） |
+| **P0-7** | pg18 网络附加自愈（`docker network connect` 是运行时状态） | ✅ **已完成（2026-11-03）** | 本轮复核（线上）：`deploy/ensure-kids-pg-network.sh` → `/usr/local/bin/kids-pg-network.sh`，root crontab `*/10 * * * *`；实跑 `run_exit=0`（当前已连接，静默退出）；`docker inspect pg18` 的 Networks 里确有 `deploy_default`。**仍未做**：把 pg18 搬进 compose（要动 hub 编排） |
+| **P1-1** | 推送落地（厂商 SDK / 小程序订阅消息） | **未做** | 本轮复核：`requestSubscribeMessage` 全仓只在 `43`/`design/README` 被**讨论**，`kids_points_mp/src/**` 0 命中 |
+| **P1-2** | 回收站 90 天到期自动清理 worker | **未做** | 未复核（§4 P1-2） |
+| **P1-3** | 审批详情页 ＋ 通知深链 | **未做** | 未复核（§4 P1-3） |
+| **P1-4** | 习惯独立 CRUD（`POST/PATCH /habits`） | **未做** | 未复核（§4 P1-4） |
+| **P1-5** | 孩子头像（预设 / 上传二选一） | **未做** | 未复核（§4 P1-5） |
+| **P1-6** | 加分配额 / 金额阈值限制生效 | **未做** | 本轮复核：`backend/src/permissions/permissions.guard.ts:114` 仍写着「不传 `amount`」，`amount` 在 Guard 里无其他命中 |
+| **P1-7** | 忘记家长 PIN 的重置通道 | **未做** | 未复核（§4 P1-7） |
+| **P1-9** | App token 持久化（现在 `Directory.systemTemp`，清缓存即掉登录） | **未做**（有意等 P1-1 一起改） | 未复核（§4 P1-9） |
+| **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | **未做** | 未复核（§4 P1-10） |
+| **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **未做**（整张表都在） | 未复核（§5 ＋ `deploy/README.md` §8 P2） |
+| **W12 边界** | 网站发码 **IP 限流**、额度行清理、手机号/邮箱**不验证**、「重新申请」不吊销旧码 | **未做**（明确取舍） | 未复核（`48` §7） |
+| **发布边界** | 小程序 `dist/` 已构建但**未上传** | **未做** | 本轮复核：`kids_points_mp/dist/` 存在但未上传（微信开发者工具需要本机登录，见下「发布权限」）。★ `.env.local` 里的 `/k` 入口**已于 2026-11-03 恢复**：Caddyfile 备份 → 插入 `handle_path /k/*` → `caddy validate` 通过 → `reload`；实测 `/k/health` 200、`/k/app/version` 200、`/k/invite` 200 |
+| **网站入口** | `https://www.littlewish.top:8443/invite` 连不上（`curl` 超时 000）；`ip:80/k/invite` 与 `hub…:8443/kids/invite` 均 **200** | **文档已修 ＋ `/k` 已恢复**（2026-11-03）；`www:8443` 仍不通（要不要恢复它需运维裁定） | 本轮复核：`/k/invite` → 200（Caddy 恢复 `handle_path /k/*` 后）；`hub…:8443/kids/invite` → 200；`www:8443` 未重测（**未复核**） |
+| **测试边界** | `test-db/` 常驻套件补「网站发码并发」用例（目前只有手工探针 `npm run probe:invite-quota`） | **未做** | 未复核（`48` §7） |
+| **验收边界** | 真机走查 / 浏览器 E2E（**从未做过**） | **未做** | 未复核（§9） |
+
+**已完成（不再列入汇报，详见对应交接单）**：P0-1 运行期身份闭环（W10-B，`44`）·
+P1-8 邀请制注册（W11-A，`45`）· 网站发码 ＋ `/invite` 页面（W12，`48`，2026-11-03 已上线）·
+**P0-2a App「我的 → 退出登录」**（2026-11-03）· **P0-2b App「我的 → 登录账号」**
+（2026-11-03：`GET/PUT /auth/account` 都有了调用方；证据 = `test/account_sheet_test.dart` **6 条**）·
+**小程序密码规则与 App / 服务端三份一致**（2026-11-03：`kids_points_mp/src/utils/password_rules.ts`
+＋ 守门脚本 `tools/password-rules-check.mjs`，`npm run password:check`）· **注册/登录失败原因透传**
+（2026-11-03：`lib/data/write_api_errors.dart` 对 `WEAK_PASSWORD` / `INVITE_CODE_MALFORMED` /
+`INVALID_IDENTIFIER` / `DEVICE_ID_REQUIRED` / `INVITE_CODE_UNAVAILABLE` / `IDENTIFIER_TAKEN` /
+`ACCOUNT_INVALID_CREDENTIALS` / `USER_NOT_ACTIVE` / `LOGIN_RATE_LIMITED` 一律显示服务端原文，
+不再只说「HTTP 400」；证据 = `test/write_api_test.dart` 新增 6 条用例）·
+**注册页本地密码校验 ＋ 要求文案**（2026-11-03：`lib/data/password_rules.dart` 镜像
+`validatePasswordStrength()`，`auth_api.dart` 的注册 / 改密也走同一份；注册页密码框下常驻
+「8–64 位、至少含一个字母…」；证据 = `test/password_rules_test.dart` **9 条**（含读后端 TS 的
+同源钉住）＋ `test/invite_register_test.dart` 新增「弱密码 ⇒ 本地提示、零请求」）。
+
+### 0.1 「发布」到底卡在哪（2026-11-03 实测，别再靠印象）
+
+> 起因：用户问「昨天你还发布版本，今天怎么说没有权限了」。查后的答案是：
+> **发布权限一直都有，昨天那条路今天照样能走**；卡住的是另外两件事。
+
+| 能做什么 | 现状 | 证据（2026-11-03 实跑） |
+|---|---|---|
+| 连服务器 / 看容器 | ✅ 可以 | `ssh -i ~/.ssh/kids.pem ubuntu@82.157.153.22` → `SSH_OK`；
+ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied」的真正来源**：`/var/run/docker.sock` 不是 docker 组可写，不是账号被降权） |
+| 重建后端镜像 + 重启 | ✅ 已做 | `sudo docker compose build` → `Image kids-api:0.1.0 Built`；`up -d` → `Up 19 seconds (healthy)` |
+| 上传 APK / 改版本端点 | ✅ 可以（昨天就是这么发的） | `/app/kids-points-1.0.3.apk` 在服；`GET /k/app/version` → `1.0.3 / build 4` |
+| 改 Caddy（公网入口） | ✅ 已做 | 备份 → `caddy validate` → `systemctl reload caddy`；`/k/*` 恢复为 200 |
+| 数据库备份 / 恢复演练 | ✅ 已做 | 见 §0 P0-4 |
+| **上传微信小程序** | ❌ **只能在你的机器上点** | 需要「微信开发者工具」本机登录（扫码）+ 小程序 AppID 后台；本环境没有 GUI/扫码，也没有开发者工具的 CLI 登录态 |
+| **应用商店上架（Google Play / App Store）** | ❌ 需要开发者账号 + 你自己的签名密钥 | `android/app/build.gradle.kts:34-36` 现在写的是 `TODO: Add your own signing config` / `signingConfig = signingConfigs.getByName("debug")` —— **release 包用的是 debug 签名**。这把钥匙全世界的 Android SDK 里都有一份，任何人可以给同一个包名签一个"更新"；换正式密钥又必须卸载重装 |
+
+**结论**：说「没有权限」是不准确的 —— 那是「需要一个只有你能提供的凭据/登录」。
+凡是不需要扫码、不需要商店账号的发布动作（后端镜像、APK 上传、Caddy、备份），
+我都可以直接做完并当场验证。
 
 ---
 

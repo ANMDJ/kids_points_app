@@ -11,6 +11,7 @@ import { DeviceSessionModule } from './device-session/device-session.module'
 import { DeviceTokensHttpModule } from './device-tokens/device-tokens-http.module'
 import { ExportModule } from './export/export.module'
 import { HabitsModule } from './habits/habits.module'
+import { HealthModule } from './health/health.module'
 import { AuthGuard } from './identity/auth.guard'
 import { IdentityModule } from './identity/identity.module'
 import { IdempotencyModule } from './idempotency/idempotency.module'
@@ -62,6 +63,11 @@ import { WishesModule } from './wishes/wishes.module'
     RegistrationInvitesHttpModule.register(),
     // ★ 动态模块（W2-D，2026-10-16）：有 DATABASE_URL ⇒ PrismaMembershipRepository
     //   （真查 ChildMember，屏障一读的就是库）；没有 ⇒ NotImplementedMembershipRepository（501）。
+    // ★ P0-5（2026-11-03）：`GET /health`（存活，**不查库**）＋ `GET /health/ready`
+    //   （就绪，`SELECT 1` + 硬超时）。compose 的 healthcheck 只打前者 ——
+    //   库抖动时重启 API 容器既救不了库，又连只读降级都做不到（详见模块文件头）。
+    //   ★ 只在这里导入一次：HealthModule 自带 controller，业务模块不许再导入。
+    HealthModule.register(),
     MembershipModule.register(),
     PermissionsModule,
     // ★ 动态模块（W2-B）：有 DATABASE_URL ⇒ 绑 PrismaLedgerRepository（真查库）；

@@ -11,8 +11,10 @@
 #   它的 SAN 只有 littlewish.top + www.littlewish.top，而 www 已解析到本机 —— 故用 www。
 #
 # 它按「先便宜后昂贵」的顺序检查，任何一项红了都会打印原因和下一步。
-# ★ 判据与 deploy/README.md 第 5 节完全一致，不另立一套：
-#   匿名探针就是 POST /auth/login —— 这个项目**没有** /health（别去找）。
+# ★ 判据与 deploy/README.md 第 5 节完全一致，不另立一套。
+#   匿名探针：`GET /health`（存活，**不查库**）+ `GET /health/ready`（就绪，查库）。
+#   ★ 2026-11-03 之前这里写的是「这个项目没有 /health」—— 那是当时的**事实**，
+#     不是长期约定；P0-5 落地后改用它（`backend/src/health/`）。
 
 set -uo pipefail
 
@@ -107,6 +109,22 @@ head_ "7) hub 未受影响"
 st=$(code_of "${IP_BASE}/")
 [ "$st" = "200" ] && ok "${IP_BASE}/ ⇒ 200（hub 正常）" \
   || bad "${IP_BASE}/ ⇒ $st" "hub 挂了 —— 立刻回滚 Caddyfile：cp 备份回来 + systemctl reload caddy"
+
+head_ "8) 探活（P0-5：存活不查库 / 就绪才查库）"
+body=$(curl -s -m "$TIMEOUT" "${BASE}/health" 2>/dev/null)
+st=$(code_of "${BASE}/health")
+if [ "$st" = "200" ] && printf '%s' "$body" | grep -q '"status":"ok"'; then
+  ok "GET /health ⇒ 200 status=ok（进程活着，且没有查库）"
+else
+  bad "GET /health ⇒ $st" "线上还是旧镜像？重建后重试（README 第 1 节）。注意它是**不查库**的存活探针"
+fi
+st=$(code_of "${BASE}/health/ready")
+case "$st" in
+  200) ok "GET /health/ready ⇒ 200（数据库能应答）" ;;
+  503) bad "GET /health/ready ⇒ 503（库不可用 / 未配置）" \
+        "先 docker logs pg18 看库；★ 不要重启 kids-api —— 重启救不了库。detail 在响应体的 checks.database.detail" ;;
+  *)   bad "GET /health/ready ⇒ $st" "404 ⇒ 镜像里没有 P0-5 的 health 模块；000 ⇒ 回到第 2、3 项" ;;
+esac
 
 head_ "结果"
 printf '  通过 %d 项，失败 %d 项\n' "$pass" "$fail"

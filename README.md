@@ -132,8 +132,13 @@ flutter build apk --release \
 | **网站「邀请码获取」**（W12） | 打开 `…/invite`，填手机号 + 邮箱当场领取（默认每天 50 个、7 天有效） | 一个**零个孩子**的新账号，随后按引导建立孩子档案 |
 | **家庭邀请码**（W11-A） | 家里已经在用的家长在小程序「我的 → 邀请码」生成 | 直接加入该家庭（`membership` 指向那个孩子） |
 
-网站入口与现有两个 API 入口同源，**不需要改 Caddy**：
-`https://www.littlewish.top:8443/invite` 或 `http://82.157.153.22/k/invite`。
+网站入口与 API 同源，**不需要改 Caddy**：
+`https://hub.littlewish.top:8443/kids/invite` —— **当前唯一可用入口**（2026-11-03 实测 200）。
+另两条**现在打不开**，别写进给用户的指引：
+
+- `http://82.157.153.22/k/invite` → **404**（`/k` 段在 2026-11-02 的部署里被移除）；
+- `https://www.littlewish.top:8443/invite` → **连不上**（`curl` 超时，见
+  `docs/design/48-public-invite-acquisition.md` §7）。
 每日额度 / 有效期可配：`REGISTRATION_INVITE_DAILY_LIMIT`（默认 `50`）、
 `REGISTRATION_INVITE_TTL_DAYS`（默认 `7`），详见
 [`docs/design/48-public-invite-acquisition.md`](./docs/design/48-public-invite-acquisition.md)。
@@ -146,17 +151,41 @@ flutter build apk --release \
 | --- | --- |
 | 本地演示（已存在的家长） | `cd backend && npm run seed:demo && npm run seed:account` → `13800138000 / demo12345` |
 | 全新的人（本地） | 用 `seed:demo` 生成的邀请码 `MAMA2345`（guardian · 3 次名额 · 7 天）＋ 任意未注册手机号 ＋ 自定密码；或起本地服务后访问 `http://127.0.0.1:3000/invite` 领网站码 |
-| 线上 | 打开 `…/invite` 领取网站码；或请家里已经在用的家长生成家庭邀请码。线上**没有**预置演示账号 |
+| 线上 | 打开 `https://hub.littlewish.top:8443/kids/invite` 领取网站码；或请家里已经在用的家长生成家庭邀请码。线上**没有**预置演示账号 |
 
 登录页底部有「第一次用？用邀请码注册」：填邀请码 + 手机号/邮箱 + 密码即可，
 注册成功**直接进 App**（不需要再登录一次）。失败时留在注册页，错误文案来自服务端；
 点「返回登录」可以放弃注册（不会留下半成品账号 —— 后端是一个事务）。
 小程序登录页有同一个入口（W12），注册页在 `kids_points_mp/src/pages/register/`。
 
+密码要求（App 注册页密码框下面**常驻**这一行，不是输入就消失的占位符）：
+**8–64 位，至少含一个字母；不能是纯数字、同一字符重复、常见弱密码，也不能和手机号/邮箱相同。**
+App 在提交前用 `lib/data/password_rules.dart` 本地判一次（服务端规则的镜像），
+不合格就直接在表单下方说清是哪一条 —— 不再发一次必然 400 的请求。服务端仍是唯一裁定者。
+
+> **网站码绑定申请时填的手机号 + 邮箱**：注册页填的「手机号或邮箱」必须是其中**之一**，
+> 否则会拿到 `409 INVITE_CODE_UNAVAILABLE`（四种「不能用」故意同形，不会告诉你原因）。
+> App 注册页在标识输入框下也有这句提示（2026-11-03 补）。
+
 > 邀请码是**凭据**：有次数上限 / 有效期 / 可吊销（家庭码），或单次 + 有效期（网站码）。
 > 四种「不能用」（不存在 / 过期 / 用完 / 吊销）故意给同一个 `409 INVITE_CODE_UNAVAILABLE`
 > —— 区分它们等于告诉别人「哪些码存在」。网站码还会核对**申请时填的手机号或邮箱**。
 > 手机号已被注册时是 `409 IDENTIFIER_TAKEN`（提示直接登录），不是「格式不对」。
+
+**注册时看到的 400 / 409 分别是什么意思**（2026-11-03 起 App 会显示**服务端那句原文**，
+不再只说「HTTP 400」——原因见 `lib/data/write_api_errors.dart` 的 `serverMessage()`）：
+
+| 状态 + `code` | 意思 | 下一步 |
+| --- | --- | --- |
+| `400 WEAK_PASSWORD` | 密码太弱：不足 8 位 / 纯数字 / 同一个字符重复 / 常见弱口令（如 `abc12345`、`12345678`）/ 与手机号邮箱相同 | 换 8–64 位、至少带一个字母的密码（App 注册页提交前已本地拦一次，2026-11-03 起） |
+| `400 INVITE_CODE_MALFORMED` | 码的**形状**不对：不是 8 位，或含字母表里没有的 `0/O/1/I/L` | 照原码重抄（空格 / 连字符会自动去掉） |
+| `400 INVALID_IDENTIFIER` | 手机号不是 11 位大陆号，或邮箱缺 `@` | 改输入 |
+| `400 DEVICE_ID_REQUIRED` | App 没带上设备标识（首启生成失败） | 重启 App 再试 |
+| `409 INVITE_CODE_UNAVAILABLE` | 码不存在 / 过期 / 用完 / 吊销，**或**网站码与这里填的手机号邮箱不一致 | 用申请时的号；或回 `/invite` 重新领一张 |
+| `409 IDENTIFIER_TAKEN` | 这个手机号/邮箱已经注册过 | 点「返回登录」直接用密码登录 |
+
+> 注册前已经登录过别的账号时，先到「我的 → 退出登录」再注册 —— App 之前的版本
+> 没有这个入口，只能清应用数据（2026-11-03 已补）。
 
 > 明文 HTTP 例外仍保留在 `AndroidManifest.xml`（`usesCleartextTraffic="true"`）
 > 与 iOS ATS，只影响 `http://` 入口；走 `https://…:8443` 不需要它们。

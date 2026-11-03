@@ -13,6 +13,7 @@ import '../data/write_api_errors.dart' show WriteApiException, WriteFailureKind;
 import 'create_child_screen.dart';
 import 'login_screen.dart';
 import 'register_screen.dart';
+import 'session_actions.dart';
 
 /// 启动闸门：**没有 token ⇒ 登录页；有 token 但没有孩子会话 ⇒ 先建立会话**
 /// （W9-D 建立；W10-B / P0-1 补齐运行期身份，2026-11-02）。
@@ -383,6 +384,9 @@ class _AccountGateState extends State<AccountGate> {
   Future<void> _signOut() async {
     await widget.session?.clearChild();
     await widget.authApi?.logout();
+    // ★ 与「换账号」同一条：上一个孩子的读缓存不能留给下一个人看
+    //   （`onIdentityChanged` 在 `main.dart` 绑到 `AppStore.resetForIdentity`）。
+    widget.onIdentityChanged?.call();
     if (!mounted) return;
     setState(() {
       _phase = _Phase.needLogin;
@@ -403,7 +407,16 @@ class _AccountGateState extends State<AccountGate> {
         return KeyedSubtree(
           key: ValueKey<String>(
               'kp-session-${widget.session?.childId ?? 'static'}'),
-          child: widget.child,
+          // P0-2：把「退出登录」交给下层页面（「我的」页），动作仍只有这一份
+          // 实现（见 `session_actions.dart` 文件头）。
+          child: SessionActions(
+            signOut: _signOut,
+            // P0-2b：账号绑定 / 改密走的必须是**同一个** holder（见
+            // `session_actions.dart` 里 `authApi` 的说明）；`null` ⇒ 预览模式，
+            // 「我的」页不会画「登录账号」。
+            authApi: widget.authApi,
+            child: widget.child,
+          ),
         );
       case _Phase.needLogin:
         return LoginScreen(
