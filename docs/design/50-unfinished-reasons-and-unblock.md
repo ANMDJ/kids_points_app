@@ -125,9 +125,17 @@ P1/P2 从未被说成「做完了」，只是排在后面。**真正导致「我
 | 命令 | 结果 |
 |---|---|
 | `flutter test` | **500 条全通过**（`test/onboarding_test.dart` +2、`test/parent_mode_test.dart` +1） |
-| `flutter analyze` | 见 §6（本轮日志） |
+| `flutter analyze --no-pub` | **No issues found!（41.7s）** |
 | `kids_points_mp` `tsc --noEmit` | **EXIT=0** |
 | `backend npm run typecheck` | **0 error** |
+
+**提交记录（本轮已入库，不再是工作区里的未提交改动）**
+
+| commit | 内容 |
+|---|---|
+| `6c06d06` | `fix(app+mp): 记一笔不被只读误拦 / 心愿落审批单 / 移除立即锁定入口`（上一轮实测反馈，一并入库） |
+| `17fb538` | `feat(onboarding+parent): D7 引导 PIN 必填与存量账号出口（双端）＋ 未完成项卡点归类`（含本文与 `49`） |
+
 
 **仍未做**：真机走查两条路径；新 APK 打包 / 小程序上传（A 类，见 §3）。
 
