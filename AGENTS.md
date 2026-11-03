@@ -80,4 +80,5 @@
 | 2026-11-03 | **恢复 `/k/*` 公网入口**（Caddyfile 备份 → `handle_path /k/*` → `caddy validate` → `reload`）：`/k/health` `/k/app/version` `/k/invite` 实测 200 | 2026-11-02 该段被整段移除，小程序 `.env.local` 指向的入口全 404（表现为"连不上服务器"） |
 | 2026-11-03 | **P0-4 备份 + 恢复演练**：`deploy/backup-kids-db.sh`（`/usr/local/bin/kids-backup.sh`），root cron `17 3 * * *`；实跑 `restore_test` 恢复出 24 张表、`PointRecord` 行数与线上一致 | 线上一个 `pg18` 容器、零备份：误删/磁盘坏 = 家庭账本全丢 |
 | 2026-11-03 | `43` §0 新增 **0.1「发布」到底卡在哪**：能做的（SSH + `sudo docker`、镜像、APK、Caddy、备份）与只能你做的（微信开发者工具扫码上传、商店账号/正式签名）分开写清 | 用户问「昨天还能发版，今天怎么说没权限」——查后是 `docker.sock` 需要 `sudo`，不是账号被降权 |
-| 2026-11-03 | **P0-7 pg18 网络自愈**：`deploy/ensure-kids-pg-network.sh`（`/usr/local/bin/kids-pg-network.sh`），root cron `*/10 * * * *`；幂等、不重启容器 | `docker network connect` 是运行时状态：`compose down` / pg18 重建后 API `Up` 着刷 `P1001`，以前只能靠人记得 |
+| 2026-11-03 | **发布 1.0.4+5**（APK `/app/kids-points-1.0.4.apk` ＋ 稳定地址 `kids-points-app.apk`，`Content-Length 52578938`）；`kids.env` 的 `APP_LATEST_*` / `APP_PUBLISHED_AT` / `APP_RELEASE_NOTES` 同步；`/k/app/version` 实测 `1.0.4 / 5` | 1.0.3+4 的包**早于**今天的修复（密码提示、登录账号面板都在提交前），不发新包等于这些修复只存在于源码 |
+| 2026-11-03 | 记录 **git 推送的真实故障点**：本机 `http.proxy=http://127.0.0.1:7897`，代理没起时 `git push` 报 `Failed to connect to 127.0.0.1 port 7897`（很容易被误读成"没权限"）；`git -c http.proxy= -c https.proxy= push` 可直连 | 用户问「昨天还能发，今天说没权限」——检查后是本地代理未运行，不是账号权限 |

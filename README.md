@@ -205,12 +205,13 @@ App 在提交前用 `lib/data/password_rules.dart` 本地判一次（服务端�
 - APK 放在 Caddy 的 `/app/*` 静态目录：
 
   ```text
-  /var/www/cline-hub/app/kids-points-1.0.3.apk
-  https://hub.littlewish.top:8443/app/kids-points-1.0.3.apk
+  /var/www/cline-hub/app/kids-points-1.0.4.apk
+  https://hub.littlewish.top:8443/app/kids-points-1.0.4.apk
   ```
 
-- 当前这一版（1.0.3+4）的下载地址：
+- 当前这一版（**1.0.4+5**，2026-11-03 发布）的下载地址：
   <https://hub.littlewish.top:8443/app/kids-points-app.apk>
+  （52,578,938 字节；与 `kids-points-1.0.4.apk` 同一份文件）
 
 
 浏览器里没有 `dart:io`，所以下面三处各自有一份平台实现，由条件导入

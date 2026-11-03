@@ -1,7 +1,7 @@
 name: kids_points_app
 description: 积分小管家 - 儿童习惯打卡与积分奖励 App（Flutter）
 publish_to: 'none'
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
