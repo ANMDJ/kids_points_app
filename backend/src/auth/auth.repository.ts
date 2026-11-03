@@ -67,7 +67,7 @@ export interface ModeStateRow {
   pinLockedUntil: Date | null
   /** `ChildMember.pinFailedCount`（给"还剩 N 次"）。 */
   pinFailedCount: number
-  /** 这台设备在这个孩子档案上的会话行（内核要用的五列）。 */
+  /** 这台设备在这个孩子档案上的会话行（内核要用的列；W14 起含 `kidModeUntil`）。 */
   session: SessionLookupRow
 }
 
@@ -116,6 +116,37 @@ export interface SetParentPinInput {
   operator: AuthOperator
 }
 
+/**
+ * 开一次孩子模式（W14，2026-11-03 / `51-kid-mode-window.md`）。
+ *
+ * ★ 端口只收**算好的** `kidModeUntil`（与 `EnterParentModeInput.expiresAt` 同一条
+ *   纪律）：把「夹到 1–30 分钟」留给 `kid-mode.policy.ts`，于是"上限是多少"
+ *   只有一处可改，也能离线穷举。
+ */
+export interface EnterKidModeInput {
+  childId: string
+  userId: string
+  deviceId: string
+  /** `now + N 分钟`（已由 `kidModeExpiresAt()` 夹在 1–30）。 */
+  kidModeUntil: Date
+  /** 写进审计的原始分钟数（只作证据，不参与判定）。 */
+  durationMinutes: number
+  operator: AuthOperator
+}
+
+/**
+ * 用家长 PIN 收回孩子模式（W14）。
+ *
+ * ★ 刻意**不带** `kidModeUntil`：收回就是把那一列清成 NULL。写一个"过去的时间"
+ *   会留下"已经到期但没被收回"的痕迹，与本端口要表达的事实相反。
+ */
+export interface ExitKidModeInput {
+  childId: string
+  userId: string
+  deviceId: string
+  operator: AuthOperator
+}
+
 /** `POST /auth/parent-pin` 的结果（只描述 PIN 这一件事，不含会话状态）。 */
 export interface ParentPinState {
   pinConfigured: true
@@ -146,6 +177,19 @@ export interface AuthPort {
 
   /** 首次设置 / 修改 PIN（写 `pinHash` / `pinSetAt` / 清零计数 / 审计，同一事务）。 */
   setParentPin(input: SetParentPinInput): Promise<ParentPinState>
+
+  /**
+   * 开孩子模式（W14）：写 `DeviceSession.kidModeUntil` + 审计，同一事务。
+   *
+   * ★ **不改** `activeRole` / `expiresAt`：孩子模式是一个"覆盖层"，
+   *   收回（`exitKidMode`）之后家长设备应当回到**原来的**窗口（30 天会话或
+   *   5 分钟 PIN 窗口）。若这里把 `activeRole` 改成 child，收回时就必须猜
+   *   "原来是什么"，而那一刻的信息已经丢了。
+   */
+  enterKidMode(input: EnterKidModeInput): Promise<ModeStateRow>
+
+  /** 用 PIN 收回孩子模式（`kidModeUntil = NULL` + 审计，同一事务）。 */
+  exitKidMode(input: ExitKidModeInput): Promise<ModeStateRow>
 }
 
 /**
@@ -190,5 +234,13 @@ export class NotImplementedAuthRepository implements AuthPort {
 
   setParentPin(_input: SetParentPinInput): Promise<ParentPinState> {
     return Promise.resolve(this.fail('setParentPin'))
+  }
+
+  enterKidMode(_input: EnterKidModeInput): Promise<ModeStateRow> {
+    return Promise.resolve(this.fail('enterKidMode'))
+  }
+
+  exitKidMode(_input: ExitKidModeInput): Promise<ModeStateRow> {
+    return Promise.resolve(this.fail('exitKidMode'))
   }
 }

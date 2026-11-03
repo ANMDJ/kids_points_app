@@ -282,7 +282,7 @@ describe('组 C：PrismaDeviceSessionRepository 的读路径约定', () => {
     )
   })
 
-  it('★ `select` **恰好**读内核要用的五列（多读的列会被守卫带进请求上下文）', async () => {
+  it('★ `select` **恰好**读内核要用的六列（多读的列会被守卫带进请求上下文）', async () => {
     const { repo, calls } = withRows(sessionRow())
     await repo.findSession('dev-1', 'child-1')
     const select = (calls[0] as { select: Record<string, unknown> }).select
@@ -291,6 +291,9 @@ describe('组 C：PrismaDeviceSessionRepository 的读路径约定', () => {
       'childId',
       'deviceId',
       'expiresAt',
+      // W14（2026-11-03）：孩子模式的降级判定要用它。少这一列 ⇒ 内核把
+      // `undefined` 当成"没开孩子模式"⇒ 孩子直接拿到家长权限（静默提权）。
+      'kidModeUntil',
       'userId'
     ])
     assert.ok(

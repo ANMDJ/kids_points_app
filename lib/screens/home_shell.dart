@@ -37,6 +37,11 @@ class _HomeShellState extends State<HomeShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !store.isLiveMode) return;
       unawaited(store.refreshFromServer());
+      // W14（2026-11-03）：首页要显示「孩子模式」状态条，所以首屏也拉一次模式。
+      // 只在这里（首屏一次）加，**不**塞进 `refreshFromServer` —— 那个函数是
+      // 每次下拉刷新都会跑的，给每个家庭多付一次"与首页数据无关"的请求。
+      // 面板里仍会各自拉一次（打开即最新）。
+      unawaited(store.refreshParentMode());
     });
   }
 

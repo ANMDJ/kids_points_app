@@ -187,6 +187,8 @@ function resetDad(auth: AuthFake, patch: Partial<AuthFake['members'][string]> = 
     pinLockedUntil: null,
     activeRole: 'child',
     expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    // W14：孩子模式是**每台设备**的状态；不清掉会让下一条用例读到上一条的窗口。
+    kidModeUntil: null,
     ...patch
   })
   auth.calls.length = 0
@@ -227,6 +229,18 @@ describe('组 A：默认装配（家长模式端口未注入）⇒ 501', () => {
   it('POST /auth/parent-pin ⇒ 501（否则界面会以为 PIN 设好了）', async () => {
     // 用"已在家长模式"的设备：`manage_parent_pin` 对孩子是 DENY，先过矩阵才轮得到 501。
     const res = await request(url, 'POST', '/auth/parent-pin', GUARDIAN_PARENT, { pin: PIN })
+    assert.equal(res.status, 501)
+    assert.equal(res.body.code, 'PARENT_MODE_NOT_IMPLEMENTED')
+  })
+
+  it('POST /auth/kid-mode ⇒ 501（W14：绝不回一个"孩子模式已开启"的假状态）', async () => {
+    const res = await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 15 })
+    assert.equal(res.status, 501)
+    assert.equal(res.body.code, 'PARENT_MODE_NOT_IMPLEMENTED')
+  })
+
+  it('DELETE /auth/kid-mode ⇒ 501（收回也要真写库，不能只改回包）', async () => {
+    const res = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: PIN })
     assert.equal(res.status, 501)
     assert.equal(res.body.code, 'PARENT_MODE_NOT_IMPLEMENTED')
   })
@@ -299,6 +313,10 @@ describe('组 B：身份 / 成员 / 矩阵与 GET 的语义', () => {
     const res = await request(url, 'GET', '/auth/parent-mode', GUARDIAN)
     assert.deepEqual(Object.keys(res.body).sort(), [
       'activeRole',
+      'kidMode',
+      'kidModeExpired',
+      'kidModeRemainingSeconds',
+      'kidModeUntil',
       'lockedUntil',
       'modeSource',
       'parentMode',
@@ -718,5 +736,238 @@ describe('组 F：POST /auth/parent-pin', () => {
     assert.equal(res.status, 401)
     assert.equal(auth.calls.length, 0)
   })
+})
+
+// ══ 组 G：孩子模式（W14，2026-11-03）════════════════════════════════════════════
+/**
+ * 要钉住的是**A 方案**的五条事实（`docs/design/51-kid-mode-window.md`）：
+ *   ① 只有**已经在家长模式**的家长能开；孩子开不了（403 `KID_MODE_REQUIRES_PARENT_MODE`）；
+ *   ② 时长 1–30 分钟：31 / 0 / 缺字段在**管道层**就 400，端口零调用；
+ *   ③ 开了之后 `GET` 立刻是 `child` + `kidMode:true` + 倒计时（不是只改回包）；
+ *   ④ **到期不自动回家长模式**：`kidModeExpired:true`，家长专属动作仍被矩阵挡住；
+ *      必须 `DELETE` + 正确 PIN 才回到 guardian；
+ *   ⑤ 收回的失败语义与"进入家长模式"逐字一致：400 不计次 / 403 计次 / 429 锁定。
+ */
+describe('组 G：孩子模式（W14）', () => {
+  let app!: INestApplication
+  let url = ''
+  let auth: AuthFake
+
+  const DAY_MS = 24 * 60 * 60 * 1000
+
+  /** 家长设备以登录会话自带 guardian（邀请码 / 密码登录后的真实形态）。 */
+  function sessionBackedGuardian(): void {
+    resetDad(auth, { activeRole: 'guardian', expiresAt: new Date(Date.now() + 30 * DAY_MS) })
+  }
+
+  before(async () => {
+    PIN_HASH = await hashPin(PIN)
+    auth = makeAuthFake({
+      [FAKE_DAD_ID]: { memberRole: 'guardian', pinHash: PIN_HASH },
+      [MOM_ID]: { memberRole: 'guardian', pinHash: null },
+      [FAKE_KID_ID]: { memberRole: 'child', pinHash: null }
+    })
+    ;({ app, url } = await startApp(auth))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    resetDad(auth)
+    Object.assign(auth.members[MOM_ID], {
+      pinHash: null,
+      pinFailedCount: 0,
+      pinLockedUntil: null,
+      activeRole: 'child',
+      kidModeUntil: null
+    })
+  })
+
+  it('★ 家长模式 + 已设 PIN ⇒ 200：角色降级为 child、倒计时 ≈ 15 分钟', async () => {
+    sessionBackedGuardian()
+    const res = await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 15 })
+
+    assert.equal(res.status, 200)
+    assert.equal(res.body.activeRole, 'child')
+    assert.equal(res.body.parentMode, false)
+    assert.equal(res.body.kidMode, true)
+    assert.equal(res.body.kidModeExpired, false)
+    assert.ok(
+      Number(res.body.kidModeRemainingSeconds) >= 895 &&
+        Number(res.body.kidModeRemainingSeconds) <= 900,
+      `kidModeRemainingSeconds=${String(res.body.kidModeRemainingSeconds)}`
+    )
+    assert.ok(typeof res.body.kidModeUntil === 'string')
+
+    // 端口收到的必须是**算好的绝对时刻** + 原始分钟数（审计用）。
+    const call = auth.calls.find((item) => item.method === 'enterKidMode')
+    const input = call?.input as { kidModeUntil: Date; durationMinutes: number }
+    assert.equal(input.durationMinutes, 15)
+    assert.ok(Math.abs(input.kidModeUntil.getTime() - (Date.now() + 15 * 60_000)) < 5_000)
+
+    // 库里那一列真的被写了（不是只改了回包）。
+    const member = auth.members[FAKE_DAD_ID]
+    assert.ok(member?.kidModeUntil instanceof Date)
+
+    // `activeRole` / `expiresAt` **没被动** —— 收回时才能回到原来的 30 天窗口。
+    assert.equal(member?.activeRole, 'guardian')
+    assert.ok((member?.expiresAt.getTime() ?? 0) > Date.now() + 29 * DAY_MS)
+  })
+
+  it('孩子模式的 GET 立刻是 child + kidMode=true（身份内核真的读了这一列）', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 15 })
+
+    const res = await request(url, 'GET', '/auth/parent-mode', GUARDIAN)
+    assert.equal(res.status, 200)
+    assert.equal(res.body.activeRole, 'child')
+    assert.equal(res.body.parentMode, false)
+    assert.equal(res.body.kidMode, true)
+    assert.equal(res.body.kidModeExpired, false)
+    assert.equal(res.body.modeSource, null)
+    assert.equal(res.body.remainingSeconds, 0)
+  })
+
+  it('31 / 0 / 缺字段 ⇒ 400，端口零调用（上限由 DTO 先挡，服务端再夹）', async () => {
+    sessionBackedGuardian()
+    for (const body of [{ durationMinutes: 31 }, { durationMinutes: 0 }, {}]) {
+      const res = await request(url, 'POST', '/auth/kid-mode', GUARDIAN, body)
+      assert.equal(res.status, 400, JSON.stringify(body))
+    }
+    assert.equal(auth.calls.length, 0)
+  })
+
+  it('孩子的成员位 ⇒ 403 KID_MODE_REQUIRES_GUARDIAN（PIN 属于成员）', async () => {
+    const res = await request(url, 'POST', '/auth/kid-mode', CHILD, { durationMinutes: 15 })
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'KID_MODE_REQUIRES_GUARDIAN')
+    assert.equal(auth.calls.some((call) => call.method === 'enterKidMode'), false)
+  })
+
+  it('家长成员位但当前不在家长模式 ⇒ 403 KID_MODE_REQUIRES_PARENT_MODE', async () => {
+    // 孩子模式下"给自己延长时间"必须走不通 —— 否则这道门等于不存在。
+    resetDad(auth, { activeRole: 'child' })
+    const res = await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 15 })
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'KID_MODE_REQUIRES_PARENT_MODE')
+    assert.equal(auth.calls.some((call) => call.method === 'enterKidMode'), false)
+  })
+
+  it('没有设 PIN ⇒ 409 KID_MODE_REQUIRES_PIN（否则到点后没人能收回）', async () => {
+    Object.assign(auth.members[MOM_ID], { activeRole: 'guardian', pinHash: null })
+    const res = await request(url, 'POST', '/auth/kid-mode', MOM_PARENT, { durationMinutes: 15 })
+    assert.equal(res.status, 409)
+    assert.equal(res.body.code, 'KID_MODE_REQUIRES_PIN')
+    assert.equal(auth.calls.some((call) => call.method === 'enterKidMode'), false)
+  })
+
+  it('已经开着再开一次 ⇒ 409 KID_MODE_ALREADY_ACTIVE（不静默续期）', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 10 })
+    const before = auth.members[FAKE_DAD_ID]?.kidModeUntil?.getTime()
+
+    const res = await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 30 })
+    assert.equal(res.status, 409)
+    assert.equal(res.body.code, 'KID_MODE_ALREADY_ACTIVE')
+    assert.equal(auth.members[FAKE_DAD_ID]?.kidModeUntil?.getTime(), before)
+  })
+
+  it('孩子模式期间用 PIN 直接进家长模式 ⇒ 409 KID_MODE_ACTIVE（指明走收回端点）', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 10 })
+    auth.calls.length = 0
+
+    const res = await request(url, 'POST', '/auth/parent-mode', GUARDIAN, { pin: PIN })
+    assert.equal(res.status, 409)
+    assert.equal(res.body.code, 'KID_MODE_ACTIVE')
+    assert.equal(auth.calls.some((call) => call.method === 'enterParentMode'), false)
+  })
+  it('★ 到期不自动回家长模式：kidModeExpired=true，家长专属动作仍被挡住', async () => {
+    // 把窗口拨到过去 = "时间到了，但家长还没收"。
+    sessionBackedGuardian()
+    auth.members[FAKE_DAD_ID]!.kidModeUntil = new Date(Date.now() - 1_000)
+
+    const read = await request(url, 'GET', '/auth/parent-mode', GUARDIAN)
+    assert.equal(read.status, 200)
+    assert.equal(read.body.activeRole, 'child')
+    assert.equal(read.body.parentMode, false)
+    assert.equal(read.body.kidMode, false)
+    assert.equal(read.body.kidModeExpired, true)
+    assert.equal(read.body.kidModeRemainingSeconds, 0)
+
+    // `manage_parent_pin` 只对 guardian ALLOW ⇒ 403 说明角色**没有**回到 guardian。
+    const blocked = await request(url, 'POST', '/auth/parent-pin', GUARDIAN, { pin: '9999' })
+    assert.equal(blocked.status, 403)
+    assert.equal(blocked.body.code, 'FORBIDDEN')
+  })
+
+  it('★ 正确 PIN 收回 ⇒ 回到原来的 30 天家长会话（不是 5 分钟）', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 10 })
+
+    const res = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: PIN })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.kidMode, false)
+    assert.equal(res.body.kidModeExpired, false)
+    assert.equal(res.body.kidModeUntil, null)
+    assert.equal(res.body.parentMode, true)
+    assert.equal(res.body.modeSource, 'session')
+    assert.ok(Number(res.body.remainingSeconds) > 300)
+
+    const member = auth.members[FAKE_DAD_ID]
+    assert.equal(member?.kidModeUntil, null)
+    assert.equal(member?.activeRole, 'guardian')
+  })
+
+  it('收回时 PIN 不对 ⇒ 403 计次，且**不**清掉孩子模式', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 10 })
+    auth.calls.length = 0
+
+    const res = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: '0000' })
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'PARENT_PIN_INVALID')
+    assert.equal(res.body.remainingAttempts, 4)
+    assert.equal(auth.calls.some((call) => call.method === 'exitKidMode'), false)
+    assert.ok(auth.members[FAKE_DAD_ID]?.kidModeUntil instanceof Date)
+    assert.equal(auth.members[FAKE_DAD_ID]?.pinFailedCount, 1)
+  })
+
+  it('收回时 PIN 格式错 ⇒ 400 且**不计次**（手滑不是猜）', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 10 })
+
+    const res = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: 'abc' })
+    assert.equal(res.status, 400)
+    assert.equal(res.body.code, 'PARENT_PIN_FORMAT_INVALID')
+    assert.equal(auth.members[FAKE_DAD_ID]?.pinFailedCount, 0)
+  })
+
+  it('锁定期间收回 ⇒ 429，且一次 scrypt 都不跑（recordPinFailure 零调用）', async () => {
+    sessionBackedGuardian()
+    await request(url, 'POST', '/auth/kid-mode', GUARDIAN, { durationMinutes: 10 })
+    auth.members[FAKE_DAD_ID]!.pinLockedUntil = new Date(Date.now() + 10 * 60_000)
+    auth.calls.length = 0
+
+    const res = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: PIN })
+    assert.equal(res.status, 429)
+    assert.equal(res.body.code, 'PARENT_PIN_LOCKED')
+    assert.ok(Number(res.body.retryAfterSeconds) > 0)
+    assert.equal(auth.calls.some((call) => call.method === 'recordPinFailure'), false)
+  })
+
+  it('已经收回再收一次 ⇒ 200（幂等降级，但仍要验 PIN）', async () => {
+    sessionBackedGuardian()
+    const first = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: PIN })
+    assert.equal(first.status, 200)
+    auth.calls.length = 0
+
+    const second = await request(url, 'DELETE', '/auth/kid-mode', GUARDIAN, { pin: PIN })
+    assert.equal(second.status, 200)
+    assert.equal(second.body.kidMode, false)
+    assert.ok(auth.calls.some((call) => call.method === 'exitKidMode'))
+  })
+
+
 })
 

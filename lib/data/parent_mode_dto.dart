@@ -33,6 +33,10 @@ class ParentModeDto {
     required this.pinConfigured,
     required this.remainingAttempts,
     required this.lockedUntil,
+    required this.kidMode,
+    required this.kidModeExpired,
+    required this.kidModeUntil,
+    required this.kidModeRemainingSeconds,
   });
 
   factory ParentModeDto.fromJson(Object? raw, String path) {
@@ -48,6 +52,11 @@ class ParentModeDto {
       remainingAttempts:
           readInt(json, 'remainingAttempts', '$path.remainingAttempts'),
       lockedUntil: readOptionalDate(json, 'lockedUntil', '$path.lockedUntil'),
+      kidMode: readBool(json, 'kidMode', '$path.kidMode'),
+      kidModeExpired: readBool(json, 'kidModeExpired', '$path.kidModeExpired'),
+      kidModeUntil: readOptionalDate(json, 'kidModeUntil', '$path.kidModeUntil'),
+      kidModeRemainingSeconds:
+          readInt(json, 'kidModeRemainingSeconds', '$path.kidModeRemainingSeconds'),
     );
     dto._validateShape(path);
     return dto;
@@ -65,6 +74,21 @@ class ParentModeDto {
   final bool pinConfigured;
   final int remainingAttempts;
   final DateTime? lockedUntil;
+
+  /// 孩子模式正在窗口内（W14）。
+  final bool kidMode;
+
+  /// 孩子模式已到点、等家长 PIN 收回（W14；A 方案，到期**不**回家长模式）。
+  final bool kidModeExpired;
+
+  /// 孩子模式的到期绝对时刻。
+  final DateTime? kidModeUntil;
+
+  /// 孩子模式剩余秒数（快照）。
+  final int kidModeRemainingSeconds;
+
+  /// 孩子模式最长 30 分钟 `= 1800` 秒（与 `kid-mode.policy.ts` 同源）。
+  static const int maxKidModeSeconds = 1800;
 
   /// 家长模式最长 5 分钟（`02` §7）—— 超过它说明**不是** PIN 换来的。
   static const int maxTtlSeconds = 300;
@@ -144,6 +168,58 @@ class ParentModeDto {
         '$path.remainingAttempts',
         detail: '未锁定时剩余次数必须在 1–5 之间：$remainingAttempts',
       );
+    }
+
+    // ── W14：孩子模式的四类自相矛盾 ─────────────────────────────────────────
+    // ① 不可能同时"进行中"和"已到期"：它们是同一个时间戳的两种状态；
+    // ② 孩子模式与家长模式互斥 —— 服务端就是按儿童优先级降级的，
+    //    两者同时为真说明服务端没把 kidModeUntil 算进 effectiveRole；
+    // ③ 有状态就必须有绝对时刻（否则本地倒计时无从算起）；
+    // ④ 剩余秒数必须与状态对得上：进行中 ⇒ 1..1800；已到期 / 未开 ⇒ 0。
+    if (kidMode && kidModeExpired) {
+      throw ReadApiException.malformed(
+        '$path.kidModeExpired',
+        detail: 'kidMode 与 kidModeExpired 同时为 true',
+      );
+    }
+    if ((kidMode || kidModeExpired) && parentMode) {
+      throw ReadApiException.malformed(
+        '$path.parentMode',
+        detail: '孩子模式与家长模式同时为 true（服务端未把 kidModeUntil 计入 effectiveRole）',
+      );
+    }
+    if (kidMode || kidModeExpired) {
+      if (kidModeUntil == null) {
+        throw ReadApiException.malformed(
+          '$path.kidModeUntil',
+          detail: '孩子模式有状态却没有到期时刻',
+        );
+      }
+      if (kidMode && (kidModeRemainingSeconds < 1 || kidModeRemainingSeconds > maxKidModeSeconds)) {
+        throw ReadApiException.malformed(
+          '$path.kidModeRemainingSeconds',
+          detail: '孩子模式剩余秒数越界（1–$maxKidModeSeconds）：$kidModeRemainingSeconds',
+        );
+      }
+      if (kidModeExpired && kidModeRemainingSeconds != 0) {
+        throw ReadApiException.malformed(
+          '$path.kidModeRemainingSeconds',
+          detail: '已到期的孩子模式剩余秒数必须为 0：$kidModeRemainingSeconds',
+        );
+      }
+    } else {
+      if (kidModeUntil != null) {
+        throw ReadApiException.malformed(
+          '$path.kidModeUntil',
+          detail: '没有孩子模式却给了到期时刻',
+        );
+      }
+      if (kidModeRemainingSeconds != 0) {
+        throw ReadApiException.malformed(
+          '$path.kidModeRemainingSeconds',
+          detail: '没有孩子模式时剩余秒数必须为 0：$kidModeRemainingSeconds',
+        );
+      }
     }
   }
 }

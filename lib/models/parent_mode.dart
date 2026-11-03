@@ -34,6 +34,10 @@ class ParentMode {
     required this.pinConfigured,
     required this.remainingAttempts,
     required this.lockedUntil,
+    required this.kidMode,
+    required this.kidModeExpired,
+    required this.kidModeUntil,
+    required this.kidModeRemainingSeconds,
   });
 
   /// 预览模式 / 还没拉到过任何服务端状态时的占位值。
@@ -50,6 +54,10 @@ class ParentMode {
     pinConfigured: false,
     remainingAttempts: 5,
     lockedUntil: null,
+    kidMode: false,
+    kidModeExpired: false,
+    kidModeUntil: null,
+    kidModeRemainingSeconds: 0,
   );
 
   /// `guardian` / `child` / `viewer` —— 服务端按会话行 + TTL 现算。
@@ -77,11 +85,56 @@ class ParentMode {
   /// 锁定到什么时候；未锁定为 null。
   final DateTime? lockedUntil;
 
+  /// 孩子模式**正在窗口内**（W14；服务端判定，`kidModeUntil > now`）。
+  ///
+  /// ★ 为 true 时 [activeRole] 必然是 `child`、[parentMode] 必然是 false。
+  final bool kidMode;
+
+  /// 孩子模式**已到点、但还没有被家长 PIN 收回**（W14）。
+  ///
+  /// ★ 这是 A 方案的核心状态：到期**不**自动回家长模式，设备停在 child，
+  ///   直到家长输入 PIN。界面据此显示「时间到了，请输入家长 PIN」。
+  final bool kidModeExpired;
+
+  /// 孩子模式的到期**绝对时刻**（与 [expiresAt] 同一套纪律：不存本地倒计时）。
+  final DateTime? kidModeUntil;
+
+  /// 拉取那一刻服务端算出的孩子模式剩余秒数（快照，只用于首帧）。
+  final int kidModeRemainingSeconds;
+
   /// 是"登录会话自带"的家长身份吗（决定文案：不显示 5 分钟倒计时）。
   bool get isSessionBacked => modeSource == ParentModeSource.session;
 
   /// 是"PIN 换来的 5 分钟"吗（只有这种才该显示倒计时）。
   bool get isPinBacked => modeSource == ParentModeSource.pin;
+
+  /// 孩子模式**此刻**是否还在窗口内（`kidModeUntil > now`）。
+  ///
+  /// ★ 用**绝对时刻**现算，而不是相信 `kidMode` 快照：面板可能开了几分钟，
+  ///   快照里的 `kidMode: true` 早就过期了。本地时钟不准时最坏结果是多显示
+  ///   一会儿倒计时；下一次 `refreshParentMode()` 会以服务端为准。
+  bool kidModeActiveAt(DateTime now) {
+    final DateTime? until = kidModeUntil;
+    if (!kidMode || until == null) return false;
+    return until.isAfter(now);
+  }
+
+  /// 孩子模式是否处于「时间到了、等家长输 PIN」的状态。
+  ///
+  /// ★ 两个来源取**或**：服务端已明确 `kidModeExpired`，或本地时钟已越过
+  ///   `kidModeUntil`（界面不能停在一个已经过期的倒计时上）。
+  bool kidModeExpiredAt(DateTime now) {
+    if (kidModeExpired) return true;
+    return kidMode && kidModeUntil != null && !kidModeActiveAt(now);
+  }
+
+  /// 孩子模式还剩几秒（向上取整；未开 / 已到期都 0）。
+  int kidModeSecondsAt(DateTime now) {
+    final DateTime? until = kidModeUntil;
+    if (until == null) return 0;
+    final int ms = until.difference(now).inMilliseconds;
+    return ms <= 0 ? 0 : (ms / 1000).ceil();
+  }
 
   /// 是否处于锁定中（锁定期间后端连 scrypt 都不跑，客户端不该再发请求）。
   bool isLockedAt(DateTime now) {
@@ -120,6 +173,11 @@ class ParentMode {
     int? remainingAttempts,
     DateTime? lockedUntil,
     bool clearLockedUntil = false,
+    bool? kidMode,
+    bool? kidModeExpired,
+    DateTime? kidModeUntil,
+    bool clearKidModeUntil = false,
+    int? kidModeRemainingSeconds,
   }) {
     return ParentMode(
       activeRole: activeRole ?? this.activeRole,
@@ -130,6 +188,12 @@ class ParentMode {
       pinConfigured: pinConfigured ?? this.pinConfigured,
       remainingAttempts: remainingAttempts ?? this.remainingAttempts,
       lockedUntil: clearLockedUntil ? null : (lockedUntil ?? this.lockedUntil),
+      kidMode: kidMode ?? this.kidMode,
+      kidModeExpired: kidModeExpired ?? this.kidModeExpired,
+      kidModeUntil:
+          clearKidModeUntil ? null : (kidModeUntil ?? this.kidModeUntil),
+      kidModeRemainingSeconds:
+          kidModeRemainingSeconds ?? this.kidModeRemainingSeconds,
     );
   }
 }

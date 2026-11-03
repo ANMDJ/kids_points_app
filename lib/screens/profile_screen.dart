@@ -291,7 +291,15 @@ class ProfileScreen extends StatelessWidget {
                       // 所以这一行在孩子设备上同样要显示：家长可以把手机接过去
                       // 自己输 PIN，不必让孩子"先登出再登录"。
                       color: AppColors.primaryDeep,
-                      label: store.isParentMode ? '家长模式 · 已开启' : '家长模式',
+                      // W14：孩子模式下这一行改成状态名 —— 否则「家长模式」四个字
+                      // 会让家长以为权限还在（实际已经被降级成 child）。
+                      label: store.isParentMode
+                          ? '家长模式 · 已开启'
+                          : store.isKidMode
+                              ? '孩子模式 · 进行中'
+                              : store.isKidModeExpired
+                                  ? '孩子模式 · 待家长收回'
+                                  : '家长模式',
                       onTap: () => showParentModeSheet(context),
                     ),
                     const Divider(

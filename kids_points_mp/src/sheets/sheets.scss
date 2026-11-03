@@ -1122,3 +1122,42 @@
   line-height: 1.5;
   color: $point-spend;
 }
+
+/* ── W14（2026-11-03）孩子模式：家长模式面板里的「把手机交给孩子用」区块 ── */
+.kp-kid-mode__section {
+  margin-top: f2r(16);
+  padding-top: f2r(12);
+  border-top: 1px solid $divider;
+}
+
+.kp-kid-mode__title {
+  display: block;
+  font-size: f2r(15);
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.kp-kid-mode__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: f2r(8);
+  margin: f2r(8) 0;
+}
+
+.kp-kid-mode__chip {
+  padding: f2r(7) f2r(13);
+  background-color: $chip-bg;
+  border: 1px solid transparent;
+  border-radius: f2r(999);
+}
+
+.kp-kid-mode__chip.is-active {
+  background-color: $primary-soft;
+  border-color: $primary-deep;
+}
+
+.kp-kid-mode__chip-text {
+  font-size: f2r(13);
+  color: $primary-text;
+}
+

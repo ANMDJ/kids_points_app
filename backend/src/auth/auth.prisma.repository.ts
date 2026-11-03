@@ -4,7 +4,9 @@ import type { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import type {
   AuthPort,
+  EnterKidModeInput,
   EnterParentModeInput,
+  ExitKidModeInput,
   ExitParentModeInput,
   ModeStateRow,
   ParentPinState,
@@ -166,6 +168,138 @@ export class PrismaAuthRepository implements AuthPort {
     })
   }
 
+  /**
+   * 开孩子模式（W14，2026-11-03 / `51-kid-mode-window.md`）。
+   *
+   * ── 三条前置（全部在**锁内**复核，service 已经判过一遍）──────────────────
+   *   ① 成员位是家长（PIN 属于成员）；
+   *   ② **已经设过 PIN** —— 否则到点后没有任何人能收回这台设备，
+   *      "30 分钟"会变成"永久孩子模式"；
+   *   ③ 这一列当前是 NULL —— 已经开着就 409，而不是静默把计时器推后
+   *      （那等于让一次误触把孩子的剩余时间延长）。
+   *
+   * ── 只写 `kidModeUntil`，不动 `activeRole` / `expiresAt` ──────────────────
+   *   降级由 `session.gate.ts#effectiveRole()` 派生。收回时把这一列清空，
+   *   设备就回到**原来那个**窗口（30 天会话或 5 分钟 PIN），不需要猜。
+   */
+  async enterKidMode(input: EnterKidModeInput): Promise<ModeStateRow> {
+    return await this.prisma.$transaction(async (tx) => {
+      const now = new Date()
+      const member = await this.lockMember(tx, input.childId, input.userId)
+      if (member === null) throw memberNotActive(input)
+
+      if (member.role !== 'guardian') {
+        throw new ConflictException({
+          code: 'KID_MODE_REQUIRES_GUARDIAN',
+          message: '只有家长才能开启孩子模式。'
+        })
+      }
+      if (member.pinHash === null) {
+        throw new ConflictException({
+          code: 'KID_MODE_REQUIRES_PIN',
+          message:
+            '这个账号还没有家长 PIN：孩子模式到点后必须用 PIN 收回，' +
+            '没有 PIN 就等于把手机永久锁在孩子模式里。请先设置家长 PIN。'
+        })
+      }
+
+      const existing = await tx.deviceSession.findUnique({
+        where: { deviceId_childId: { deviceId: input.deviceId, childId: input.childId } },
+        select: { kidModeUntil: true }
+      })
+      if (existing === null) throw memberNotActive(input)
+      if (existing.kidModeUntil !== null) {
+        throw new ConflictException({
+          code: 'KID_MODE_ALREADY_ACTIVE',
+          message:
+            '这台设备已经在孩子模式里（或已到期等待收回）。' +
+            '请输入家长 PIN 结束当前这一次，再重新设置时长。'
+        })
+      }
+
+      const session = await tx.deviceSession.update({
+        where: { deviceId_childId: { deviceId: input.deviceId, childId: input.childId } },
+        data: { kidModeUntil: input.kidModeUntil, lastSeenAt: now },
+        select: SESSION_SELECT
+      })
+
+      await tx.auditLog.create({
+        data: {
+          childId: input.childId,
+          actorUserId: input.operator.userId,
+          actorRole: input.operator.role,
+          // 复用 `switch_role_mode`：这**就是**一次角色切换（guardian ⇒ child），
+          // 只是方向朝降级、且带一个到期时刻。新增一个 ActionType 要改
+          // Prisma enum + 迁移 + honesty-probe 对账表，收益只是换个名字。
+          // 区分靠 `after.kidModeUntil` / `after.via`（见下）。
+          action: 'switch_role_mode',
+          targetType: 'DeviceSession',
+          targetId: `${input.deviceId}:${input.childId}`,
+          deviceId: input.deviceId,
+          before: { kidModeUntil: null, activeRole: session.activeRole },
+          after: {
+            kidModeUntil: input.kidModeUntil.toISOString(),
+            durationMinutes: input.durationMinutes,
+            roleWhileOn: 'child',
+            via: 'guardian_handoff'
+          }
+        }
+      })
+
+      return toModeState(member, session)
+    })
+  }
+
+  /**
+   * 用家长 PIN 收回孩子模式（W14）。
+   *
+   * ★ 幂等：已经是 NULL 时再收一次也是 200（降级永远允许、重复降级无害）。
+   *   PIN 仍然由 service 验 —— 端口签名里没有明文（与 `setParentPin` 同一条纪律）。
+   */
+  async exitKidMode(input: ExitKidModeInput): Promise<ModeStateRow> {
+    return await this.prisma.$transaction(async (tx) => {
+      const now = new Date()
+      const member = await this.lockMember(tx, input.childId, input.userId)
+      if (member === null) throw memberNotActive(input)
+
+      const existing = await tx.deviceSession.findUnique({
+        where: { deviceId_childId: { deviceId: input.deviceId, childId: input.childId } },
+        select: { kidModeUntil: true }
+      })
+      if (existing === null) throw memberNotActive(input)
+
+      const session = await tx.deviceSession.update({
+        where: { deviceId_childId: { deviceId: input.deviceId, childId: input.childId } },
+        data: { kidModeUntil: null, lastSeenAt: now },
+        select: SESSION_SELECT
+      })
+
+      await tx.auditLog.create({
+        data: {
+          childId: input.childId,
+          actorUserId: input.operator.userId,
+          actorRole: input.operator.role,
+          action: 'switch_role_mode',
+          targetType: 'DeviceSession',
+          targetId: `${input.deviceId}:${input.childId}`,
+          deviceId: input.deviceId,
+          before: {
+            kidModeUntil:
+              existing.kidModeUntil === null ? null : existing.kidModeUntil.toISOString()
+          },
+          after: {
+            kidModeUntil: null,
+            // 原来是什么角色就回到什么角色（不可能提权：这里的 guardian 来自会话）。
+            activeRole: session.activeRole,
+            via: 'pin_release'
+          }
+        }
+      })
+
+      return toModeState(member, session)
+    })
+  }
+
   async recordPinFailure(input: RecordPinFailureInput): Promise<ModeStateRow> {
     return await this.prisma.$transaction(async (tx) => {
       const member = await this.lockMember(tx, input.childId, input.userId)
@@ -304,6 +438,8 @@ interface SessionRow {
   userId: string
   activeRole: string
   expiresAt: Date
+  /** W14：孩子模式的到期绝对时刻（NULL = 没开）。 */
+  kidModeUntil: Date | null
 }
 
 const MEMBER_SELECT = {
@@ -320,7 +456,9 @@ const SESSION_SELECT = {
   childId: true,
   userId: true,
   activeRole: true,
-  expiresAt: true
+  expiresAt: true,
+  // W14：`ParentModeView` 的 kidMode / kidModeExpired 全靠这一列现算。
+  kidModeUntil: true
 } as const
 
 function toModeState(member: MemberRow, session: SessionRow): ModeStateRow {
@@ -335,7 +473,8 @@ function toModeState(member: MemberRow, session: SessionRow): ModeStateRow {
       childId: session.childId,
       userId: session.userId,
       activeRole: session.activeRole,
-      expiresAt: session.expiresAt
+      expiresAt: session.expiresAt,
+      kidModeUntil: session.kidModeUntil
     }
   }
 }

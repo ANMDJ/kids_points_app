@@ -7,9 +7,11 @@ import '../theme/app_colors.dart';
 import '../widgets/animated_point_text.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/habit_tile.dart';
+import '../widgets/kid_mode_banner.dart';
 import '../widgets/page_header.dart';
 import '../widgets/points_jar.dart';
 import '../widgets/soft_button.dart';
+import 'sheets/parent_mode_sheet.dart';
 import 'sheets/quick_note_sheet.dart';
 
 /// 首页：当前可用积分 + 积分罐 + 今天的习惯 + 记一笔。
@@ -26,6 +28,13 @@ class HomeScreen extends StatelessWidget {
     final int doneCount =
         habits.where((HabitView habit) => habit.checked).length;
 
+    // W14：孩子模式期间首页顶部常驻一条状态条。
+    // ★ 这里**不**渲染倒计时：首页没有秒级刷新，写死的数字在切后台后会变成
+    //   谎言。精确剩余时间在「家长模式」面板里（那里每秒重绘）。
+    final DateTime now = DateTime.now();
+    final bool kidModeExpired = store.isKidModeExpiredAt(now);
+    final bool kidModeOn = kidModeExpired || store.isKidModeActiveAt(now);
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
@@ -37,6 +46,13 @@ class HomeScreen extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
             children: <Widget>[
+              if (kidModeOn) ...<Widget>[
+                KidModeBanner(
+                  expired: kidModeExpired,
+                  onTap: () => showParentModeSheet(context),
+                ),
+                const SizedBox(height: 14),
+              ],
               const Text(
                 '当前可用积分',
                 textAlign: TextAlign.center,

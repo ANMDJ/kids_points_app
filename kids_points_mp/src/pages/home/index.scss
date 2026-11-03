@@ -51,3 +51,27 @@
   font-size: f2r(11);
   color: $text-hint;
 }
+
+/* ── W14（2026-11-03）孩子模式状态条（首页顶部常驻） ── */
+.kp-home__kid-mode {
+  margin-bottom: f2r(10);
+  padding: f2r(11) f2r(14);
+  background-color: $primary-soft;
+  border-radius: f2r(14);
+}
+
+.kp-home__kid-mode.is-expired {
+  background-color: $cream;
+}
+
+.kp-home__kid-mode-text {
+  font-size: f2r(12.5);
+  line-height: 1.4;
+  font-weight: 600;
+  color: $primary-text;
+}
+
+.kp-home__kid-mode.is-expired .kp-home__kid-mode-text {
+  color: $point-spend;
+}
+

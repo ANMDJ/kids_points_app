@@ -7,7 +7,13 @@ import Icon from '../components/Icon'
 import SheetFrame from '../components/SheetFrame'
 import SoftButton from '../components/SoftButton'
 import { useStore } from '../data/store'
-import { humanizeSeconds, mmss } from '../data/parent_mode'
+import {
+  humanizeSeconds,
+  KID_MODE_DEFAULT_MINUTES,
+  KID_MODE_DURATION_CHOICES,
+  kidModeRemainingSeconds,
+  mmss
+} from '../data/parent_mode'
 import { toast } from '../utils/toast'
 import './sheets.scss'
 
@@ -36,6 +42,10 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
   const [pin, setPin] = useState('')
   const [currentPin, setCurrentPin] = useState('')
   const [newPin, setNewPin] = useState('')
+  /** W14：结束孩子模式要用的 PIN（与 `pin` 分开，失败文案不同）。 */
+  const [kidPin, setKidPin] = useState('')
+  /** W14：家长选的「给孩子用多少分钟」。 */
+  const [kidMinutes, setKidMinutes] = useState(KID_MODE_DEFAULT_MINUTES)
   /** 「设置 / 修改 PIN」折叠区：默认收起（90% 的用法是「进去 5 分钟」）。 */
   const [editorOpen, setEditorOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -50,6 +60,8 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
     setPin('')
     setCurrentPin('')
     setNewPin('')
+    setKidPin('')
+    setKidMinutes(KID_MODE_DEFAULT_MINUTES)
     void store.refreshParentMode()
   }, [visible, store])
 
@@ -75,6 +87,11 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
   /** `null` = 还没拉到（**不是**「不在家长模式」）。 */
   const known = store.parentMode !== null
 
+  // W14：孩子模式三态（优先级高于家长模式；服务端已把角色压到 child）。
+  const kidActive = store.isKidModeActiveAt(now)
+  const kidExpired = store.isKidModeExpiredAt(now)
+  const kidModeOn = kidActive || kidExpired
+
   const handleEnter = async () => {
     if (busy || locked) return
     const failure = await store.enterParentMode(pin)
@@ -90,6 +107,27 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
     const failure = await store.exitParentMode()
     setError(failure)
     if (failure === null) toast('已退出家长模式')
+  }
+
+  /** 开孩子模式（W14）：时长由面板上的 chip 决定。 */
+  const handleEnterKidMode = async () => {
+    if (busy) return
+    const failure = await store.enterKidMode(kidMinutes)
+    setError(failure)
+    if (failure === null) {
+      toast(`孩子模式已开启：${kidMinutes} 分钟后需要家长 PIN 收回`)
+    }
+  }
+
+  /** 用家长 PIN 结束孩子模式（W14）—— 到期后也是这一条。 */
+  const handleExitKidMode = async () => {
+    if (busy) return
+    const failure = await store.exitKidMode(kidPin)
+    setError(failure)
+    if (failure === null) {
+      setKidPin('')
+      toast('孩子模式已结束，手机回到家长权限')
+    }
   }
 
   const handleSavePin = async () => {
@@ -184,6 +222,98 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
       </View>
     )
   }
+
+  /**
+   * 孩子模式进行中 / 已到期（W14）：倒计时 + 用家长 PIN 收回。
+   *
+   * ★ 到期态**不是**「自动结束」：手机停在孩子权限，等家长来收。
+   *   不把这句话写出来，家长会以为"到点就恢复了"——那是更糟的错觉。
+   */
+  const kidModeRows = () => {
+    const seconds = kidModeRemainingSeconds(store.parentMode, now)
+    return (
+      <View>
+        <AppCard radius={16} padding={[16, 14]}>
+          <View className='kp-parent-mode__timer-row'>
+            <Icon
+              name='check'
+              size={18}
+              color={kidExpired ? '#e9834b' : '#4d7c3a'}
+            />
+            <Text className='kp-parent-mode__timer-text'>
+              {kidExpired
+                ? '时间到了 —— 等家长 PIN 收回'
+                : `还能用 ${mmss(seconds)}`}
+            </Text>
+          </View>
+        </AppCard>
+        <View className='kp-sheet-gap-xs' />
+        {hint(
+          kidExpired
+            ? '时间到了以后手机不会自动回到家长模式 —— 这是故意的：' +
+                '否则孩子等一等就能自己批心愿。请输入家长 PIN 收回。'
+            : '这段时间里手机是孩子权限：可以打卡、提交心愿（需要家长审批）。' +
+                '到点后不会自动回家长模式，需要用下面的 PIN 收回。',
+          kidExpired
+        )}
+        <View className='kp-sheet-gap-sm' />
+        <FieldLabel text='家长 PIN' />
+        <SoftTextField
+          value={kidPin}
+          onChange={(value) => setKidPin(value.replace(/\D/g, '').slice(0, 6))}
+          hint='4–6 位数字'
+          digit
+          password
+          maxLength={6}
+        />
+        <View className='kp-sheet-gap-sm' />
+        <SoftButton
+          label='结束孩子模式'
+          icon='check'
+          height={46}
+          enabled={!busy}
+          onClick={handleExitKidMode}
+        />
+      </View>
+    )
+  }
+
+  /**
+   * 家长模式下：把手机交给孩子用 N 分钟（W14）。
+   *
+   * ★ 默认 15 而不是 30：默认即上限会鼓励"反正也是 30 分钟"。
+   * ★ "写在纸上"的提示常驻：这是产品的核心意图，不是帮助文案。
+   */
+  const kidLauncherRows = () => (
+    <View className='kp-kid-mode__section'>
+      <Text className='kp-kid-mode__title'>把手机交给孩子用</Text>
+      <View className='kp-sheet-gap-xs' />
+      {hint('建议先让孩子把想做的写在纸上、想清楚，再来手机上填 —— 减少盯着屏幕的时间。')}
+      <View className='kp-kid-mode__chips'>
+        {KID_MODE_DURATION_CHOICES.map((minutes) => (
+          <View
+            key={minutes}
+            className={`kp-kid-mode__chip ${kidMinutes === minutes ? 'is-active' : ''}`}
+            onClick={() => {
+              if (busy) return
+              setKidMinutes(minutes)
+            }}
+          >
+            <Text className='kp-kid-mode__chip-text'>{minutes} 分钟</Text>
+          </View>
+        ))}
+      </View>
+      {hint('到点后需要你输入家长 PIN 收回；不会自动回到家长模式。')}
+      <View className='kp-sheet-gap-sm' />
+      <SoftButton
+        label={`给孩子用 ${kidMinutes} 分钟`}
+        icon='check'
+        height={46}
+        enabled={!busy}
+        onClick={handleEnterKidMode}
+      />
+    </View>
+  )
 
   /** 不在家长模式时：PIN 输入框。 */
   const childRows = () => (
@@ -291,7 +421,16 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
         {busy ? hint('正在提交，请稍候…') : null}
         {statusRows()}
         <View className='kp-sheet-gap-sm' />
-        {parentMode ? parentRows() : childRows()}
+        {kidModeOn ? (
+          kidModeRows()
+        ) : parentMode ? (
+          <View>
+            {parentRows()}
+            {kidLauncherRows()}
+          </View>
+        ) : (
+          childRows()
+        )}
         {pinEditorRows()}
         {error !== null ? (
           <View>
@@ -305,31 +444,41 @@ export default function ParentModeSheet({ visible, onClose }: ParentModeSheetPro
 
   // 锁定 / 在途时不给动作：连点两次会消耗两次 PIN 校验，锁定期间发请求也只是
   // 换回同一个 429（服务端明确不校验、也不延长）。
-  const actionLabel = parentMode
-    ? '退出家长模式'
-    : locked
-      ? '已锁定，请稍后再试'
-      : '进入家长模式'
+  const actionLabel = kidModeOn
+    ? '结束孩子模式'
+    : parentMode
+      ? '退出家长模式'
+      : locked
+        ? '已锁定，请稍后再试'
+        : '进入家长模式'
 
   return (
     <SheetFrame
       visible={visible}
       title='家长模式'
       subtitle={
-        !parentMode
-          ? '输入家长 PIN 可以在这台设备上临时获得 5 分钟家长权限'
-          : sessionBacked
-            ? '这台设备已以家长身份登录，登录期间一直是家长权限'
-            : `这台设备现在是家长权限（${mmss(store.parentModeRemainingSeconds(now))} 后自动收回）`
+        kidActive
+          ? `孩子模式已开启：还剩 ${mmss(kidModeRemainingSeconds(store.parentMode, now))}（到点不会自动回家长模式，要用 PIN 收回）`
+          : kidExpired
+            ? '孩子模式的时间到了 —— 请输入家长 PIN 收回，手机才会回到家长权限'
+            : !parentMode
+              ? '输入家长 PIN 可以在这台设备上临时获得 5 分钟家长权限'
+              : sessionBacked
+                ? '这台设备已以家长身份登录，登录期间一直是家长权限'
+                : `这台设备现在是家长权限（${mmss(store.parentModeRemainingSeconds(now))} 后自动收回）`
       }
       onClose={onClose}
       actionLabel={actionLabel}
-      actionIcon={parentMode ? 'chevronLeft' : 'check'}
+      actionIcon={kidModeOn || parentMode ? 'chevronLeft' : 'check'}
       onAction={
-        busy || (!parentMode && locked)
+        busy || (!parentMode && !kidModeOn && locked)
           ? undefined
           : () => {
-              void (parentMode ? handleExit() : handleEnter())
+              void (kidModeOn
+                ? handleExitKidMode()
+                : parentMode
+                  ? handleExit()
+                  : handleEnter())
             }
       }
     >

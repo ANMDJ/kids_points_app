@@ -57,12 +57,27 @@ export interface SessionLookupRow {
   activeRole: string
   /** `DeviceSession.expiresAt`：Prisma 给 `Date`，JSON 线上传输可能是 ISO 字符串。 */
   expiresAt: Date | string
+  /**
+   * `DeviceSession.kidModeUntil`（W14，2026-11-03）—— 孩子模式的到期绝对时刻。
+   *
+   * ★ 可选：它是在 W14 才加的列，而本接口被**大量**既有用例 / 替身构造。
+   *   缺省（`undefined`）与 `null` 同义 = 「没开孩子模式」；这不是"猜默认值"，
+   *   而是"这一列在旧行上不存在"的诚实表达（迁移给存量行的正是 NULL）。
+   * ★ **有值就降级**：不论还在窗口内（`active`）还是已经到点（`locked`），
+   *   角色都必须留在 `child` —— 到点自动回家长模式是明令禁止的安全洞
+   *   （`kid-mode.policy.ts` 的口径 ②）。
+   */
+  kidModeUntil?: Date | string | null
 }
 
 /** 会话行**形状**问题（**不是**权限判定）的专用错误 —— 守卫把它翻成 500。 */
 export class SessionRowShapeError extends Error {
   constructor(
-    readonly code: 'INVALID_SESSION_ROLE' | 'INVALID_SESSION_EXPIRY' | 'SESSION_CHILD_MISMATCH',
+    readonly code:
+      | 'INVALID_SESSION_ROLE'
+      | 'INVALID_SESSION_EXPIRY'
+      | 'INVALID_KID_MODE_EXPIRY'
+      | 'SESSION_CHILD_MISMATCH',
     message: string
   ) {
     super(message)
@@ -90,6 +105,26 @@ function toEpoch(expiresAt: Date | string): number {
 }
 
 const KNOWN_SESSION_ROLES: readonly string[] = ['guardian', 'child', 'viewer']
+
+/**
+ * 解析 `kidModeUntil`；缺省 / `null` ⇒ `null`（没开孩子模式），解析不出 ⇒ 形状错误。
+ *
+ * ★ 为什么**不能**把解析失败当成 `null`：那会让一个坏时间戳静默变成
+ *   "这台设备没开孩子模式" ⇒ 孩子白拿家长权限。与 `toEpoch()` 同一条理由：
+ *   静默的失败最难查，而且方向正好朝危险的一侧。
+ */
+function kidModeEpochOf(kidModeUntil: Date | string | null | undefined): number | null {
+  if (kidModeUntil === null || kidModeUntil === undefined) return null
+  const ms = kidModeUntil instanceof Date ? kidModeUntil.getTime() : Date.parse(kidModeUntil)
+  if (!Number.isFinite(ms)) {
+    throw new SessionRowShapeError(
+      'INVALID_KID_MODE_EXPIRY',
+      `会话的 kidModeUntil 无法解析：${JSON.stringify(kidModeUntil)}（孩子模式的降级判定依赖它，` +
+        '解析不出时**绝不能**当成"没开孩子模式"继续 —— 那等于把家长权限还给正在用手机的孩子）。'
+    )
+  }
+  return ms
+}
 
 function isKnownSessionRole(value: string): value is Role | 'viewer' {
   return KNOWN_SESSION_ROLES.includes(value)
@@ -122,6 +157,20 @@ export function effectiveRole(row: SessionLookupRow, now: Date): Role | 'viewer'
         `（MemberRole 只有 guardian / child / viewer）。deviceId=${row.deviceId} userId=${row.userId}` +
         ' —— 这是**数据/实现**的问题，不是权限问题，故 500 而不是 401/403。'
     )
+  }
+
+  // ★ W14（2026-11-03）：孩子模式 **优先于** activeRole / expiresAt。
+  //
+  //   `kidModeUntil` 有值就降级为 child，**不区分**还在窗口内还是已经到点：
+  //     · 窗口内        —— 家长主动交出了手机；
+  //     · 已经到点      —— 仍然降级，直到家长输入 PIN 收回（`locked`）。
+  //   后者是 A 方案的**全部意义**：如果到点就 `expiresAt` 生效、guardian 自动回来，
+  //   孩子只要等 30 分钟就自己拿回了家长权限，能批自己的心愿 —— 比不做管控更糟。
+  //
+  //   ★ 只降级 `guardian`：`viewer` 比 `child` **更小**，把它改成 child 是提权
+  //     （只读成员会突然能打卡）。这正是"降级方向只有一个"的具体体现。
+  if (row.activeRole === 'guardian' && kidModeEpochOf(row.kidModeUntil) !== null) {
+    return 'child'
   }
 
   if (row.activeRole === 'guardian' && !isSessionActive(row, now)) {
@@ -162,6 +211,8 @@ export function resolveSession(
   // 而不是等业务层拿到一个可疑的 actor（见文件头「形状与判定是两件事」）。
   effectiveRole(row, now)
   toEpoch(row.expiresAt)
+  // W14：`kidModeUntil` 与 `expiresAt` 同样是"判定依赖的时间戳"，坏值必须 500。
+  kidModeEpochOf(row.kidModeUntil)
 
   return { kind: 'ALLOW', row }
 }

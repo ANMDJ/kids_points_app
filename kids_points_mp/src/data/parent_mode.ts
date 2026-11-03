@@ -59,6 +59,27 @@ export const PARENT_MODE_MAX_TTL_SECONDS = 300
 export const PARENT_MODE_MAX_SESSION_TTL_SECONDS = 366 * 24 * 60 * 60
 
 /**
+ * 孩子模式（W14，2026-11-03 / `docs/design/51-kid-mode-window.md`）。
+ *
+ * ★ 三端副本必须逐字一致（后端 `kid-mode.policy.ts` / Flutter `kid_mode.dart` /
+ *   本文件）；`tools/kid-mode-check.mjs` 守着，别只改一边。
+ */
+export const KID_MODE_MIN_MINUTES = 1
+export const KID_MODE_MAX_MINUTES = 30
+export const KID_MODE_DEFAULT_MINUTES = 15
+
+/** 面板上的快捷时长（5 的倍数 + 上限）。 */
+export const KID_MODE_DURATION_CHOICES: readonly number[] = [5, 10, 15, 20, 25, 30]
+
+/** 整数 1–30 才合法；`null` = 合法（与 Flutter `validateKidModeMinutes` 同口径）。 */
+export function validateKidModeMinutes(minutes: number): string | null {
+  if (!Number.isInteger(minutes) || minutes < KID_MODE_MIN_MINUTES || minutes > KID_MODE_MAX_MINUTES) {
+    return `给孩子用的时长要在 ${KID_MODE_MIN_MINUTES}–${KID_MODE_MAX_MINUTES} 分钟之间。`
+  }
+  return null
+}
+
+/**
  * 家长权限（`activeRole === 'guardian'`）的**来源**。
  *
  * 服务端只有一行 `DeviceSession.activeRole`，但「为什么是 guardian」有两种，
@@ -92,6 +113,14 @@ export interface ParentMode {
   readonly remainingAttempts: number
   /** 锁定到什么时候（epoch ms）；未锁定为 null。 */
   readonly lockedUntil: number | null
+  /** 孩子模式正在窗口内（W14）。 */
+  readonly kidMode: boolean
+  /** 孩子模式已到点、等家长 PIN 收回（W14；A 方案，到期**不**回家长模式）。 */
+  readonly kidModeExpired: boolean
+  /** 孩子模式的到期绝对时刻（epoch ms）。 */
+  readonly kidModeUntil: number | null
+  /** 孩子模式剩余秒数（快照，只用于首帧）。 */
+  readonly kidModeRemainingSeconds: number
 }
 
 /**
@@ -109,7 +138,11 @@ export const PARENT_MODE_UNKNOWN: ParentMode = {
   remainingSeconds: 0,
   pinConfigured: false,
   remainingAttempts: PARENT_PIN_MAX_ATTEMPTS,
-  lockedUntil: null
+  lockedUntil: null,
+  kidMode: false,
+  kidModeExpired: false,
+  kidModeUntil: null,
+  kidModeRemainingSeconds: 0
 }
 
 /** `POST /auth/parent-pin` 的结果（设 / 改家长 PIN）。 */
@@ -182,6 +215,23 @@ export function parseParentMode(raw: unknown, path = '$'): ParentMode {
     json,
     'lockedUntil',
     `${path}.lockedUntil`
+  )
+  // W14：孩子模式（与 Flutter `ParentModeDto` 同一套四类矛盾校验）。
+  const kidMode = readBool(json, 'kidMode', `${path}.kidMode`)
+  const kidModeExpired = readBool(
+    json,
+    'kidModeExpired',
+    `${path}.kidModeExpired`
+  )
+  const kidModeUntil = readOptionalDate(
+    json,
+    'kidModeUntil',
+    `${path}.kidModeUntil`
+  )
+  const kidModeRemainingSeconds = readInt(
+    json,
+    'kidModeRemainingSeconds',
+    `${path}.kidModeRemainingSeconds`
   )
 
   if (parentMode !== (activeRole === 'guardian')) {
@@ -258,6 +308,62 @@ export function parseParentMode(raw: unknown, path = '$'): ParentMode {
     )
   }
 
+  // ── W14：孩子模式的四类自相矛盾（与 Flutter DTO 逐条对齐）───────────────
+  // ① 同一个时间戳不可能同时"进行中"和"已到期"；
+  // ② 孩子模式与家长模式互斥（服务端按 kidModeUntil 降级，两者同真说明没算）；
+  // ③ 有状态就必须有绝对时刻；
+  // ④ 剩余秒数必须与状态对得上：进行中 ⇒ 1..1800；已到期 / 未开 ⇒ 0。
+  const maxKidModeSeconds = KID_MODE_MAX_MINUTES * 60
+  if (kidMode && kidModeExpired) {
+    throw ReadApiException.malformed(
+      `${path}.kidModeExpired`,
+      'kidMode 与 kidModeExpired 同时为 true'
+    )
+  }
+  if ((kidMode || kidModeExpired) && parentMode) {
+    throw ReadApiException.malformed(
+      `${path}.parentMode`,
+      '孩子模式与家长模式同时为 true（服务端未把 kidModeUntil 计入 effectiveRole）'
+    )
+  }
+  if (kidMode || kidModeExpired) {
+    if (kidModeUntil === null) {
+      throw ReadApiException.malformed(
+        `${path}.kidModeUntil`,
+        '孩子模式有状态却没有到期时刻'
+      )
+    }
+    if (
+      kidMode &&
+      (kidModeRemainingSeconds < 1 ||
+        kidModeRemainingSeconds > maxKidModeSeconds)
+    ) {
+      throw ReadApiException.malformed(
+        `${path}.kidModeRemainingSeconds`,
+        `孩子模式剩余秒数越界（1–${maxKidModeSeconds}）：${kidModeRemainingSeconds}`
+      )
+    }
+    if (kidModeExpired && kidModeRemainingSeconds !== 0) {
+      throw ReadApiException.malformed(
+        `${path}.kidModeRemainingSeconds`,
+        `已到期的孩子模式剩余秒数必须为 0：${kidModeRemainingSeconds}`
+      )
+    }
+  } else {
+    if (kidModeUntil !== null) {
+      throw ReadApiException.malformed(
+        `${path}.kidModeUntil`,
+        '没有孩子模式却给了到期时刻'
+      )
+    }
+    if (kidModeRemainingSeconds !== 0) {
+      throw ReadApiException.malformed(
+        `${path}.kidModeRemainingSeconds`,
+        `没有孩子模式时剩余秒数必须为 0：${kidModeRemainingSeconds}`
+      )
+    }
+  }
+
   return {
     activeRole: activeRole as ParentRole,
     parentMode,
@@ -266,7 +372,11 @@ export function parseParentMode(raw: unknown, path = '$'): ParentMode {
     remainingSeconds,
     pinConfigured,
     remainingAttempts,
-    lockedUntil
+    lockedUntil,
+    kidMode,
+    kidModeExpired,
+    kidModeUntil,
+    kidModeRemainingSeconds
   }
 }
 
@@ -325,6 +435,31 @@ export function parentModeRemainingSeconds(
 ): number {
   if (mode === null || !mode.parentMode || mode.expiresAt === null) return 0
   const ms = mode.expiresAt - now
+  return ms <= 0 ? 0 : Math.ceil(ms / 1000)
+}
+
+/** 孩子模式**此刻**是否还在窗口内（W14；按绝对时刻现算，不信快照里的布尔）。 */
+export function isKidModeActiveAt(mode: ParentMode | null, now: number): boolean {
+  if (mode === null || !mode.kidMode || mode.kidModeUntil === null) return false
+  return mode.kidModeUntil > now
+}
+
+/**
+ * 孩子模式是否处于「时间到了、等家长输 PIN」。
+ *
+ * ★ 服务端已明确 `kidModeExpired`，或本地时钟已越过 `kidModeUntil` —— 两者取或。
+ *   界面不能停在一个已经过期的倒计时上。
+ */
+export function isKidModeExpiredAt(mode: ParentMode | null, now: number): boolean {
+  if (mode === null) return false
+  if (mode.kidModeExpired) return true
+  return mode.kidMode && mode.kidModeUntil !== null && !isKidModeActiveAt(mode, now)
+}
+
+/** 孩子模式还剩几秒（向上取整；未开 / 已到期都 0）。 */
+export function kidModeRemainingSeconds(mode: ParentMode | null, now: number): number {
+  if (mode === null || mode.kidModeUntil === null) return 0
+  const ms = mode.kidModeUntil - now
   return ms <= 0 ? 0 : Math.ceil(ms / 1000)
 }
 
@@ -397,6 +532,21 @@ export interface ParentModeApi {
   exit(): Promise<ParentMode>
   /** `POST /auth/parent-pin`：首次设置 / 修改家长 PIN。 */
   setPin(input: { pin: string; currentPin?: string }): Promise<ParentPinResult>
+  /**
+   * `POST /auth/kid-mode`：把手机交给孩子用 `durationMinutes` 分钟（W14，1–30）。
+   *
+   * 失败语义（服务端逐字对应）：
+   *   · `403 KID_MODE_REQUIRES_PARENT_MODE` ⇒ 当前不在家长模式，先输 PIN；
+   *   · `409 KID_MODE_REQUIRES_PIN`        ⇒ 还没设 PIN（到点收不回来）；
+   *   · `409 KID_MODE_ALREADY_ACTIVE`      ⇒ 已经开着，先结束这一次。
+   */
+  enterKidMode(durationMinutes: number): Promise<ParentMode>
+  /**
+   * `DELETE /auth/kid-mode`：用家长 PIN 收回孩子模式（W14）。
+   *
+   * **到期后也走这一条**：A 方案下到点不会自动回家长模式，必须验 PIN。
+   */
+  exitKidMode(pin: string): Promise<ParentMode>
   close?(): void
 }
 
@@ -466,6 +616,28 @@ export class ParentModeApiClient implements ParentModeApi {
 
   async exit(): Promise<ParentMode> {
     const decoded = await this.send('DELETE', '/auth/parent-mode', null)
+    return parseParentMode(decoded)
+  }
+
+  async enterKidMode(durationMinutes: number): Promise<ParentMode> {
+    // 本地只挡"注定 400"的输入；服务端仍会 clampKidModeMinutes() 再夹一次。
+    const invalid = validateKidModeMinutes(durationMinutes)
+    if (invalid !== null) {
+      throw new WriteApiException('badRequest', invalid, {
+        code: 'KID_MODE_DURATION_INVALID'
+      })
+    }
+    const decoded = await this.send('POST', '/auth/kid-mode', {
+      durationMinutes
+    })
+    return parseParentMode(decoded)
+  }
+
+  async exitKidMode(pin: string): Promise<ParentMode> {
+    const normalized = this.requirePin(pin)
+    const decoded = await this.send('DELETE', '/auth/kid-mode', {
+      pin: normalized
+    })
     return parseParentMode(decoded)
   }
 

@@ -47,7 +47,7 @@
 | **P1-4** | 习惯独立 CRUD（`POST/PATCH /habits`） | **未做** | 未复核（§4 P1-4） |
 | **P1-5** | 孩子头像（预设 / 上传二选一） | **未做** | 未复核（§4 P1-5） |
 | **P1-6** | 加分配额 / 金额阈值限制生效 | **未做** | 本轮复核：`backend/src/permissions/permissions.guard.ts:114` 仍写着「不传 `amount`」，`amount` 在 Guard 里无其他命中 |
-| **P1-7** | 忘记家长 PIN 的重置通道 | **未做** | 未复核（§4 P1-7） |
+| **P1-7** | 忘记家长 PIN 的重置通道 | **未做** —— ★ 自 W14 起从 P1 变成**硬前置**：孩子模式到期后 PIN 是唯一出口，忘记 PIN = 这台设备停在 child 收不回来（缓解：没设 PIN 不许开孩子模式） | 本轮复核：`backend/src/auth/auth.service.ts` 的 `setParentPin` 注释仍写「没有找回通道」；全仓无 reset 端点 |
 | **P1-9** | App token 持久化（现在 `Directory.systemTemp`，清缓存即掉登录） | **未做**（有意等 P1-1 一起改） | 未复核（§4 P1-9） |
 | **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | **未做** | 未复核（§4 P1-10） |
 | **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **未做**（整张表都在） | 未复核（§5 ＋ `deploy/README.md` §8 P2） |
@@ -83,7 +83,14 @@ P1-8 邀请制注册（W11-A，`45`）· 网站发码 ＋ `/invite` 页面（W12
 `POST /approvals`（action=`add_wish`），返回 `pendingApproval` 而不是只说「需要家长确认」；
 App `lib/data/write_api.dart` ＋ 小程序 `src/data/write_api.ts` 双端同构；证据 =
 `test/write_api_test.dart` 新增 4 条（含「成员级 DENY 不得改走审批」）＋
-`kids_points_mp/.tmp_test/run-w5c.mjs` 同步改 3 条）。
+`kids_points_mp/.tmp_test/run-w5c.mjs` 同步改 3 条）·
+**W14 孩子模式限时窗口**（2026-11-03：`DeviceSession.kidModeUntil` ＋ `POST/DELETE /auth/kid-mode`；
+到期**不**自动回家长模式（A 方案），收回要家长 PIN；双端面板 ＋ App 首页状态条；
+证据 = 后端 `npm test` **1195 全通过**、`test-db/kid-mode-db.dbtest.ts`、`flutter test`（见 `51` §7）、
+小程序 `npm test`、`tools/kid-mode-check.mjs`；详见 [`51`](./51-kid-mode-window.md)）·
+**小程序 `npm test` 终于存在**（2026-11-03：`kids_points_mp/package.json` 新增 `typecheck` / `test` /
+`test:kid-mode`，`test` = `tsc -p .tmp_test/tsconfig.test.json && node .tmp_test/run-all.mjs`，
+把 20 个 `run-*.mjs` 全部串起来；W10 之后的行为测试不再"写了没人跑"）。
 
 ### 0.1 「发布」到底卡在哪（2026-11-03 实测，别再靠印象）
 

@@ -21,7 +21,9 @@ import { ConflictException } from '@nestjs/common'
 
 import type {
   AuthPort,
+  EnterKidModeInput,
   EnterParentModeInput,
+  ExitKidModeInput,
   ExitParentModeInput,
   ModeStateRow,
   ParentPinState,
@@ -43,6 +45,8 @@ export interface AuthFakeMember {
   pinFailedCount: number
   activeRole: string
   expiresAt: Date
+  /** W14：孩子模式的到期绝对时刻（null = 没开）。 */
+  kidModeUntil: Date | null
 }
 
 export interface AuthCall {
@@ -52,6 +56,8 @@ export interface AuthCall {
     | 'exitParentMode'
     | 'recordPinFailure'
     | 'setParentPin'
+    | 'enterKidMode'
+    | 'exitKidMode'
   input?: unknown
 }
 
@@ -76,7 +82,8 @@ export function makeAuthFake(members: Record<string, Partial<AuthFakeMember>> = 
       pinLockedUntil: patch.pinLockedUntil ?? null,
       pinFailedCount: patch.pinFailedCount ?? 0,
       activeRole: patch.activeRole ?? 'child',
-      expiresAt: patch.expiresAt ?? new Date(Date.now() + FIVE_MINUTES_MS)
+      expiresAt: patch.expiresAt ?? new Date(Date.now() + FIVE_MINUTES_MS),
+      kidModeUntil: patch.kidModeUntil ?? null
     }
   }
 
@@ -96,7 +103,8 @@ export function makeAuthFake(members: Record<string, Partial<AuthFakeMember>> = 
         childId,
         userId,
         activeRole: member.activeRole,
-        expiresAt: member.expiresAt
+        expiresAt: member.expiresAt,
+        kidModeUntil: member.kidModeUntil
       }
     }
   }
@@ -165,6 +173,24 @@ export function makeAuthFake(members: Record<string, Partial<AuthFakeMember>> = 
         pinSetAt: new Date().toISOString(),
         changed: input.hadPinBefore
       }
+    },
+
+    async enterKidMode(input: EnterKidModeInput): Promise<ModeStateRow> {
+      calls.push({ method: 'enterKidMode', input })
+      const member = must(input.userId)
+      member.kidModeUntil = input.kidModeUntil
+      const updated = row(input.userId, input.deviceId, input.childId)
+      if (updated === null) throw new Error('替身内部错误：写入后读不到行')
+      return updated
+    },
+
+    async exitKidMode(input: ExitKidModeInput): Promise<ModeStateRow> {
+      calls.push({ method: 'exitKidMode', input })
+      const member = must(input.userId)
+      member.kidModeUntil = null
+      const updated = row(input.userId, input.deviceId, input.childId)
+      if (updated === null) throw new Error('替身内部错误：写入后读不到行')
+      return updated
     }
   }
 }

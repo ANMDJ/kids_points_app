@@ -53,7 +53,8 @@ export class PrismaDeviceSessionRepository implements DeviceSessionPort {
   /**
    * 查 `(deviceId, childId)` 的会话行；查不到 ⇒ `null`。
    *
-   * `select` 只取 `SessionLookupRow` 的那五列（**恰好**是内核要用的）：
+   * `select` 只取 `SessionLookupRow` 的那六列（**恰好**是内核要用的；W14 起
+   * 第六列是 `kidModeUntil` —— 少读它 ⇒ 孩子模式静默失效）：
    * 少读一列 ⇒ 形状校验在运行时缺字段；多读几列 ⇒ 把 `id` / `issuedAt` 这类内部字段
    * 顺手带进请求上下文（actor 的来源必须窄，宁可多写一行 select）。
    */
@@ -67,7 +68,10 @@ export class PrismaDeviceSessionRepository implements DeviceSessionPort {
         childId: true,
         userId: true,
         activeRole: true,
-        expiresAt: true
+        expiresAt: true,
+        // W14（2026-11-03）：孩子模式的降级判定要用它。少读这一列 ⇒ 内核把
+        // `undefined` 当成"没开孩子模式"⇒ 孩子直接拿到家长权限（静默提权）。
+        kidModeUntil: true
       }
     })
   }

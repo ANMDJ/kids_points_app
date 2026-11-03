@@ -22,6 +22,10 @@ ParentMode mapParentMode(ParentModeDto dto) {
     pinConfigured: dto.pinConfigured,
     remainingAttempts: dto.remainingAttempts,
     lockedUntil: dto.lockedUntil,
+    kidMode: dto.kidMode,
+    kidModeExpired: dto.kidModeExpired,
+    kidModeUntil: dto.kidModeUntil,
+    kidModeRemainingSeconds: dto.kidModeRemainingSeconds,
   );
 }
 

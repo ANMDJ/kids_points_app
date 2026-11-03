@@ -63,13 +63,17 @@ import {
 } from './onboarding'
 import {
   createParentModeApiFromEnvironment,
+  isKidModeActiveAt,
+  isKidModeExpiredAt,
   isParentModePinBacked,
   isParentModeSessionBacked,
   isParentPinLockedAt,
+  kidModeRemainingSeconds,
   parentModeRemainingSeconds,
   parentPinLockSecondsAt,
   PARENT_MODE_UNKNOWN,
   ParentPinLockException,
+  validateKidModeMinutes,
   validateParentPin,
   type ParentMode,
   type ParentModeApi,
@@ -973,6 +977,31 @@ export class AppStore {
   /** 家长模式还剩几秒（0 = 不在家长模式 / 已到期）。 */
   parentModeRemainingSeconds(now: number): number {
     return parentModeRemainingSeconds(this.parentModeValue, now)
+  }
+
+  /** 孩子模式正在窗口内（W14；服务端快照）。 */
+  get isKidMode(): boolean {
+    return this.parentModeValue?.kidMode ?? false
+  }
+
+  /** 孩子模式已到点、等家长 PIN 收回（W14；A 方案）。 */
+  get isKidModeExpired(): boolean {
+    return this.parentModeValue?.kidModeExpired ?? false
+  }
+
+  /** 孩子模式**此刻**是否仍在窗口内（按绝对时刻现算）。 */
+  isKidModeActiveAt(now: number): boolean {
+    return isKidModeActiveAt(this.parentModeValue, now)
+  }
+
+  /** 孩子模式是否处于「时间到了、等家长输 PIN」。 */
+  isKidModeExpiredAt(now: number): boolean {
+    return isKidModeExpiredAt(this.parentModeValue, now)
+  }
+
+  /** 孩子模式还剩几秒（向上取整；未开 / 已到期都 0）。 */
+  kidModeRemainingSeconds(now: number): number {
+    return kidModeRemainingSeconds(this.parentModeValue, now)
   }
 
   // ------------------------------------------------------------ 家庭数据导出（W7-C）
@@ -5153,6 +5182,106 @@ export class AppStore {
         return error.userMessage
       }
       return '退出家长模式的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.parentModeBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 开孩子模式（`POST /auth/kid-mode`，W14）。成功返回 null。
+   *
+   * ★ 时长由家长选（1–30，默认 15）：产品意图是「先写在纸上、想清楚再填」，
+   *   默认即上限会鼓励"反正也是 30 分钟"。
+   * ★ 本地先判快照：已经开着 / 不在家长模式时直接给一句能懂的话，
+   *   不把注定 409/403 的请求发出去（服务端的那两道门仍然在）。
+   */
+  async enterKidMode(durationMinutes: number): Promise<string | null> {
+    const api = this.parentModeApi
+    if (api === null) return '当前没有接入后端，无法开启孩子模式。'
+    if (this.parentModeBusyValue) return '正在切换，请稍候…'
+
+    const invalid = validateKidModeMinutes(durationMinutes)
+    if (invalid !== null) return invalid
+
+    if (this.parentModeValue !== null) {
+      if (this.isKidMode || this.isKidModeExpired) {
+        return '孩子模式已经开着：请先输入家长 PIN 结束这一次，再重新设置时长。'
+      }
+      if (!this.isParentMode) {
+        return '请先输入家长 PIN 进入家长模式，再给孩子开启时间。'
+      }
+    }
+
+    this.parentModeBusyValue = true
+    this.parentModeErrorValue = null
+    this.persist()
+    try {
+      const mode = await api.enterKidMode(durationMinutes)
+      this.applyParentMode(mode)
+      this.parentModeStatusValue = 'ready'
+      return null
+    } catch (error) {
+      if (error instanceof WriteApiException) {
+        if (
+          error.kind === 'conflict' ||
+          error.kind === 'forbidden' ||
+          error.kind === 'badRequest'
+        ) {
+          await this.refreshParentMode()
+        }
+        return error.userMessage
+      }
+      return '开启孩子模式的请求已发出，但结果无法确认。请刷新后查看。'
+    } finally {
+      this.parentModeBusyValue = false
+      this.persist()
+    }
+  }
+
+  /**
+   * 用家长 PIN 收回孩子模式（`DELETE /auth/kid-mode`，W14）。成功返回 null。
+   *
+   * **到期后也走这一条**：A 方案下到点不会自动回家长模式，
+   * 所以「结束孩子模式」是家长唯一能拿回权限的动作，PIN 必须验。
+   */
+  async exitKidMode(pin: string): Promise<string | null> {
+    const api = this.parentModeApi
+    if (api === null) return '当前没有接入后端，无法结束孩子模式。'
+    if (this.parentModeBusyValue) return '正在切换，请稍候…'
+
+    const trimmed = pin.trim()
+    if (trimmed === '') return '请输入家长 PIN。'
+    const invalid = validateParentPin(trimmed)
+    if (invalid !== null) return invalid
+
+    this.parentModeBusyValue = true
+    this.parentModeErrorValue = null
+    this.persist()
+    try {
+      const mode = await api.exitKidMode(trimmed)
+      this.applyParentMode(mode)
+      this.parentModeStatusValue = 'ready'
+      this.parentPinLockSecondsValue = 0
+      return null
+    } catch (error) {
+      if (error instanceof ParentPinLockException) {
+        this.parentPinLockSecondsValue = error.retryAfterSeconds
+        await this.refreshParentMode()
+        return error.userMessage
+      }
+      if (error instanceof WriteApiException) {
+        if (
+          error.kind === 'forbidden' ||
+          error.kind === 'conflict' ||
+          error.kind === 'badRequest' ||
+          error.kind === 'unauthenticated'
+        ) {
+          await this.refreshParentMode()
+        }
+        return error.userMessage
+      }
+      return '结束孩子模式的请求已发出，但结果无法确认。请刷新后查看。'
     } finally {
       this.parentModeBusyValue = false
       this.persist()

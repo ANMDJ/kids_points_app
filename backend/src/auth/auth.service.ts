@@ -20,7 +20,15 @@ import {
   type ParentPinState
 } from './auth.repository'
 import type { EnterParentModeDto } from './dto/enter-parent-mode.dto'
+import type { EnterKidModeDto } from './dto/enter-kid-mode.dto'
+import type { ExitKidModeDto } from './dto/exit-kid-mode.dto'
 import type { SetParentPinDto } from './dto/set-parent-pin.dto'
+import {
+  clampKidModeMinutes,
+  kidModeExpiresAt,
+  kidModeRemainingSeconds,
+  kidModeStateOf
+} from './kid-mode.policy'
 import {
   PIN_LOCK_MS,
   PIN_MAX_FAILURES,
@@ -62,6 +70,29 @@ export interface ParentModeView {
   pinConfigured: boolean
   remainingAttempts: number
   lockedUntil: string | null
+
+  /**
+   * W14（2026-11-03）：孩子模式**正在窗口内**（`kidModeUntil > now`）。
+   *
+   * ★ 为 true 时 `activeRole` 必然是 `child`、`parentMode` 必然是 false ——
+   *   孩子模式的判定优先级高于 `activeRole/expiresAt`（`session.gate.ts`）。
+   */
+  kidMode: boolean
+
+  /**
+   * W14：孩子模式**已经到点、但还没有被家长 PIN 收回**（`kidModeUntil <= now`）。
+   *
+   * ★ 这是 A 方案的核心状态：到期**不**自动回家长模式，设备停在 `child`，
+   *   直到家长输入 PIN。界面据此显示「时间到了，请输入家长 PIN」而不是
+   *   「家长模式」—— 后者会让家长以为管控失败。
+   */
+  kidModeExpired: boolean
+
+  /** 孩子模式的到期绝对时刻（`kidMode` / `kidModeExpired` 为 true 时非 null）。 */
+  kidModeUntil: string | null
+
+  /** 孩子模式还剩多少秒（**向上取整**；未开或已到期都是 0）。 */
+  kidModeRemainingSeconds: number
 }
 
 /** `POST /auth/parent-pin` 的回包：PIN 这一件事 + 重置后的剩余次数。 */
@@ -118,6 +149,24 @@ export class AuthService {
 
     // ① 成员位必须是家长（PIN 属于成员，见类注释的"矩阵 ALLOW ≠ 一定能提权"）。
     this.assertGuardianMember(row, 'PARENT_MODE_REQUIRES_GUARDIAN', '只有家长能进入家长模式。')
+
+    // ★ W14（2026-11-03）：孩子模式期间**不走**这条路。
+    //
+    //   家长真正想做的动作是"结束这次交接"，那是 `DELETE /auth/kid-mode`。
+    //   若这里顺手清掉 `kidModeUntil` 并把 expiresAt 压成 now+5 分钟，
+    //   一个本来有 30 天家长会话的设备会凭空缩水到 5 分钟；
+    //   若什么都不做，家长输对了 PIN 却仍然停在 child（更糟：像是 PIN 错了）。
+    //   两种都不行 ⇒ 409 并指明该用哪个入口。
+    const kidState = kidModeStateOf(toDateOrNull(row.session.kidModeUntil), now)
+    if (kidState !== 'off') {
+      throw new ConflictException({
+        code: 'KID_MODE_ACTIVE',
+        message:
+          kidState === 'active'
+            ? '这台设备正处在孩子模式里。要提前拿回家长权限，请用「结束孩子模式」并输入家长 PIN。'
+            : '孩子模式的时间已经到了，但还没有被收回。请输入家长 PIN 结束孩子模式。'
+      })
+    }
     // ② 没有 PIN ⇒ 409 而不是 401：身份是好的，"没人设过钥匙"是**状态**问题。
     if (row.pinHash === null) {
       throw new ConflictException({
@@ -169,6 +218,139 @@ export class AuthService {
     // ★ 退出**不验 PIN、也不要求当前是家长**：降级永远允许（越严越好）。
     //   也不要求"当前真的在家长模式"—— 已经是 child 时再退一次是幂等的 200。
     const updated = await this.repository.exitParentMode({
+      childId,
+      userId: operator.userId,
+      deviceId,
+      operator
+    })
+    return viewOf(updated, now)
+  }
+
+  /**
+   * 开孩子模式（W14，2026-11-03 / `51-kid-mode-window.md`）。
+   *
+   * ── 五条顺序（每条都有 HTTP 用例）─────────────────────────────────────────
+   *   ① 成员位必须是家长（PIN 属于成员）；
+   *   ② 当前必须**已经在家长模式** —— 否则"给孩子用 20 分钟"就是一次
+   *      越权操作（孩子自己开的窗口）；
+   *   ③ 必须设过 PIN —— 不然到期后没有任何人能收回（见 repository 注释）；
+   *   ④ 不能已经开着 —— 409 而不是静默续期；
+   *   ⑤ 分钟数先 `clampKidModeMinutes()` 再落库（DTO 已挡 31 分钟，
+   *      这一步守住非 HTTP 调用方）。
+   *
+   * ★ 时长**由家长输入**（1–30，默认 15），不是固定 30：产品意图是
+   *   「先让孩子把愿望写在纸上，再给一段有限时间填」，默认即上限会鼓励
+   *   "反正也是 30 分钟"。
+   */
+  async enterKidMode(
+    childId: string,
+    deviceId: string,
+    dto: EnterKidModeDto,
+    operator: AuthOperator
+  ): Promise<ParentModeView> {
+    const now = new Date()
+    const row = await this.load(childId, deviceId, operator.userId)
+
+    this.assertGuardianMember(row, 'KID_MODE_REQUIRES_GUARDIAN', '只有家长才能开启孩子模式。')
+
+    const kidState = kidModeStateOf(toDateOrNull(row.session.kidModeUntil), now)
+    if (kidState !== 'off') {
+      throw new ConflictException({
+        code: 'KID_MODE_ALREADY_ACTIVE',
+        message:
+          kidState === 'active'
+            ? '这台设备已经在孩子模式里。请先用家长 PIN 结束当前这一次，再重新设置时长。'
+            : '上一次孩子模式还没被收回。请先输入家长 PIN 结束它，再重新设置时长。'
+      })
+    }
+
+    if (row.pinHash === null) {
+      throw new ConflictException({
+        code: 'KID_MODE_REQUIRES_PIN',
+        message:
+          '这个账号还没有家长 PIN：孩子模式到点后必须用 PIN 收回，' +
+          '没有 PIN 就等于把手机永久锁在孩子模式里。请先设置家长 PIN。'
+      })
+    }
+
+    // ② 当前角色必须是 guardian（由服务端会话 + TTL 现算，不看客户端）。
+    if (effectiveRole(row.session, now) !== 'guardian') {
+      throw new ForbiddenException({
+        code: 'KID_MODE_REQUIRES_PARENT_MODE',
+        message:
+          '请先输入家长 PIN 进入家长模式，再开启孩子模式。' +
+          '（孩子模式下不能给自己延长时间 —— 否则这道门就等于不存在。）'
+      })
+    }
+
+    const minutes = clampKidModeMinutes(dto.durationMinutes)
+    const updated = await this.repository.enterKidMode({
+      childId,
+      userId: operator.userId,
+      deviceId,
+      kidModeUntil: kidModeExpiresAt(now, minutes),
+      durationMinutes: minutes,
+      operator
+    })
+    return viewOf(updated, now)
+  }
+
+  /**
+   * 用家长 PIN 收回孩子模式（W14）。
+   *
+   * ── 为什么"收回"必须验 PIN，而"退出家长模式"不用 ──────────────────────────
+   *   `DELETE /auth/parent-mode` 是**降级**（越严越好，孩子自己点也无害）；
+   *   本方法是**把孩子手里的设备交回家长** —— 它是提权方向。没有 PIN，
+   *   孩子自己点一下就能回到家长模式（还能顺手批掉自己的心愿）。
+   *
+   * ── 失败语义与进入家长模式**逐字一致** ────────────────────────────────────
+   *   格式错 ⇒ 400（不计次）；值不对 ⇒ 403（剩 N 次）；锁定 ⇒ 429（等多久）。
+   *   复用 `assertNotLocked()` / `pinRejected()`，客户端一个分支就能接住。
+   *
+   * ★ 幂等：已经收回（或从来没开）时再调一次也是 200 —— 降级永远允许。
+   *   但 **PIN 仍然要验**：否则"收回"会变成一个不需要凭据的探测端点。
+   */
+  async exitKidMode(
+    childId: string,
+    deviceId: string,
+    dto: ExitKidModeDto,
+    operator: AuthOperator
+  ): Promise<ParentModeView> {
+    const now = new Date()
+    const row = await this.load(childId, deviceId, operator.userId)
+
+    this.assertGuardianMember(row, 'KID_MODE_REQUIRES_GUARDIAN', '只有家长才能收回孩子模式。')
+
+    if (row.pinHash === null) {
+      // 理论上开孩子模式时就要求过 PIN（`KID_MODE_REQUIRES_PIN`）；
+      // 走到这里说明 PIN 被另一台设备清掉了，或数据被改过。
+      throw new ConflictException({
+        code: 'KID_MODE_REQUIRES_PIN',
+        message: '这个账号没有家长 PIN，无法收回孩子模式。请用另一位家长设备处理。'
+      })
+    }
+
+    assertNotLocked(row, now)
+
+    if (!isPinFormatValid(dto.pin)) {
+      throw new BadRequestException({
+        code: 'PARENT_PIN_FORMAT_INVALID',
+        message: '家长 PIN 是 4–6 位数字（这次没有计入错误次数）。'
+      })
+    }
+
+    if (!(await verifyPin(dto.pin, row.pinHash))) {
+      const failed = await this.repository.recordPinFailure({
+        childId,
+        userId: operator.userId,
+        deviceId,
+        now,
+        operator
+      })
+      throw pinRejected(failed, now)
+    }
+
+    const updated = await this.repository.exitKidMode({
       childId,
       userId: operator.userId,
       deviceId,
@@ -345,6 +527,11 @@ function viewOf(row: ModeStateRow, now: Date): ParentModeView {
   const lockedUntil = row.pinLockedUntil
   const locked = lockedUntil !== null && isPinLocked(lockedUntil, now)
 
+  // W14：孩子模式（含"已到期未收回"）。它优先于 parentMode —— `effectiveRole()`
+  // 已经把角色压到 child，这里只需把三态如实翻成三个字段。
+  const kidUntil = toDateOrNull(row.session.kidModeUntil)
+  const kidState = kidModeStateOf(kidUntil, now)
+
   return {
     activeRole,
     parentMode,
@@ -353,7 +540,24 @@ function viewOf(row: ModeStateRow, now: Date): ParentModeView {
     remainingSeconds: parentMode ? remainingSeconds(new Date(row.session.expiresAt), now) : 0,
     pinConfigured: row.pinHash !== null,
     remainingAttempts: locked ? 0 : remainingAttempts(row.pinFailedCount),
-    lockedUntil: locked && lockedUntil !== null ? lockedUntil.toISOString() : null
+    lockedUntil: locked && lockedUntil !== null ? lockedUntil.toISOString() : null,
+    kidMode: kidState === 'active',
+    kidModeExpired: kidState === 'locked',
+    kidModeUntil: kidUntil === null ? null : kidUntil.toISOString(),
+    kidModeRemainingSeconds: kidModeRemainingSeconds(kidUntil, now)
   }
+}
+
+/**
+ * `Date | string | null | undefined` → `Date | null`。
+ *
+ * ★ 缺省（`undefined`）与 `null` 同义：「这一列没有值」。它只出现在
+ *   旧替身 / 旧用例构造的会话行上（真实 Prisma 行永远是 `Date | null`）。
+ *   解析不了的字符串**不在这里**兜底 —— `session.gate.ts#effectiveRole()`
+ *   会在任何请求路径上把它抛成 500（数据病不伪装成"没开孩子模式"）。
+ */
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (value === null || value === undefined) return null
+  return value instanceof Date ? value : new Date(value)
 }
 

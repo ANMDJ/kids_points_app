@@ -218,7 +218,8 @@ export const PERMISSION_MATRIX: Record<ActionType, Record<Role, Verdict>> = {
   `register({ hasDatabase: false })` 把世界钉死（`approvals-http` / `membership-http` / `device-session-http` 全部）。
 - **两个世界各有各的响亮**：有库 ⇒ 成员位不存在 **403 `MEMBER_NOT_FOUND`**、`status='removed'`
   **403 `MEMBER_REMOVED`**、会话查不到 **401 `SESSION_NOT_FOUND`**（三者**不同**，靠"有没有那一行"分）；
-  无库 ⇒ 501（可执行断言）。适配器**只读不判**：`select` 恰好五列，TTL 回落 / 角色白名单
+  无库 ⇒ 501（可执行断言）。适配器**只读不判**：`select` 恰好五列（`DeviceSession` 自 W14
+  起是六列，多一个 `kidModeUntil`），TTL 回落 / 角色白名单
   仍只在 `session.gate.ts` **一处**。★ 以上三条 2026-10-17 **已实测**（真库 ＋ 真 HTTP；见 `test-db/approvals-db.dbtest.ts`），不再是"预期"。
 - ★ **"无库装配"只在子模块/用例层面存在**：真 `AppModule` **恒** `imports: [PrismaModule]`（全局模块）⇒
   空 `DATABASE_URL` 时应用**起不来**（`PrismaService` 构造即抛错，点名 `DATABASE_URL`）。生产因此**不会**

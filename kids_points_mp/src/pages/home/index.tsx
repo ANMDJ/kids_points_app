@@ -1,6 +1,6 @@
 import { View, Text } from '@tarojs/components'
 import { redirectTo, stopPullDownRefresh, usePullDownRefresh } from '@tarojs/taro'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 import AppBottomNav from '../../components/AppBottomNav'
 import GradientPage from '../../components/GradientPage'
@@ -11,6 +11,7 @@ import SoftButton from '../../components/SoftButton'
 import ReadStatusBanner from '../../components/ReadStatusBanner'
 import { SectionTitle } from '../../components/PageHeader'
 import QuickNoteSheet from '../../sheets/QuickNoteSheet'
+import ParentModeSheet from '../../sheets/ParentModeSheet'
 import { useStore } from '../../data/store'
 import type { Habit } from '../../data/types'
 import { toast } from '../../utils/toast'
@@ -23,6 +24,8 @@ import './index.scss'
 export default function Home() {
   const store = useStore()
   const sheet = useSheet()
+  // W14：首页的状态条点开的是同一个家长模式面板（唯一能收回孩子模式的地方）。
+  const [parentModeOpen, setParentModeOpen] = useState(false)
 
   // W9-B：登录闸门。会话没就绪时 **先** 离开这一屏 —— 下面任何渲染都可能
   // 把"还没确认身份"的数据画成用户的积分。
@@ -36,6 +39,13 @@ export default function Home() {
     void redirectTo({ url: '/pages/onboarding/index' })
   }, [store.needsOnboarding])
 
+  // W14：首屏拉一次家长模式 —— 首页要显示「孩子模式」状态条。
+  // 与 Flutter `HomeShell` 同一条理由：只在这里（首屏一次）加，
+  // 不塞进 `refreshFromServer`（那是每次下拉刷新都跑的）。
+  useEffect(() => {
+    void store.refreshParentMode()
+  }, [store])
+
   // 与 Flutter 首页一致：下拉是新数据入口；失败时由 ReadStatusBanner 显示原因，
   // 已有内容保留（store 内部保证），这里只负责收起原生下拉动画。
   usePullDownRefresh(() => {
@@ -48,6 +58,12 @@ export default function Home() {
   // 结构字段 ＋ 当天流水现算），习惯上那些状态字段已不复存在。
   const habits = store.habitViews()
   const doneCount = habits.filter((habit) => habit.checked).length
+
+  // W14：孩子模式期间首页顶部常驻一条状态条。**不渲染倒计时**：
+  // 首页没有秒级刷新，写死的数字在切后台后会变成谎言（精确剩余在面板里）。
+  const now = Date.now()
+  const kidModeExpired = store.isKidModeExpiredAt(now)
+  const kidModeOn = kidModeExpired || store.isKidModeActiveAt(now)
 
   const handleCheckIn = async (habit: Habit) => {
     const message = await store.submitCheckIn(habit)
@@ -78,6 +94,18 @@ export default function Home() {
       >
         <View className='kp-home'>
           <ReadStatusBanner />
+          {kidModeOn ? (
+            <View
+              className={`kp-home__kid-mode ${kidModeExpired ? 'is-expired' : ''}`}
+              onClick={() => setParentModeOpen(true)}
+            >
+              <Text className='kp-home__kid-mode-text'>
+                {kidModeExpired
+                  ? '孩子模式的时间到了 —— 请家长输入 PIN 收回'
+                  : '孩子模式进行中 —— 家长专属操作需要家长 PIN'}
+              </Text>
+            </View>
+          ) : null}
           <Text className='kp-home__caption'>当前可用积分</Text>
           <View className='kp-home__points'>
             <AnimatedPointText
@@ -130,6 +158,11 @@ export default function Home() {
       {sheet.open ? (
         <QuickNoteSheet visible={sheet.visible} onClose={() => sheet.hide()} />
       ) : null}
+      {/* W14：孩子模式状态条的唯一出口 —— 同一个家长模式面板 */}
+      <ParentModeSheet
+        visible={parentModeOpen}
+        onClose={() => setParentModeOpen(false)}
+      />
     </>
   )
 }

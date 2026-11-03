@@ -41,6 +41,10 @@ void main() {
     bool pinConfigured = true,
     int remainingAttempts = 5,
     String? lockedUntil,
+    bool kidMode = false,
+    bool kidModeExpired = false,
+    String? kidModeUntil,
+    int kidModeRemainingSeconds = 0,
   }) {
     final bool active = parentMode ?? (activeRole == 'guardian');
     return <String, Object?>{
@@ -53,6 +57,11 @@ void main() {
       'pinConfigured': pinConfigured,
       'remainingAttempts': remainingAttempts,
       'lockedUntil': lockedUntil,
+      // W14：孩子模式。默认全关 —— 既有用例因此不需要逐条改。
+      'kidMode': kidMode,
+      'kidModeExpired': kidModeExpired,
+      'kidModeUntil': kidModeUntil,
+      'kidModeRemainingSeconds': kidModeRemainingSeconds,
     };
   }
 
@@ -762,6 +771,368 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   });
+
+  // ══ W14（2026-11-03）：孩子模式 ════════════════════════════════════════════
+  group('W14：孩子模式 DTO —— 三态与矛盾形状', () {
+    test('窗口内：child + kidMode=true + 绝对到期时刻', () {
+      final ParentModeDto dto = ParentModeDto.fromJson(
+        modeJson(
+          kidMode: true,
+          kidModeUntil: '2026-11-03T10:15:00.000Z',
+          kidModeRemainingSeconds: 900,
+        ),
+        r'$',
+      );
+
+      expect(dto.activeRole, 'child');
+      expect(dto.parentMode, isFalse);
+      expect(dto.kidMode, isTrue);
+      expect(dto.kidModeExpired, isFalse);
+      expect(dto.kidModeUntil, DateTime.utc(2026, 11, 3, 10, 15));
+      expect(dto.kidModeRemainingSeconds, 900);
+    });
+
+    test('已到期：kidModeExpired=true 且剩余 0（A 方案：不回家长模式）', () {
+      final ParentModeDto dto = ParentModeDto.fromJson(
+        modeJson(
+          kidModeExpired: true,
+          kidModeUntil: '2026-11-03T10:15:00.000Z',
+          kidModeRemainingSeconds: 0,
+        ),
+        r'$',
+      );
+
+      expect(dto.kidMode, isFalse);
+      expect(dto.kidModeExpired, isTrue);
+      expect(dto.parentMode, isFalse);
+    });
+
+    test('同时 true ⇒ malformed（同一个时间戳不可能有两种状态）', () {
+      expect(
+        () => ParentModeDto.fromJson(
+          modeJson(
+            kidMode: true,
+            kidModeExpired: true,
+            kidModeUntil: '2026-11-03T10:15:00.000Z',
+            kidModeRemainingSeconds: 900,
+          ),
+          r'$',
+        ),
+        throwsA(isA<ReadApiException>()),
+      );
+    });
+
+    test('孩子模式与家长模式同时 true ⇒ malformed（服务端没算 kidModeUntil）', () {
+      expect(
+        () => ParentModeDto.fromJson(
+          modeJson(
+            activeRole: 'guardian',
+            expiresAt: '2026-11-03T10:05:00.000Z',
+            remainingSeconds: 300,
+            kidMode: true,
+            kidModeUntil: '2026-11-03T10:15:00.000Z',
+            kidModeRemainingSeconds: 900,
+          ),
+          r'$',
+        ),
+        throwsA(isA<ReadApiException>()),
+      );
+    });
+
+    test('有状态却没有到期时刻 ⇒ malformed（倒计时无从算起）', () {
+      for (final Map<String, Object?> json in <Map<String, Object?>>[
+        modeJson(kidMode: true, kidModeRemainingSeconds: 600),
+        modeJson(kidModeExpired: true),
+      ]) {
+        expect(
+          () => ParentModeDto.fromJson(json, r'$'),
+          throwsA(isA<ReadApiException>()),
+        );
+      }
+    });
+
+    test('窗口内剩余秒数越界（0 / 1801）⇒ malformed', () {
+      for (final int seconds in <int>[0, 1801]) {
+        expect(
+          () => ParentModeDto.fromJson(
+            modeJson(
+              kidMode: true,
+              kidModeUntil: '2026-11-03T10:15:00.000Z',
+              kidModeRemainingSeconds: seconds,
+            ),
+            r'$',
+          ),
+          throwsA(isA<ReadApiException>()),
+          reason: 'seconds=$seconds',
+        );
+      }
+    });
+
+    test('已到期却给了正数剩余秒数 ⇒ malformed', () {
+      expect(
+        () => ParentModeDto.fromJson(
+          modeJson(
+            kidModeExpired: true,
+            kidModeUntil: '2026-11-03T10:15:00.000Z',
+            kidModeRemainingSeconds: 5,
+          ),
+          r'$',
+        ),
+        throwsA(isA<ReadApiException>()),
+      );
+    });
+
+    test('没开孩子模式却给了到期时刻 / 剩余秒数 ⇒ malformed', () {
+      expect(
+        () => ParentModeDto.fromJson(
+          modeJson(kidModeUntil: '2026-11-03T10:15:00.000Z'),
+          r'$',
+        ),
+        throwsA(isA<ReadApiException>()),
+      );
+      expect(
+        () => ParentModeDto.fromJson(
+          modeJson(kidModeRemainingSeconds: 10),
+          r'$',
+        ),
+        throwsA(isA<ReadApiException>()),
+      );
+    });
+  });
+
+  group('W14：孩子模式 —— AppStore 的动作与本地判据', () {
+    ParentModeDto kidDto({
+      required DateTime until,
+      int seconds = 900,
+      bool expired = false,
+    }) =>
+        ParentModeDto.fromJson(
+          modeJson(
+            kidMode: !expired,
+            kidModeExpired: expired,
+            kidModeUntil: until.toUtc().toIso8601String(),
+            kidModeRemainingSeconds: expired ? 0 : seconds,
+          ),
+          r'$',
+        );
+
+    ParentModeDto parentDto() => ParentModeDto.fromJson(
+          modeJson(
+            activeRole: 'guardian',
+            expiresAt: DateTime.now().add(const Duration(minutes: 5)).toUtc().toIso8601String(),
+            remainingSeconds: 300,
+          ),
+          r'$',
+        );
+
+    test('refresh 后按绝对时刻现算剩余秒（不信任快照里的整数）', () async {
+      final DateTime until = DateTime.now().add(const Duration(minutes: 15));
+      final _FakeParentModeApi api =
+          _FakeParentModeApi(fetchValue: kidDto(until: until));
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+
+      await store.refreshParentMode();
+
+      expect(store.isKidMode, isTrue);
+      expect(store.isKidModeExpired, isFalse);
+      expect(
+        store.kidModeRemainingSeconds(until.subtract(const Duration(seconds: 30))),
+        30,
+      );
+      // 快照说 900，但**按本地时钟**已经越过到期时刻 ⇒ 必须是"已到期"。
+      expect(store.isKidModeActiveAt(until.add(const Duration(seconds: 1))), isFalse);
+      expect(store.isKidModeExpiredAt(until.add(const Duration(seconds: 1))), isTrue);
+    });
+
+    test('已到期快照 ⇒ isKidModeExpired，且 remainingSeconds 为 0', () async {
+      final DateTime until = DateTime.now().subtract(const Duration(minutes: 1));
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: kidDto(until: until, expired: true),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+
+      await store.refreshParentMode();
+
+      expect(store.isKidMode, isFalse);
+      expect(store.isKidModeExpired, isTrue);
+      expect(store.kidModeRemainingSeconds(DateTime.now()), 0);
+    });
+
+    test('enterKidMode 提交家长选的分钟数，并把快照换成孩子模式', () async {
+      final DateTime until = DateTime.now().add(const Duration(minutes: 20));
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: parentDto(),
+        kidModeValue: kidDto(until: until, seconds: 1200),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+      await store.refreshParentMode();
+
+      expect(await store.enterKidMode(20), isNull);
+
+      expect(api.enterKidModeCalls, 1);
+      expect(api.lastKidMinutes, 20);
+      expect(store.isKidMode, isTrue);
+      expect(store.isParentMode, isFalse);
+    });
+
+    test('快照是孩子模式时再开 ⇒ 本地拒，一个请求都不发', () async {
+      final DateTime until = DateTime.now().add(const Duration(minutes: 5));
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: kidDto(until: until, seconds: 300),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+      await store.refreshParentMode();
+
+      expect(await store.enterKidMode(15), contains('请先输入家长 PIN'));
+
+      expect(api.enterKidModeCalls, 0);
+    });
+
+    test('时长 45 分钟 ⇒ 本地拒（服务端也会 400），一个请求都不发', () async {
+      final _FakeParentModeApi api = _FakeParentModeApi(fetchValue: parentDto());
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+      await store.refreshParentMode();
+
+      expect(await store.enterKidMode(45), contains('30'));
+
+      expect(api.enterKidModeCalls, 0);
+    });
+
+    test('exitKidMode：空 PIN 本地拒；正确 PIN 调 API 并回到家长模式', () async {
+      final DateTime until = DateTime.now().add(const Duration(minutes: 5));
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: kidDto(until: until, seconds: 300),
+        exitKidModeValue: parentDto(),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+      await store.refreshParentMode();
+
+      expect(await store.exitKidMode('   '), '请输入家长 PIN。');
+      expect(api.exitKidModeCalls, 0);
+
+      expect(await store.exitKidMode(' 1234 '), isNull);
+      expect(api.exitKidModeCalls, 1);
+      expect(api.lastPin, '1234');
+      expect(store.isKidMode, isFalse);
+      expect(store.isParentMode, isTrue);
+    });
+
+    test('服务端 409 ⇒ 原文交给界面，并重新拉一次快照对齐', () async {
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: parentDto(),
+        enterKidModeError: WriteApiException(
+          WriteFailureKind.conflict,
+          '这台设备已经在孩子模式里。',
+          code: 'KID_MODE_ALREADY_ACTIVE',
+        ),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+      await store.refreshParentMode();
+      final int fetchesBefore = api.fetchCalls;
+
+      expect(await store.enterKidMode(15), contains('已经在孩子模式'));
+
+      expect(api.enterKidModeCalls, 1);
+      // 409 说明服务端事实与本地快照不一致 ⇒ 必须重新对齐（否则面板继续显示旧状态）。
+      expect(api.fetchCalls, fetchesBefore + 1);
+    });
+
+    test('收回时 PIN 错（403）⇒ 服务端"还剩 N 次"原文交出', () async {
+      final DateTime until = DateTime.now().add(const Duration(minutes: 5));
+      final _FakeParentModeApi api = _FakeParentModeApi(
+        fetchValue: kidDto(until: until, seconds: 300),
+        exitKidModeError: WriteApiException(
+          WriteFailureKind.forbidden,
+          '家长 PIN 不对（还剩 4 次尝试机会）。',
+          code: 'PARENT_PIN_INVALID',
+        ),
+      );
+      final AppStore store = AppStore(parentModeApi: api);
+      addTearDown(store.dispose);
+      await store.refreshParentMode();
+
+      expect(await store.exitKidMode('0000'), contains('还剩 4 次'));
+    });
+  });
+
+  group('W14：孩子模式 —— API client 的线与本地预检', () {
+    test('enterKidMode：POST /auth/kid-mode，体只有 durationMinutes', () async {
+      final _FakeTransport transport = _FakeTransport(
+        (String method, Uri uri, String body) => WriteHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(
+            modeJson(
+              kidMode: true,
+              kidModeUntil: '2026-11-03T10:15:00.000Z',
+              kidModeRemainingSeconds: 600,
+            ),
+          ),
+        ),
+      );
+      final ParentModeApiClient api = ParentModeApiClient(
+        config: config,
+        transport: transport,
+      );
+
+      final ParentModeDto dto = await api.enterKidMode(10);
+
+      expect(dto.kidMode, isTrue);
+      expect(transport.methods, <String>['POST']);
+      expect(transport.paths.single, endsWith('/auth/kid-mode'));
+      expect(jsonDecode(transport.lastBody), <String, Object?>{'durationMinutes': 10});
+    });
+
+    test('exitKidMode：DELETE /auth/kid-mode，体是 {pin}（收回要凭据）', () async {
+      final _FakeTransport transport = _FakeTransport(
+        (String method, Uri uri, String body) => WriteHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(
+            modeJson(
+              activeRole: 'guardian',
+              expiresAt: '2026-11-03T10:05:00.000Z',
+              remainingSeconds: 300,
+            ),
+          ),
+        ),
+      );
+      final ParentModeApiClient api = ParentModeApiClient(
+        config: config,
+        transport: transport,
+      );
+
+      final ParentModeDto dto = await api.exitKidMode(' 1234 ');
+
+      expect(dto.kidMode, isFalse);
+      expect(transport.methods, <String>['DELETE']);
+      expect(transport.paths.single, endsWith('/auth/kid-mode'));
+      expect(jsonDecode(transport.lastBody), <String, Object?>{'pin': '1234'});
+    });
+
+    test('时长 45 / 0 ⇒ 本地拒，一个请求都不发（服务端也会 400）', () async {
+      final _FakeTransport transport = _FakeTransport(
+        (String method, Uri uri, String body) => throw StateError('不该发请求'),
+      );
+      final ParentModeApiClient api = ParentModeApiClient(
+        config: config,
+        transport: transport,
+      );
+
+      for (final int minutes in <int>[45, 0]) {
+        await expectLater(
+          () => api.enterKidMode(minutes),
+          throwsA(isA<WriteApiException>()),
+        );
+      }
+      expect(transport.methods, isEmpty);
+    });
+  });
 }
 
 /// `WriteTransport` 的假实现：记录方法 / 路径 / 请求体，回包由回调决定。
@@ -792,7 +1163,7 @@ class _FakeTransport implements WriteTransport {
   void close() {}
 }
 
-/// `ParentModeApi` 的假实现：四条路由各自可配置回包 / 异常。
+/// `ParentModeApi` 的假实现：六条路由各自可配置回包 / 异常。
 class _FakeParentModeApi implements ParentModeApi {
   _FakeParentModeApi({
     this.fetchValue,
@@ -800,6 +1171,10 @@ class _FakeParentModeApi implements ParentModeApi {
     this.exitValue,
     this.pinValue,
     this.enterError,
+    this.kidModeValue,
+    this.exitKidModeValue,
+    this.enterKidModeError,
+    this.exitKidModeError,
   });
 
   ParentModeDto? fetchValue;
@@ -811,12 +1186,21 @@ class _FakeParentModeApi implements ParentModeApi {
   Object? exitError;
   Object? setPinError;
 
+  /// W14：开 / 收孩子模式的回包（省略时用 [enterValue] / [exitValue]）。
+  ParentModeDto? kidModeValue;
+  ParentModeDto? exitKidModeValue;
+  Object? enterKidModeError;
+  Object? exitKidModeError;
+
   int fetchCalls = 0;
   int enterCalls = 0;
   int exitCalls = 0;
   int setPinCalls = 0;
+  int enterKidModeCalls = 0;
+  int exitKidModeCalls = 0;
   String? lastPin;
   String? lastCurrentPin;
+  int? lastKidMinutes;
   bool closed = false;
 
   @override
@@ -839,6 +1223,22 @@ class _FakeParentModeApi implements ParentModeApi {
     exitCalls++;
     if (exitError != null) throw exitError!;
     return exitValue!;
+  }
+
+  @override
+  Future<ParentModeDto> enterKidMode(int durationMinutes) async {
+    enterKidModeCalls++;
+    lastKidMinutes = durationMinutes;
+    if (enterKidModeError != null) throw enterKidModeError!;
+    return kidModeValue ?? enterValue!;
+  }
+
+  @override
+  Future<ParentModeDto> exitKidMode(String pin) async {
+    exitKidModeCalls++;
+    lastPin = pin;
+    if (exitKidModeError != null) throw exitKidModeError!;
+    return exitKidModeValue ?? exitValue!;
   }
 
   @override

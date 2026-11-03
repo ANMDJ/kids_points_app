@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../data/app_scope.dart';
 import '../../data/app_store.dart';
+import '../../models/kid_mode.dart';
 import '../../models/onboarding.dart' show validateParentPin;
 import '../../theme/app_colors.dart';
 import '../../widgets/app_card.dart';
@@ -78,6 +79,13 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
   final TextEditingController _currentPin = TextEditingController();
   final TextEditingController _newPin = TextEditingController();
 
+  /// 结束孩子模式要用的 PIN（与「进入家长模式」的 `_pin` 分开：
+  /// 两个动作的失败文案不同，共用控制器会让上一次的输入串到下一次）。
+  final TextEditingController _kidPin = TextEditingController();
+
+  /// 家长选择的「给孩子用多少分钟」（1–30，默认 15）。
+  int _kidMinutes = kKidModeDefaultMinutes;
+
   /// 每秒重绘一次倒计时（只在需要时读取 `store.parentModeRemainingSeconds`）。
   Timer? _ticker;
 
@@ -111,6 +119,7 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
     _pin.dispose();
     _currentPin.dispose();
     _newPin.dispose();
+    _kidPin.dispose();
     super.dispose();
   }
 
@@ -125,33 +134,54 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
     final bool sessionBacked = store.isParentModeSessionBacked;
     final bool locked = store.isParentPinLockedAt(now);
 
+    // W14：孩子模式的三态。它的优先级高于家长模式（服务端已把角色压到 child），
+    // 所以界面上三块互斥：孩子模式中 / 孩子模式已到期 / 家长模式 / 孩子模式。
+    final bool kidActive = store.isKidModeActiveAt(now);
+    final bool kidExpired = store.isKidModeExpiredAt(now);
+    final bool kidModeOn = kidActive || kidExpired;
+    final int kidSeconds = store.kidModeRemainingSeconds(now);
+
     return SheetFrame(
       title: '家长模式',
-      subtitle: !parentMode
-          ? '输入家长 PIN 可以在这台设备上临时获得 5 分钟家长权限'
-          : sessionBacked
-              ? '这台设备已以家长身份登录，登录期间一直是家长权限'
-              : '这台设备现在是家长权限（${_mmss(store.parentModeRemainingSeconds(now))} 后自动收回）',
-      actionLabel: parentMode
-          ? '退出家长模式'
-          : locked
-              ? '已锁定，请稍后再试'
-              : '进入家长模式',
-      actionIcon: parentMode
-          ? Icons.lock_open_rounded
-          : Icons.lock_outline_rounded,
-      onAction: _busy || (!parentMode && locked)
+      subtitle: kidActive
+          ? '孩子模式已开启：还剩 ${kidModeMmss(kidSeconds)}（到点不会自动回家长模式，要用 PIN 收回）'
+          : kidExpired
+              ? '孩子模式的时间到了 —— 请输入家长 PIN 收回，手机才会回到家长权限'
+              : !parentMode
+                  ? '输入家长 PIN 可以在这台设备上临时获得 5 分钟家长权限'
+                  : sessionBacked
+                      ? '这台设备已以家长身份登录，登录期间一直是家长权限'
+                      : '这台设备现在是家长权限（${_mmss(store.parentModeRemainingSeconds(now))} 后自动收回）',
+      actionLabel: kidModeOn
+          ? '结束孩子模式'
+          : parentMode
+              ? '退出家长模式'
+              : locked
+                  ? '已锁定，请稍后再试'
+                  : '进入家长模式',
+      actionIcon: kidModeOn
+          ? Icons.timer_off_outlined
+          : parentMode
+              ? Icons.lock_open_rounded
+              : Icons.lock_outline_rounded,
+      onAction: _busy || (!parentMode && !kidModeOn && locked)
           ? null
-          : (parentMode ? _exit : _enter),
+          : kidModeOn
+              ? _exitKidMode
+              : (parentMode ? _exit : _enter),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           if (_busy) const LinearProgressIndicator(minHeight: 2),
           ..._statusRows(now, parentMode, locked),
           const SizedBox(height: 12),
-          ...(parentMode
-              ? _parentModeRows(now, sessionBacked)
-              : _childModeRows(now, locked)),
+          if (kidModeOn)
+            ..._kidModeRows(now, kidExpired)
+          else if (parentMode) ...<Widget>[
+            ..._parentModeRows(now, sessionBacked),
+            ..._kidModeLauncherRows(),
+          ] else
+            ..._childModeRows(now, locked),
           ..._pinEditorRows(store),
           if (_error != null) ...<Widget>[
             const SizedBox(height: 10),
@@ -293,6 +323,129 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
     ];
   }
 
+  /// 孩子模式进行中 / 已到期：倒计时 + 用家长 PIN 收回（W14）。
+  ///
+  /// ★ 到期态**不是**「自动结束」：手机停在孩子权限，等家长来收。
+  ///   界面必须把这句话写出来，否则家长会以为"30 分钟一到就恢复了"，
+  ///   而实际上孩子只是失去了时间、并没有失去权限 —— 那是**更糟**的错觉。
+  List<Widget> _kidModeRows(DateTime now, bool expired) {
+    final int seconds = widget.store.kidModeRemainingSeconds(now);
+    return <Widget>[
+      AppCard(
+        radius: 16,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              expired ? Icons.timer_off_outlined : Icons.schedule_rounded,
+              size: 20,
+              color: expired ? AppColors.pointSpend : AppColors.primaryDeep,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                expired ? '时间到了 —— 等家长 PIN 收回' : '还能用 ${kidModeMmss(seconds)}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      _hint(
+        expired
+            ? '时间到了以后手机不会自动回到家长模式 —— 这是故意的：'
+                '否则孩子等一等就能自己批心愿。请输入家长 PIN 收回。'
+            : '这段时间里手机是孩子权限：可以打卡、提交心愿（需要家长审批）。'
+                '到点后不会自动回家长模式，需要用下面的 PIN 收回。',
+        danger: expired,
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _kidPin,
+        enabled: !_busy,
+        keyboardType: TextInputType.number,
+        obscureText: true,
+        maxLength: 6,
+        inputFormatters: <TextInputFormatter>[
+          FilteringTextInputFormatter.digitsOnly,
+        ],
+        decoration: const InputDecoration(
+          labelText: '家长 PIN',
+          hintText: '4–6 位数字',
+          counterText: '',
+        ),
+        onSubmitted: (_) {
+          if (_busy) return;
+          _exitKidMode();
+        },
+      ),
+      const SizedBox(height: 8),
+      Align(
+        alignment: Alignment.centerRight,
+        child: FilledButton(
+          onPressed: _busy ? null : _exitKidMode,
+          child: const Text('结束孩子模式'),
+        ),
+      ),
+    ];
+  }
+
+  /// 家长模式下：把手机交给孩子用 N 分钟（W14）。
+  ///
+  /// ── 为什么把"写在纸上"的提示常驻在时长下面 ──────────────────────────────
+  ///   这是产品的核心意图（家长原话）：先让孩子把愿望落到纸上、做好规划，
+  ///   再给一段**有限**时间填。把提示藏进帮助页等于没说。
+  /// ── 为什么默认 15 而不是 30 ───────────────────────────────────────────────
+  ///   默认即上限会鼓励"反正也是 30 分钟"；15 让"少用一会儿"成为默认选择。
+  List<Widget> _kidModeLauncherRows() {
+    return <Widget>[
+      const SizedBox(height: 16),
+      const Divider(height: 1),
+      const SizedBox(height: 12),
+      const Text(
+        '把手机交给孩子用',
+        style: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
+        ),
+      ),
+      const SizedBox(height: 6),
+      _hint('建议先让孩子把想做的写在纸上、想清楚，再来手机上填 —— 减少盯着屏幕的时间。'),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: <Widget>[
+          for (final int minutes in kKidModeDurationChoices)
+            ChoiceChip(
+              label: Text('$minutes 分钟'),
+              selected: _kidMinutes == minutes,
+              onSelected: _busy
+                  ? null
+                  : (_) => setState(() => _kidMinutes = minutes),
+            ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      _hint('到点后需要你输入家长 PIN 收回；不会自动回到家长模式。'),
+      const SizedBox(height: 8),
+      Align(
+        alignment: Alignment.centerRight,
+        child: FilledButton.tonalIcon(
+          onPressed: _busy ? null : _enterKidMode,
+          icon: const Icon(Icons.timer_outlined, size: 18),
+          label: Text('给孩子用 $_kidMinutes 分钟'),
+        ),
+      ),
+    ];
+  }
+
   /// 「设置 / 修改家长 PIN」折叠区。
   ///
   /// 默认收起：这个面板 90% 的用法是「进去 5 分钟」，把两个输入框摆在最上面
@@ -404,6 +557,45 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
       _error = failure;
     });
     if (failure == null) _toast('已退出家长模式');
+  }
+
+  /// 开孩子模式（W14）。时长由面板上的 chip 决定（默认 15 分钟）。
+  Future<void> _enterKidMode() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final String? failure = await widget.store.enterKidMode(_kidMinutes);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = failure;
+    });
+    if (failure == null) {
+      _toast('孩子模式已开启：$_kidMinutes 分钟后需要家长 PIN 收回');
+    }
+  }
+
+  /// 用家长 PIN 结束孩子模式（W14）—— 到期后也是这一条。
+  Future<void> _exitKidMode() async {
+    final String pin = _kidPin.text.trim();
+    final String? invalid = validateParentPin(pin);
+    if (pin.isEmpty || invalid != null) {
+      setState(() => _error = pin.isEmpty ? '请输入家长 PIN。' : invalid);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final String? failure = await widget.store.exitKidMode(pin);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = failure;
+      if (failure == null) _kidPin.clear();
+    });
+    if (failure == null) _toast('孩子模式已结束，手机回到家长权限');
   }
 
   /// 存量账号的唯一自助出口（`43` §8 D7）：退出登录，让家长用手机号/密码重登。

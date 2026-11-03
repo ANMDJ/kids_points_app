@@ -18,7 +18,9 @@ import { RequireAction } from '../permissions/require-action.decorator'
 import type { RequestWithActor } from '../permissions/actor'
 import type { AuthOperator } from './auth.repository'
 import { AuthService, type ParentModeView, type ParentPinView } from './auth.service'
+import { EnterKidModeDto } from './dto/enter-kid-mode.dto'
 import { EnterParentModeDto } from './dto/enter-parent-mode.dto'
+import { ExitKidModeDto } from './dto/exit-kid-mode.dto'
 import { SetParentPinDto } from './dto/set-parent-pin.dto'
 
 /**
@@ -29,6 +31,19 @@ import { SetParentPinDto } from './dto/set-parent-pin.dto'
  *   `POST   /auth/parent-mode`  `switch_role_mode`  用 PIN 换 5 分钟家长模式
  *   `DELETE /auth/parent-mode`  `switch_role_mode`  主动退出（不需要 PIN）
  *   `POST   /auth/parent-pin`   `manage_parent_pin` 首次设置 / 修改家长 PIN
+ *
+ * ── W14（2026-11-03）新增孩子模式的两条 ─────────────────────────────────────
+ *   `POST   /auth/kid-mode`     `switch_role_mode`  把手机交给孩子用 1–30 分钟
+ *   `DELETE /auth/kid-mode`     `switch_role_mode`  用家长 PIN 收回（到期也要收）
+ *
+ *   为什么挂在**同一个控制器**：它们改的是同一行 `DeviceSession`
+ *   （`activeRole` / `expiresAt` / `kidModeUntil`），共用 `this.load()` 的
+ *   409 语义与同一套 PIN 校验；拆成两个控制器会把"这台设备现在是什么模式"
+ *   这件事切成两个互不知道的端点。
+ *
+ *   为什么 `DELETE` 带请求体：收回要 PIN。`DELETE /auth/parent-mode` 不带体
+ *   是因为退出是降级（不需要凭据）；这里方向相反，凭据必须进请求体
+ *   （绝不进 URL —— 那会出现在访问日志里）。
  *
  * ── 为什么是四条而不是 `02` §7 表格里的"一条切换" ───────────────────────────
  *   · `GET`：客户端要显示「还剩 4:57」。没有它，App 重启后就**不知道**自己还在不在
@@ -111,6 +126,54 @@ export class AuthController {
       this.actorOf(req)
     )
   }
+
+  /**
+   * 开孩子模式（W14）：家长在**家长模式**下把手机交给孩子用 1–30 分钟。
+   *
+   * ★ 权限用的是 `switch_role_mode` 而不是新动作：矩阵对这一条给 child 也
+   *   ALLOW（孩子必须能把手机递给家长输 PIN）。真正的门在业务层 ——
+   *   `enterKidMode` 要求**当前角色是 guardian**，孩子自己调只会拿到 403
+   *   `KID_MODE_REQUIRES_PARENT_MODE`。改矩阵要多一份 contracts + 三端同步，
+   *   而这里没有任何新的"谁能做"语义。
+   */
+  @Post('kid-mode')
+  @HttpCode(200)
+  @RequireAction('switch_role_mode')
+  async enterKidMode(
+    @Body() dto: EnterKidModeDto,
+    @Headers(DEVICE_ID_HEADER) deviceId: string | undefined,
+    @Req() req: RequestWithActor
+  ): Promise<ParentModeView> {
+    return await this.service.enterKidMode(
+      this.childIdOf(req),
+      this.deviceIdOf(deviceId),
+      dto,
+      this.actorOf(req)
+    )
+  }
+
+  /**
+   * 用家长 PIN 收回孩子模式（W14）—— **到期后也走这一条**（A 方案）。
+   *
+   * 200 而不是 204：回包是"收回之后的模式现状"，界面直接拿它刷新倒计时
+   * （与 `DELETE /auth/parent-mode` 同一个形状、同一份 DTO）。
+   */
+  @Delete('kid-mode')
+  @HttpCode(200)
+  @RequireAction('switch_role_mode')
+  async exitKidMode(
+    @Body() dto: ExitKidModeDto,
+    @Headers(DEVICE_ID_HEADER) deviceId: string | undefined,
+    @Req() req: RequestWithActor
+  ): Promise<ParentModeView> {
+    return await this.service.exitKidMode(
+      this.childIdOf(req),
+      this.deviceIdOf(deviceId),
+      dto,
+      this.actorOf(req)
+    )
+  }
+
 
   /** Guard 已保证 `kpActor` 存在；断言只为编译期收窄（缺失 = 装配错误）。 */
   private actorOf(req: RequestWithActor): AuthOperator {

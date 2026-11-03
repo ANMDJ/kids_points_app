@@ -172,3 +172,66 @@ describe('组 E：toSessionActor（身份产物）', () => {
     assert.throws(() => toSessionActor(row({ childId: 'child-2' }), CHILD_ID, NOW), SessionRowShapeError)
   })
 })
+
+// ── 组 F：孩子模式（W14，2026-11-03）─────────────────────────────────────────
+/**
+ * 这一组钉住 `effectiveRole()` 的**优先级**与方向：
+ *   `kidModeUntil`（有值） > `expiresAt/activeRole`。
+ * 关键不是"窗口内降级"（那显然），而是：
+ *   · 已经到点的 `kidModeUntil` **仍然**降级（A 方案：等半小时不能自动回家长）；
+ *   · `viewer` 不被改成 `child`（那是提权，不是降级）；
+ *   · 坏时间戳 ⇒ 500 而不是"当成没开孩子模式"（后者会静默给家长权限）。
+ */
+describe('组 F：孩子模式的降级优先级', () => {
+  it('窗口内 ⇒ child（即使会话是 guardian、且远未到期）', () => {
+    const r = row({ kidModeUntil: new Date(NOW.getTime() + 10 * 60_000) })
+    assert.equal(effectiveRole(r, NOW), 'child')
+    assert.equal(toSessionActor(r, CHILD_ID, NOW).actor.role, 'child')
+  })
+
+  it('★ 已经到点 ⇒ 仍然是 child（到期不自动回家长模式）', () => {
+    assert.equal(effectiveRole(row({ kidModeUntil: new Date(NOW.getTime() - 1) }), NOW), 'child')
+  })
+
+  it('★ 边界：kidModeUntil === now ⇒ child（与 expiresAt 同一个边界口径）', () => {
+    assert.equal(effectiveRole(row({ kidModeUntil: new Date(NOW.getTime()) }), NOW), 'child')
+  })
+
+  it('接受 ISO 字符串（线上传输形态）', () => {
+    const r = row({ kidModeUntil: '2026-10-15T13:05:00.000Z' })
+    assert.equal(effectiveRole(r, NOW), 'child')
+  })
+
+  it('★ viewer 不被降级成 child（那是提权：只读成员会突然能打卡）', () => {
+    const r = row({
+      activeRole: 'viewer',
+      kidModeUntil: new Date(NOW.getTime() + 10 * 60_000),
+      expiresAt: new Date(NOW.getTime() + 10 * 60_000)
+    })
+    assert.equal(effectiveRole(r, NOW), 'viewer')
+  })
+
+  it('child 本来就是 child（降级是幂等的）', () => {
+    const r = row({ activeRole: 'child', kidModeUntil: new Date(NOW.getTime() + 60_000) })
+    assert.equal(effectiveRole(r, NOW), 'child')
+  })
+
+  it('kidModeUntil 缺省/null ⇒ 走原来的 TTL 逻辑（旧会话行行为不变）', () => {
+    assert.equal(effectiveRole(row({ kidModeUntil: null }), NOW), 'guardian')
+    assert.equal(effectiveRole(row(), NOW), 'guardian')
+    assert.equal(
+      effectiveRole(row({ kidModeUntil: null, expiresAt: new Date(NOW.getTime() - 1) }), NOW),
+      'child'
+    )
+  })
+
+  it('★ 坏时间戳 ⇒ INVALID_KID_MODE_EXPIRY（绝不"当成没开孩子模式"）', () => {
+    const bad = row({ kidModeUntil: 'not-a-date' })
+    assert.equal(shapeErrorCode(() => effectiveRole(bad, NOW)), 'INVALID_KID_MODE_EXPIRY')
+    assert.equal(
+      shapeErrorCode(() => resolveSession(bad, CHILD_ID, NOW)),
+      'INVALID_KID_MODE_EXPIRY'
+    )
+  })
+})
+

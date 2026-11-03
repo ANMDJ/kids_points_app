@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../models/kid_mode.dart' show validateKidModeMinutes;
 import '../models/onboarding.dart' show validateParentPin;
 import 'http_transport.dart';
 import 'parent_mode_dto.dart';
@@ -35,6 +36,20 @@ abstract class ParentModeApi {
 
   /// `DELETE /auth/parent-mode`：主动退出（**不需要** PIN，幂等）。
   Future<ParentModeDto> exit();
+
+  /// `POST /auth/kid-mode`：把手机交给孩子用 `durationMinutes` 分钟（W14，1–30）。
+  ///
+  /// 失败语义（服务端逐字对应）：
+  ///   · `403 KID_MODE_REQUIRES_PARENT_MODE` ⇒ 当前不在家长模式，先输 PIN；
+  ///   · `409 KID_MODE_REQUIRES_PIN`        ⇒ 还没设 PIN（到点收不回来）；
+  ///   · `409 KID_MODE_ALREADY_ACTIVE`      ⇒ 已经开着，先结束这一次。
+  Future<ParentModeDto> enterKidMode(int durationMinutes);
+
+  /// `DELETE /auth/kid-mode`：用家长 PIN 收回孩子模式（W14）。
+  ///
+  /// **到期后也走这一条**（A 方案）：到点不会自动回家长模式，必须验 PIN。
+  /// 失败语义与 [enter] 完全一致（400 不计次 / 403 计次 / 429 锁定）。
+  Future<ParentModeDto> exitKidMode(String pin);
 
   /// `POST /auth/parent-pin`：首次设置 / 修改家长 PIN。
   ///
@@ -109,6 +124,42 @@ class ParentModeApiClient implements ParentModeApi {
   @override
   Future<ParentModeDto> exit() async {
     final Object? decoded = await _send('DELETE', '/auth/parent-mode', null);
+    return _parse(
+      decoded,
+      (Object? raw, String path) => ParentModeDto.fromJson(raw, path),
+    );
+  }
+
+  @override
+  Future<ParentModeDto> enterKidMode(int durationMinutes) async {
+    // 本地只挡"注定 400"的输入；服务端仍会 `clampKidModeMinutes()` 再夹一次。
+    final String? invalid = validateKidModeMinutes(durationMinutes);
+    if (invalid != null) {
+      throw WriteApiException(
+        WriteFailureKind.badRequest,
+        invalid,
+        code: 'KID_MODE_DURATION_INVALID',
+      );
+    }
+    final Object? decoded = await _send(
+      'POST',
+      '/auth/kid-mode',
+      <String, Object?>{'durationMinutes': durationMinutes},
+    );
+    return _parse(
+      decoded,
+      (Object? raw, String path) => ParentModeDto.fromJson(raw, path),
+    );
+  }
+
+  @override
+  Future<ParentModeDto> exitKidMode(String pin) async {
+    final String normalized = _requirePin(pin);
+    final Object? decoded = await _send(
+      'DELETE',
+      '/auth/kid-mode',
+      <String, Object?>{'pin': normalized},
+    );
     return _parse(
       decoded,
       (Object? raw, String path) => ParentModeDto.fromJson(raw, path),

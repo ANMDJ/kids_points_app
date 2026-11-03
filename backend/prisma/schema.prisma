@@ -379,6 +379,17 @@ model DeviceSession {
   expiresAt  DateTime
   lastSeenAt DateTime @default(now())
 
+  /// 孩子模式（W14，2026-11-03 / `docs/design/51-kid-mode-window.md`）：
+  /// 「把手机交给孩子用 N 分钟（1–30）」的到期**绝对时刻**；NULL = 没开。
+  ///
+  /// ★ 判定优先级：**kidModeUntil > expiresAt/activeRole**（`session.gate.ts`）。
+  ///   有值就降级为 child —— **包括已经到点的情况**：到期不自动回家长模式，
+  ///   要家长输 PIN 才收回（否则孩子等半小时就能批自己的心愿）。
+  /// ★ 为什么不复用 `expiresAt`：那一列已经背了「邀请/登录 30 天」与
+  ///   「PIN 换来的 5 分钟」两个语义，`parentModeSourceOf()` 只能靠算术猜来源。
+  ///   再塞第三种语义，客户端将无法区分"家长权限到期"与"孩子时间用完"。
+  kidModeUntil DateTime?
+
   child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 

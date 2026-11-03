@@ -103,6 +103,11 @@ function modeJson(overrides = {}) {
     pinConfigured: true,
     remainingAttempts: PARENT_PIN_MAX_ATTEMPTS,
     lockedUntil: null,
+    // W14：孩子模式默认全关（既有断言因此不需要逐条改）。
+    kidMode: false,
+    kidModeExpired: false,
+    kidModeUntil: null,
+    kidModeRemainingSeconds: 0,
     ...overrides
   }
 }

@@ -8,6 +8,7 @@ import '../models/family_deletion.dart';
 import '../models/family_export.dart';
 import '../models/habit.dart';
 import '../models/invite.dart';
+import '../models/kid_mode.dart';
 import '../models/member.dart';
 import '../models/onboarding.dart';
 import '../models/parent_mode.dart';
@@ -491,6 +492,24 @@ class AppStore extends ChangeNotifier {
   /// 自减的倒计时说谎，而服务端给的 [ParentMode.expiresAt] 是绝对时刻。
   int parentModeRemainingSeconds(DateTime now) =>
       _parentMode?.remainingSecondsAt(now) ?? 0;
+
+  /// 孩子模式正在窗口内（W14；服务端快照）。
+  bool get isKidMode => _parentMode?.kidMode ?? false;
+
+  /// 孩子模式已到点、等家长 PIN 收回（W14；A 方案）。
+  bool get isKidModeExpired => _parentMode?.kidModeExpired ?? false;
+
+  /// 孩子模式**此刻**是否仍在窗口内（用本地时钟现算绝对时刻）。
+  bool isKidModeActiveAt(DateTime now) =>
+      _parentMode?.kidModeActiveAt(now) ?? false;
+
+  /// 孩子模式是否处于「时间到了、等家长输 PIN」。
+  bool isKidModeExpiredAt(DateTime now) =>
+      _parentMode?.kidModeExpiredAt(now) ?? false;
+
+  /// 孩子模式还剩几秒（向上取整；未开 / 已到期都 0）。
+  int kidModeRemainingSeconds(DateTime now) =>
+      _parentMode?.kidModeSecondsAt(now) ?? 0;
 
   // ──────────────────── 6 位验证码 · 启动闸门（W9-C） ────────────────────
   //
@@ -4351,6 +4370,107 @@ class AppStore extends ChangeNotifier {
       return error.userMessage;
     } catch (error) {
       return '退出家长模式的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _parentModeBusy = false;
+      _notify();
+    }
+  }
+
+  /// 开孩子模式（`POST /auth/kid-mode`，W14）。成功返回 null。
+  ///
+  /// ── 为什么本地先判一次 [isParentMode] ──────────────────────────────────────
+  ///   服务端会回 `403 KID_MODE_REQUIRES_PARENT_MODE`（真正的门），但界面在
+  ///   **非家长模式**下根本不显示这个区块；真走到这里只可能是快照过期。
+  ///   本地拦一下能直接说「先进入家长模式」，而不是一句 HTTP 403。
+  ///
+  /// ── 时长 1–30 分钟由家长输入 ───────────────────────────────────────────────
+  ///   默认 15（不是 30）：产品意图是「先写在纸上、想清楚再填」，
+  ///   默认即上限会让"少用一会儿"变成额外操作。
+  Future<String?> enterKidMode(int durationMinutes) async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法开启孩子模式。';
+    if (_parentModeBusy) return '正在切换，请稍候…';
+
+    final String? invalid = validateKidModeMinutes(durationMinutes);
+    if (invalid != null) return invalid;
+
+    // 已经开着（或到期未收回）⇒ 先结束这一次，不静默续期。
+    // 快照为 null = 还没拉到，交给服务端判（本地不猜"你不在家长模式"）。
+    if (_parentMode != null) {
+      if (isKidMode || isKidModeExpired) {
+        return '孩子模式已经开着：请先输入家长 PIN 结束这一次，再重新设置时长。';
+      }
+      if (!isParentMode) {
+        return '请先输入家长 PIN 进入家长模式，再给孩子开启时间。';
+      }
+    }
+
+    _parentModeBusy = true;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentModeDto dto = await api.enterKidMode(durationMinutes);
+      if (_disposed) return null;
+      _applyParentModeDto(dto);
+      _parentModeReadStatus = ReadStatus.ready;
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 409（已经开着 / 没设 PIN）与 403（不在家长模式）都说明快照该对齐了。
+      if (error.kind == WriteFailureKind.conflict ||
+          error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.badRequest) {
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '开启孩子模式的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _parentModeBusy = false;
+      _notify();
+    }
+  }
+
+  /// 用家长 PIN 收回孩子模式（`DELETE /auth/kid-mode`，W14）。成功返回 null。
+  ///
+  /// **到期后也走这一条**：A 方案下到点不会自动回家长模式，
+  /// 所以「结束孩子模式」是家长唯一能拿回权限的动作，PIN 必须验。
+  Future<String?> exitKidMode(String pin) async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法结束孩子模式。';
+    if (_parentModeBusy) return '正在切换，请稍候…';
+
+    final String trimmed = pin.trim();
+    if (trimmed.isEmpty) return '请输入家长 PIN。';
+    final String? invalid = validateParentPin(trimmed);
+    if (invalid != null) return invalid;
+
+    _parentModeBusy = true;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentModeDto dto = await api.exitKidMode(trimmed);
+      if (_disposed) return null;
+      _applyParentModeDto(dto);
+      _parentModeReadStatus = ReadStatus.ready;
+      _parentPinLockSeconds = 0;
+      return null;
+    } on ParentPinLockException catch (error) {
+      if (_disposed) return error.userMessage;
+      _parentPinLockSeconds = error.retryAfterSeconds;
+      await refreshParentMode();
+      return error.userMessage;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict ||
+          error.kind == WriteFailureKind.badRequest ||
+          error.kind == WriteFailureKind.unauthenticated) {
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '结束孩子模式的请求已发出，但结果无法确认。请刷新后查看。';
     } finally {
       _parentModeBusy = false;
       _notify();
