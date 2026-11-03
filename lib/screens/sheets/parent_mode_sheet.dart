@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../data/app_scope.dart';
 import '../../data/app_store.dart';
@@ -9,7 +8,9 @@ import '../../models/kid_mode.dart';
 import '../../models/onboarding.dart' show validateParentPin;
 import '../../theme/app_colors.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/pin_pad.dart';
 import '../../widgets/sheet_frame.dart';
+import '../parent_pin_setup_screen.dart';
 import '../session_actions.dart';
 
 /// 打开「家长模式」面板（W8-C）—— 入口固定在「我的」页。
@@ -75,13 +76,12 @@ class ParentModeSheet extends StatefulWidget {
 }
 
 class _ParentModeSheetState extends State<ParentModeSheet> {
-  final TextEditingController _pin = TextEditingController();
-  final TextEditingController _currentPin = TextEditingController();
-  final TextEditingController _newPin = TextEditingController();
+  /// 锁屏式数字键盘的输入状态（2026-11-04：不再用系统键盘的 `TextField`）。
+  final PinInputController _pin = PinInputController();
 
   /// 结束孩子模式要用的 PIN（与「进入家长模式」的 `_pin` 分开：
   /// 两个动作的失败文案不同，共用控制器会让上一次的输入串到下一次）。
-  final TextEditingController _kidPin = TextEditingController();
+  final PinInputController _kidPin = PinInputController();
 
   /// 家长选择的「给孩子用多少分钟」（1–30，默认 15）。
   int _kidMinutes = kKidModeDefaultMinutes;
@@ -91,9 +91,6 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
 
   /// 本组件的在途标记（store 里另有 `isParentModeBusy` / `isParentPinBusy`）。
   bool _busy = false;
-
-  /// 「设置 / 修改 PIN」折叠区是否展开。
-  bool _pinEditorOpen = false;
 
   /// 面板内的即时错误（由 store 的返回值原样搬到界面上）。
   String? _error;
@@ -117,8 +114,6 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
   void dispose() {
     _ticker?.cancel();
     _pin.dispose();
-    _currentPin.dispose();
-    _newPin.dispose();
     _kidPin.dispose();
     super.dispose();
   }
@@ -234,7 +229,7 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
     ];
   }
 
-  /// 不在家长模式时：PIN 输入框（＋「没有 PIN」时的唯一自助出口）。
+  /// 不在家长模式时：PIN 键盘（＋「没有 PIN」时的唯一自助出口）。
   List<Widget> _childModeRows(DateTime now, bool locked) {
     final AppStore store = widget.store;
     // `parentMode != null` ⇒ 状态已知，才敢判断「这个账号真的没有 PIN」。
@@ -242,24 +237,10 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
         store.parentMode != null && !store.isParentPinConfigured;
     return <Widget>[
       const SizedBox(height: 4),
-      TextField(
+      PinPad(
         controller: _pin,
         enabled: !locked && !_busy,
-        keyboardType: TextInputType.number,
-        obscureText: true,
-        maxLength: 6,
-        inputFormatters: <TextInputFormatter>[
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        decoration: const InputDecoration(
-          labelText: '家长 PIN',
-          hintText: '4–6 位数字',
-          counterText: '',
-        ),
-        onSubmitted: (_) {
-          if (locked || _busy) return;
-          _enter();
-        },
+        hintText: '4–6 位数字',
       ),
       // 没有 PIN 且不在家长模式 ⇒ 上面那行提示说的最后一步必须真的能点。
       // 只有拿到 `signOut` 时才画（预览 / 未登录画了也没用）。
@@ -365,24 +346,10 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
         danger: expired,
       ),
       const SizedBox(height: 12),
-      TextField(
+      PinPad(
         controller: _kidPin,
         enabled: !_busy,
-        keyboardType: TextInputType.number,
-        obscureText: true,
-        maxLength: 6,
-        inputFormatters: <TextInputFormatter>[
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        decoration: const InputDecoration(
-          labelText: '家长 PIN',
-          hintText: '4–6 位数字',
-          counterText: '',
-        ),
-        onSubmitted: (_) {
-          if (_busy) return;
-          _exitKidMode();
-        },
+        hintText: '4–6 位数字',
       ),
       const SizedBox(height: 8),
       Align(
@@ -461,70 +428,32 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
-          onPressed:
-              _busy ? null : () => setState(() => _pinEditorOpen = !_pinEditorOpen),
-          icon: Icon(
-            _pinEditorOpen ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-            size: 18,
-          ),
+          // 2026-11-04：设 / 改 PIN 改成**独立整页**（三步：当前 PIN → 新 PIN →
+          // 再输一遍），用锁屏式数字键盘。弹层里塞两个 TextField 既挤，
+          // 又会被系统键盘盖住下面的「保存」。
+          onPressed: _busy
+              ? null
+              : () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ParentPinSetupScreen(),
+                    ),
+                  ),
+          icon: const Icon(Icons.pin_outlined, size: 18),
           label: Text(configured ? '修改家长 PIN' : '设置家长 PIN'),
         ),
       ),
-      if (_pinEditorOpen) ...<Widget>[
-        if (configured) ...<Widget>[
-          TextField(
-            controller: _currentPin,
-            enabled: !_busy,
-            keyboardType: TextInputType.number,
-            obscureText: true,
-            maxLength: 6,
-            inputFormatters: <TextInputFormatter>[
-              FilteringTextInputFormatter.digitsOnly,
-            ],
-            decoration: const InputDecoration(
-              labelText: '当前 PIN',
-              counterText: '',
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-        TextField(
-          controller: _newPin,
-          enabled: !_busy,
-          keyboardType: TextInputType.number,
-          obscureText: true,
-          maxLength: 6,
-          inputFormatters: <TextInputFormatter>[
-            FilteringTextInputFormatter.digitsOnly,
-          ],
-          decoration: InputDecoration(
-            labelText: configured ? '新的 PIN' : '家长 PIN',
-            hintText: '4–6 位数字',
-            counterText: '',
-          ),
-        ),
-        const SizedBox(height: 6),
-        _hint(
-          configured
-              ? '改掉之后，其它设备上的旧 PIN 立刻失效；当前 5 分钟家长模式不受影响。'
-              : '设置后进入家长模式就需要它。忘记 PIN 目前只能由另一位家长重新设置。',
-        ),
-        const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerRight,
-          child: FilledButton(
-            onPressed: _busy ? null : _savePin,
-            child: Text(configured ? '保存新 PIN' : '设置 PIN'),
-          ),
-        ),
-      ],
+      _hint(
+        configured
+            ? '改掉之后，其它设备上的旧 PIN 立刻失效。'
+            : '设置后进入家长模式、以及解开本机锁都要它。忘记 PIN 只能由另一位家长重设。',
+      ),
     ];
   }
 
   // --------------------------------------------------------------- 动作
 
   Future<void> _enter() async {
-    final String pin = _pin.text.trim();
+    final String pin = _pin.value.trim();
     final String? invalid = validateParentPin(pin);
     if (pin.isEmpty || invalid != null) {
       setState(() => _error = pin.isEmpty ? '请输入家长 PIN。' : invalid);
@@ -578,7 +507,7 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
 
   /// 用家长 PIN 结束孩子模式（W14）—— 到期后也是这一条。
   Future<void> _exitKidMode() async {
-    final String pin = _kidPin.text.trim();
+    final String pin = _kidPin.value.trim();
     final String? invalid = validateParentPin(pin);
     if (pin.isEmpty || invalid != null) {
       setState(() => _error = pin.isEmpty ? '请输入家长 PIN。' : invalid);
@@ -618,43 +547,6 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
     final NavigatorState navigator = Navigator.of(context);
     if (navigator.canPop()) navigator.pop();
     await signOut();
-  }
-
-  Future<void> _savePin() async {
-    final AppStore store = widget.store;
-    final bool configured = store.isParentPinConfigured;
-    final String next = _newPin.text.trim();
-    final String? invalid = validateParentPin(next);
-    if (next.isEmpty || invalid != null) {
-      setState(() => _error = next.isEmpty ? '请输入新的家长 PIN。' : invalid);
-      return;
-    }
-    final String current = _currentPin.text.trim();
-    if (configured && current.isEmpty) {
-      setState(() => _error = '请输入当前家长 PIN。');
-      return;
-    }
-
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    final String? failure = await store.setParentPin(
-      pin: next,
-      currentPin: configured ? current : null,
-    );
-    if (!mounted) return;
-    final bool changed = store.lastParentPinResult?.changed ?? false;
-    setState(() {
-      _busy = false;
-      _error = failure;
-      if (failure == null) {
-        _pinEditorOpen = false;
-        _currentPin.clear();
-        _newPin.clear();
-      }
-    });
-    if (failure == null) _toast(changed ? '家长 PIN 已修改' : '家长 PIN 已设置');
   }
 
   void _toast(String message) {

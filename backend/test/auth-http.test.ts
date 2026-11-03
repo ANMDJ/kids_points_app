@@ -971,3 +971,111 @@ describe('组 G：孩子模式（W14）', () => {
 
 })
 
+// ══ 组 H：POST /auth/parent-pin/verify（2026-11-04，App 本机 PIN 锁）══════════════
+/**
+ * 要钉住的是**五条**事实（`docs/design/52-app-pin-lock.md` §3）：
+ *   ① 只回答「对不对」：成功后**不改**会话行（`activeRole` / `expiresAt` 原样），
+ *      也不清零 `pinFailedCount` —— 所以它不会把 30 天家长会话压成 5 分钟；
+ *   ② 值不对 ⇒ 403 + `remainingAttempts` 递减，并**真的记了一次**（成员级计次）；
+ *   ③ 格式错 ⇒ 400 且不计次（与 `POST /auth/parent-mode` 逐字一致）；
+ *   ④ 没设过 PIN ⇒ 409 `PARENT_PIN_NOT_SET`；锁定期 ⇒ 429 且 scrypt 零调用；
+ *   ⑤ 权限走 `switch_role_mode`：**孩子模式的会话也能验**（锁屏不该被 403 卡死）。
+ */
+describe('组 H：POST /auth/parent-pin/verify（只校验，不改角色）', () => {
+  let app!: INestApplication
+  let url = ''
+  let auth: AuthFake
+
+  const DAY_MS = 24 * 60 * 60 * 1000
+
+  before(async () => {
+    PIN_HASH = await hashPin(PIN)
+    auth = makeAuthFake({
+      [FAKE_DAD_ID]: { memberRole: 'guardian', pinHash: PIN_HASH },
+      [MOM_ID]: { memberRole: 'guardian', pinHash: null },
+      [FAKE_KID_ID]: { memberRole: 'child', pinHash: null }
+    })
+    ;({ app, url } = await startApp(auth))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    resetDad(auth)
+    Object.assign(auth.members[MOM_ID], {
+      pinHash: null,
+      pinFailedCount: 0,
+      pinLockedUntil: null,
+      activeRole: 'child'
+    })
+  })
+
+  it('PIN 正确 ⇒ 200 { valid:true }；角色 / TTL / 计数**都不动**', async () => {
+    // 以家长身份登录的设备（30 天会话）—— 正是「解锁不该压缩它」的那台。
+    const expiresAt = new Date(Date.now() + 30 * DAY_MS)
+    resetDad(auth, { activeRole: 'guardian', expiresAt })
+
+    const res = await request(url, 'POST', '/auth/parent-pin/verify', GUARDIAN, { pin: PIN })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.valid, true)
+    assert.equal(res.body.remainingAttempts, 5)
+
+    // 只读了一次成员位 + 跑了一次 scrypt；**没有**任何写调用。
+    assert.deepEqual(
+      auth.calls.map((call) => call.method),
+      ['readModeState']
+    )
+    assert.equal(auth.members[FAKE_DAD_ID]?.activeRole, 'guardian')
+    assert.equal(auth.members[FAKE_DAD_ID]?.expiresAt.toISOString(), expiresAt.toISOString())
+  })
+
+  it('PIN 不对 ⇒ 403 PARENT_PIN_INVALID + 计次（成员级）', async () => {
+    const res = await request(url, 'POST', '/auth/parent-pin/verify', GUARDIAN, { pin: '0000' })
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'PARENT_PIN_INVALID')
+    assert.equal(res.body.remainingAttempts, 4)
+    assert.equal(auth.members[FAKE_DAD_ID]?.pinFailedCount, 1)
+  })
+
+  it('格式错（3 位 / 带字母）⇒ 400 且**不计次**', async () => {
+    const short = await request(url, 'POST', '/auth/parent-pin/verify', GUARDIAN, { pin: '123' })
+    assert.equal(short.status, 400)
+    assert.equal(short.body.code, 'PARENT_PIN_FORMAT_INVALID')
+
+    const letters = await request(url, 'POST', '/auth/parent-pin/verify', GUARDIAN, { pin: '12a4' })
+    assert.equal(letters.status, 400)
+    assert.equal(letters.body.code, 'PARENT_PIN_FORMAT_INVALID')
+
+    assert.equal(auth.members[FAKE_DAD_ID]?.pinFailedCount, 0)
+  })
+
+  it('还没设过 PIN ⇒ 409 PARENT_PIN_NOT_SET（不是 401）', async () => {
+    const res = await request(url, 'POST', '/auth/parent-pin/verify', MOM, { pin: PIN })
+    assert.equal(res.status, 409)
+    assert.equal(res.body.code, 'PARENT_PIN_NOT_SET')
+  })
+
+  it('锁定期间 ⇒ 429 且一次 scrypt 都不跑', async () => {
+    auth.members[FAKE_DAD_ID]!.pinLockedUntil = new Date(Date.now() + 10 * 60_000)
+    auth.calls.length = 0
+
+    const res = await request(url, 'POST', '/auth/parent-pin/verify', GUARDIAN, { pin: PIN })
+    assert.equal(res.status, 429)
+    assert.equal(res.body.code, 'PARENT_PIN_LOCKED')
+    assert.ok(Number(res.body.retryAfterSeconds) > 0)
+    assert.equal(auth.calls.some((call) => call.method === 'recordPinFailure'), false)
+  })
+
+  it('孩子模式的会话也能验（锁屏不能被 403 卡死），但**不提权**', async () => {
+    // 孩子模式下 `activeRole` 是 child、且 kidModeUntil 还在窗口内。
+    resetDad(auth, { kidModeUntil: new Date(Date.now() + 10 * 60_000) })
+
+    const res = await request(url, 'POST', '/auth/parent-pin/verify', GUARDIAN, { pin: PIN })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.valid, true)
+    assert.equal(auth.members[FAKE_DAD_ID]?.activeRole, 'child')
+    assert.notEqual(auth.members[FAKE_DAD_ID]?.kidModeUntil, null)
+  })
+})
+
+

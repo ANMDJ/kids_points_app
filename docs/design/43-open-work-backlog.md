@@ -29,6 +29,9 @@
 
 | 编号 | 任务 | 现状 | 证据 |
 |---|---|---|---|
+| **P0-6** | 本机 PIN 锁 ＋「申请 / 消息」整页化（用户 2026-11-04 四条要求） | ✅ **App 侧已完成（2026-11-04）** | 见 [`52-app-pin-lock.md`](./52-app-pin-lock.md) §1：新增 `lib/screens/pin_guard.dart` / `parent_pin_setup_screen.dart` / `my_applications_screen.dart` / `notifications_screen.dart` / `lib/widgets/pin_pad.dart`；**删除** `date_code_gate.dart` + `date_code_api.dart` + `date_code_dto.dart` + 两个用例（`git rm`）；证据 = `flutter test` **509 全通过**（新增 `pin_pad_test` 7 条 + `pin_guard_test` 10 条）、`flutter analyze` **No issues found** |
+| **P0-6b** | 后端 `POST /auth/parent-pin/verify`（只校验、不改角色 —— 解锁不能把 30 天家长会话压成 5 分钟） | ✅ **已完成并上线（2026-11-04）** | 代码 = `backend/src/auth/auth.service.ts#verifyParentPin` / `auth.controller.ts`（`switch_role_mode`）/ `dto/verify-parent-pin.dto.ts`；用例 = `auth-http.test.ts` 组 H **6 条**、后端 `npm test` **66 文件 / 1201 用例全通过**、`typecheck`＋`typecheck:tests` 0 error。**已部署**：服务器 scp 三个文件 → `docker compose build`（`Image kids-api:0.1.0 Built`）→ `up -d` → 容器 `(healthy)`；探针 `POST /auth/parent-pin/verify` **404 → 401**、`GET /health` **200** |
+
 | **P0-2** | App「登录账号」面板 ＋「我的 → 退出登录」 | ✅ **已完成（2026-11-03）**（拆成 P0-2a / P0-2b 两条落地） | 本轮复核：「退出登录」= `lib/screens/session_actions.dart`（`signedIn` 分支注入）＋ `account_gate.dart` 的 `_signOut()`（清 childId + `onIdentityChanged`）＋ `profile_screen.dart` 的二次确认；「登录账号」= 下面的 P0-2b；证据 = `test/session_actions_test.dart` **2 条** ＋ `test/account_sheet_test.dart` **6 条**，`flutter test` **492 全通过**、`flutter analyze` 0 issue |
 | **P0-2b** | App 内「登录账号」面板：绑定/换绑手机号邮箱、设置/修改密码（`PUT /auth/account`） | ✅ **已完成（2026-11-03）** | 本轮复核：`lib/data/auth_api.dart` 新增 `fetchAccount()`（`GET /auth/account`）；`lib/screens/sheets/account_sheet.dart`（先读再画、只提交改动过的字段、`403 CURRENT_PASSWORD_INVALID` 留在本页）；入口 = 「我的」页「登录账号」（`profile_screen.dart`），`SessionActions` 带上同一份 `AuthApi`（同一 holder，401 才会真的清 token）；证据 = `test/account_sheet_test.dart` **6 条** |
 | **P0-3** | 「已有账号 → 输入邀请码加入家庭」（`POST /invites/accept`）双端入口 | ✅ **已完成（2026-11-03，双端）** | 本轮复核：**App** —— `lib/data/identity_api.dart` 新增 `acceptInvite()`（`POST /invites/accept`，回包复用 `ChildSessionResult`）；新增 `lib/screens/family_join_actions.dart`（动作只有一份），`account_gate.dart` 的 `_joinFamily` 走完 accept → `SessionScope.adoptChild` → `onIdentityChanged`；`lib/screens/sheets/join_family_sheet.dart` + 「我的 → 加入家庭」（`profile_screen.dart`）；`write_api_errors.dart` 补 `ALREADY_MEMBER` 取服务端原文。**小程序** —— `kids_points_mp/src/utils/invite_code.ts`、`write_dto.ts` 的 `InviteAcceptDto`、`write_api.ts` 的 `acceptInvite()`（带 `x-kp-child-id`）、`store.ts` 的 `submitAcceptInvite()`（切换 `sharedDeviceContext` + 清上一个家庭缓存 + 拉新首页）、`sheets/JoinFamilySheet.tsx` + 「我的」入口；`write_api_errors.ts` 补 400 `INVITE_CODE_MALFORMED` / 409 `INVITE_CODE_UNAVAILABLE` / `ALREADY_MEMBER`。**守门** —— 新增 `tools/invite-code-check.mjs`（三份逐字比对，篡改副本实测 **exit 1**），已接进 `npm run invite:check` 与 `npm run ci`。**证据**：`flutter test` **492 全通过**（新增 `test/join_family_test.dart` **9 条**）、`flutter analyze` **0 issue**、`kids_points_mp` `tsc --noEmit` **0 error**、`backend npm run typecheck` **0 error**、`node tools/invite-code-check.mjs` **PASS**。**仍未做**：真机 / 真库走一次「A 生成 → B 接受 → B 能读」的端到端验收（本环境无 GUI，见 §9） |
@@ -97,6 +100,24 @@ App `lib/data/write_api.dart` ＋ 小程序 `src/data/write_api.ts` 双端同构
 → 重跑 `900` → `verify-db` **ALL PASS** → `up -d` 后容器 `(healthy)`；`POST /kids/auth/kid-mode`
 从 **404** 变 **401 UNAUTHENTICATED**（= 新端点已上线）；`flutter test` **519 全通过**、
 小程序 `npm test` **ALL PASS**）。**仍未做**：小程序 `dist/` 上传（A 类，需微信开发者工具扫码）
+
+### 0.0 2026-11-04 本轮完成（四条用户要求）
+
+· **P0-6 本机 PIN 锁**：删掉「日期 ＋ 星期」6 位验证码闸门（`DateCodeGate` 整条链路 5 个文件，
+`git rm`），换成家长自己设的 PIN；`PinGuard` 在**冷启动 / 退到后台（`paused`/`hidden`）/
+孩子模式到点**时上锁，家长设备没设过 PIN 就先进设置页（需求 4(a)）。
+· **解锁只校验、不提权**：新增 `POST /auth/parent-pin/verify`（`switch_role_mode`，不改
+`activeRole` / `expiresAt`）。若复用 `POST /auth/parent-mode`，一台 30 天的家长会话解锁
+几次就被压成 5 分钟 —— 这正是用户问「当前不是默认家长模式吗」的成因（见 `52` §2）。
+· **PIN 输入改锁屏式**：`lib/widgets/pin_pad.dart`（6 个圆点 ＋ 自绘数字键盘，不弹系统键盘），
+三处复用：锁屏 / 家长模式面板 / 设置 PIN 页。
+· **申请 / 消息改整页列表**：`my_applications_screen.dart` / `notifications_screen.dart`
+（`ProfileScreen` 用 `Navigator.push`），删掉两个 `sheets/*.dart`。
+· 证据：`flutter test` **509 全通过**（新增 17 条）、`flutter analyze` **No issues found**、
+后端 `npm run typecheck` / `typecheck:tests` 0 error、`npm test` **66 文件 / 1201 用例全通过**；
+后端已重建镜像并 `up -d`（容器 `(healthy)`；`POST /auth/parent-pin/verify` **404 → 401**）。
+· **仍未做**：新 APK / 小程序包未构建与上传（C 类）、真机验收（D 类）、
+`POST /auth/date-code` 服务端端点下线（B 类）。详见 `52` §6。
 
 ### 0.1 「发布」到底卡在哪（2026-11-03 实测，别再靠印象）
 

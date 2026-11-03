@@ -20,8 +20,6 @@ import '../models/wish.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_icons.dart';
 import 'seed_data.dart';
-import 'date_code_api.dart';
-import 'date_code_dto.dart';
 import 'onboarding_api.dart';
 import 'onboarding_dto.dart';
 import 'onboarding_mapper.dart';
@@ -116,12 +114,10 @@ class AppStore extends ChangeNotifier {
     WriteApi? writeApi,
     OnboardingApi? onboardingApi,
     ParentModeApi? parentModeApi,
-    DateCodeApi? dateCodeApi,
   })  : _readApi = readApi,
         _writeApi = writeApi,
         _onboardingApi = onboardingApi,
-        _parentModeApi = parentModeApi,
-        _dateCodeApi = dateCodeApi {
+        _parentModeApi = parentModeApi {
     _resetToEmpty();
   }
 
@@ -144,13 +140,6 @@ class AppStore extends ChangeNotifier {
   /// 「我的」页那行入口**不显示**，因为本地没有 PIN 也没有会话 TTL，
   /// 画一个点了只会失败的按钮比不画更糟。
   final ParentModeApi? _parentModeApi;
-
-  /// 6 位验证码客户端（W9-C）。为 null = 不接后端 ⇒ **启动闸门整体不启用**
-  /// （预览 / 测试夹具照旧直接进首页）。
-  ///
-  /// 它是启动闸门的**唯一判据**：没有客户端就没有「谁来判定这个码对不对」，
-  /// 本地编一套规则等于把两条实现都留在仓库里。
-  final DateCodeApi? _dateCodeApi;
 
   /// 一页流水条数 —— 与后端 DTO 的上限（200）同口径，50 是「首屏够用」的折中。
   static const int _recordsPageSize = 50;
@@ -511,53 +500,41 @@ class AppStore extends ChangeNotifier {
   int kidModeRemainingSeconds(DateTime now) =>
       _parentMode?.kidModeSecondsAt(now) ?? 0;
 
-  // ──────────────────── 6 位验证码 · 启动闸门（W9-C） ────────────────────
+  // ──────────────────── 本机 PIN 锁（2026-11-04，替代 6 位日期码闸门） ────────
   //
-  // ★ 这一块**不是登录状态**。它记的只是「这次运行里，入口校验过了没有」：
-  //   · 只活在内存：App 重启就重新要一次。不做持久化 —— 把这个**公开可推导**
-  //     的码存成「已登录」，等于把门钥匙留在手机里；
-  //   · 不产生任何凭据：`POST /auth/date-code` 的回包里没有 token，服务端
-  //     也不知道「谁进来了」。身份仍然只来自 `x-kp-child-id` / 会话。
-  //   因此它只能是**本机软锁**（防误触、防小孩自己把手机打开乱点），不是认证。
+  // ★ 它是什么：App 的**入口软锁** —— 冷启动 / 从后台回到前台要输一次家长 PIN。
+  //   与「进入家长模式」是**两件事**：解锁走 `POST /auth/parent-pin/verify`，
+  //   **不改变**角色 / TTL。若复用「进入家长模式」，一台以家长身份登录的设备
+  //   （30 天会话）解锁几次就会被压成 5 分钟 —— 那正是用户报「家长模式怎么没了」
+  //   的成因（见 `docs/design/52-app-pin-lock.md` §3）。
+  //
+  // ★ 它不是什么：不是认证，也不是密码学意义上的安全边界。
+  //   · 值对不对只在服务端判定（库里只有 `scrypt$…`），所以**断网解不开**；
+  //   · 反过来，一次都拉不到 `/auth/parent-mode`（不知道有没有 PIN）时闸门
+  //     **放行** —— 软锁不该把 App 变成打不开的砖（见 `pin_guard.dart`）；
+  //   · 真正的权限边界仍只有一处：服务端的矩阵 + PIN 计次 / 锁定。
 
-  /// 闸门放行的时刻；null = 还锁着。
-  DateTime? _dateCodeUnlockedAt;
+  /// 本次运行（含后台往返）是否已经过 PIN 锁。构造 / 换身份时回到 false。
+  bool _appUnlocked = false;
 
-  /// 校验在途（防连点：连点两次会白烧两次限流额度）。
-  bool _dateCodeBusy = false;
+  /// 校验在途（防连点：连点两次会白烧两次失败次数）。
+  bool _appLockBusy = false;
 
-  /// 最近一次失败的说明（界面原样显示，不重新解释）。
-  String? _dateCodeError;
+  /// 最近一次解锁失败的说明（界面原样显示）。
+  String? _appLockError;
 
-  /// 最近一次 `429` 给的「等到什么时候」—— 存**绝对时刻**，界面每秒现算剩余秒数，
-  /// 这样切到后台再回来不会说谎。
-  DateTime? _dateCodeRetryUntil;
+  /// 「退到后台时孩子模式正开着」⇒ 回来时若窗口已结束，要补上锁。
+  bool _relockPending = false;
 
-  /// 最近一次回包（`dayOffset` 据此说「这是昨天的码」）。
-  DateCodeVerdictDto? _lastDateCodeVerdict;
+  /// 是否启用本机 PIN 锁（预览 / 测试夹具不启用）。
+  bool get hasParentPinLock => _parentModeApi != null;
 
-  /// 是否启用启动闸门（预览 / 测试夹具不启用）。
-  bool get hasDateCodeGate => _dateCodeApi != null;
+  /// 本次运行是否已经过解锁。
+  bool get isAppUnlocked => _appUnlocked;
 
-  /// 本次运行是否已通过入口校验。
-  bool get isDateCodeGateUnlocked => _dateCodeUnlockedAt != null;
+  bool get isAppLockBusy => _appLockBusy;
 
-  /// 放行的绝对时刻（null = 未放行）。
-  DateTime? get dateCodeUnlockedAt => _dateCodeUnlockedAt;
-
-  bool get isDateCodeBusy => _dateCodeBusy;
-
-  String? get dateCodeError => _dateCodeError;
-
-  /// 还要等几秒才能再试（0 = 没被限流）。
-  int dateCodeRetrySecondsAt(DateTime now) {
-    final DateTime? until = _dateCodeRetryUntil;
-    if (until == null) return 0;
-    final int seconds = until.difference(now).inSeconds;
-    return seconds > 0 ? seconds : 0;
-  }
-
-  DateCodeVerdictDto? get lastDateCodeVerdict => _lastDateCodeVerdict;
+  String? get appLockError => _appLockError;
 
 
   /// live 模式下是否已接上写端点（W4-E：只覆盖打卡 / 撤销）。
@@ -989,12 +966,11 @@ class AppStore extends ChangeNotifier {
     _parentPinBusy = false;
     _lastParentPinResult = null;
     _parentPinLockSeconds = 0;
-    // 启动闸门：回到「锁着」。构造时就走这里 ⇒ 冷启动一定先要验证码。
-    _dateCodeUnlockedAt = null;
-    _dateCodeBusy = false;
-    _dateCodeError = null;
-    _dateCodeRetryUntil = null;
-    _lastDateCodeVerdict = null;
+    // 本机 PIN 锁：回到「锁着」。构造时就走这里 ⇒ 冷启动一定先要 PIN。
+    _appUnlocked = false;
+    _appLockBusy = false;
+    _appLockError = null;
+    _relockPending = false;
   }
 
   /// 载入演示数据 —— 只由 [resetToSeed] 调用（调试构建 / 测试夹具）。
@@ -1471,7 +1447,6 @@ class AppStore extends ChangeNotifier {
     _writeApi?.close();
     _onboardingApi?.close();
     _parentModeApi?.close();
-    _dateCodeApi?.close();
     super.dispose();
   }
 
@@ -4315,6 +4290,9 @@ class AppStore extends ChangeNotifier {
       _applyParentModeDto(dto);
       _parentModeReadStatus = ReadStatus.ready;
       _parentPinLockSeconds = 0;
+      // 刚输对了 PIN ⇒ 本机锁也一并打开（否则用户会紧接着再被问一次）。
+      _appUnlocked = true;
+      _relockPending = false;
       return null;
     } on ParentPinLockException catch (error) {
       if (_disposed) return error.userMessage;
@@ -4454,6 +4432,9 @@ class AppStore extends ChangeNotifier {
       _applyParentModeDto(dto);
       _parentModeReadStatus = ReadStatus.ready;
       _parentPinLockSeconds = 0;
+      // 收回孩子模式 = 家长刚证明过自己 ⇒ 本机锁同时打开。
+      _appUnlocked = true;
+      _relockPending = false;
       return null;
     } on ParentPinLockException catch (error) {
       if (_disposed) return error.userMessage;
@@ -4520,6 +4501,9 @@ class AppStore extends ChangeNotifier {
       );
       _parentPinLockSeconds = 0;
       _parentModeReadStatus = ReadStatus.ready;
+      // 刚设完 PIN（输了两遍）⇒ 不必立刻再让家长解一次锁。
+      _appUnlocked = true;
+      _relockPending = false;
       return null;
     } on ParentPinLockException catch (error) {
       if (_disposed) return error.userMessage;
@@ -4550,83 +4534,121 @@ class AppStore extends ChangeNotifier {
     if (!dto.parentMode) _parentPinLockSeconds = 0;
   }
 
-  // ==================================== 6 位验证码 · 启动闸门（W9-C）
+  // ==================================== 本机 PIN 锁（2026-11-04，替代日期码闸门）
 
-  /// 用 6 位验证码（`MMDD` ＋ 两位 ISO 星期）放行启动闸门。
+  /// 退到后台 ⇒ 立刻上锁（回到前台要重新输 PIN）。
   ///
-  /// 成功返回 null（闸门随即打开）；失败返回一句话，界面原样显示。
-  ///
-  /// ── 失败语义（与后端逐字对应） ────────────────────────────────────────────
-  ///   · 空 / 非 6 位数字 ⇒ **本地就拒，不发请求**。形状错在后端是 400，但用户
-  ///     看到的那句话会变成「请求失败」—— 少打一位与「算错了」必须说成两句；
-  ///   · `200 { valid:false }` ⇒ 「码不对」，仍锁着（这是校验结果，不是异常）；
-  ///   · `429` ⇒ 记下「等到什么时候」，期间按钮禁用；
-  ///   · 网络 / 超时 / 5xx ⇒ **仍锁着**。
-  ///     ★ 这一点与 `OnboardingGate` 故意相反：引导闸门遇到「不知道」必须放行
-  ///     （否则一次超时就把整个应用锁死在引导里），而入口闸门存在的意义就是
-  ///     拦住 —— 它宁可让家长重试，也不能在校验没通过时打开。
-  Future<String?> verifyDateCodeGate(String code) async {
-    final DateCodeApi? api = _dateCodeApi;
-    if (api == null) return '当前没有接入后端，无法校验验证码。';
-    if (_dateCodeBusy) return '正在校验，请稍候…';
-    if (isDateCodeGateUnlocked) return null;
-
-    final String trimmed = code.trim();
-    if (trimmed.isEmpty) return '请输入 6 位验证码。';
-    if (!DateCodeApiClient.codePattern.hasMatch(trimmed)) {
-      return '验证码是 6 位数字：月日 4 位 ＋ 两位星期（周一 01 … 周日 07）。';
+  /// 三条「不锁」的例外都写在这里（界面不许各自判断，否则早晚出现分歧）：
+  ///   · 没接后端 / **不知道**有没有 PIN（`parentMode == null`）⇒ 没有「谁来
+  ///     判定对错」，锁上就是一块砖；
+  ///   · 孩子模式**窗口内** ⇒ 手机本来就是给孩子用的，锁上会让孩子切一次应用
+  ///     就再也回不来；改成记一笔 [_relockPending]，回来时窗口若已结束就补锁；
+  ///   · 本来就锁着 ⇒ 幂等。
+  void lockAppForBackground() {
+    if (!hasParentPinLock) return;
+    if (!isParentPinConfigured) return;
+    if (isKidModeActiveAt(DateTime.now())) {
+      _relockPending = true;
+      return;
     }
+    _relockPending = false;
+    if (!_appUnlocked) return;
+    _appUnlocked = false;
+    _appLockError = null;
+    _notify();
+  }
 
-    _dateCodeBusy = true;
-    _dateCodeError = null;
+  /// 回到前台时调用（`AppLifecycleState.resumed`）：孩子模式如果在后台期间
+  /// 结束了，把锁补上。
+  void settleAppLockAfterResume() {
+    if (!_relockPending) return;
+    if (isKidModeActiveAt(DateTime.now())) return;
+    _relockPending = false;
+    if (!_appUnlocked) return;
+    _appUnlocked = false;
+    _appLockError = null;
+    _notify();
+  }
+
+  /// 只校验一次家长 PIN（`POST /auth/parent-pin/verify`）。成功返回 null。
+  ///
+  /// ── 与 [unlockAppWithPin] 的分工 ───────────────────────────────────────────
+  ///   这里**只回答「这个 PIN 对不对」**，不碰 `isAppUnlocked`：
+  ///   设置 / 修改 PIN 的「请输入当前 PIN」那一步问的是「你确实知道旧 PIN 吗」，
+  ///   与「谁拿着手机」是两件事。
+  ///
+  /// ── 旧服务端的降级（`404`）────────────────────────────────────────────
+  ///   服务端还没有这条只读路由（<= 1.0.5 的镜像）时退回 `enterParentMode()`：
+  ///   功能可用，但那台设备会变成 5 分钟家长窗口。宁可降级，
+  ///   也不能让用户永远停在锁屏 / 设置页。
+  Future<String?> checkParentPin(String pin) async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法校验家长 PIN。';
+    if (_appLockBusy) return '正在校验，请稍候…';
+
+    final String trimmed = pin.trim();
+    if (trimmed.isEmpty) return '请输入家长 PIN。';
+    final String? invalid = validateParentPin(trimmed);
+    if (invalid != null) return invalid;
+
+    _appLockBusy = true;
+    _appLockError = null;
     _notify();
     try {
-      final DateCodeVerdictDto dto = await api.verify(trimmed);
+      final PinVerifyResult result = await api.verifyPin(trimmed);
       if (_disposed) return null;
-      _lastDateCodeVerdict = dto;
-      if (dto.valid) {
-        _dateCodeUnlockedAt = DateTime.now();
-        _dateCodeError = null;
-        _dateCodeRetryUntil = null;
-        return null;
-      }
-      const String message = '验证码不对。它由「月日 4 位 ＋ 星期 2 位」组成，'
-          '例如 2026 年 10 月 29 日（周四）是 102904。';
-      _dateCodeError = message;
-      return message;
-    } on DateCodeRateLimitedException catch (error) {
-      if (_disposed) return error.userMessage;
-      _dateCodeRetryUntil =
-          DateTime.now().add(Duration(seconds: error.retryAfterSeconds));
-      _dateCodeError = error.userMessage;
-      return error.userMessage;
+      _parentMode = (_parentMode ?? ParentMode.unknown)
+          .copyWith(remainingAttempts: result.remainingAttempts);
+      _parentPinLockSeconds = 0;
+      _appLockError = null;
+      return null;
     } on WriteApiException catch (error) {
       if (_disposed) return error.userMessage;
-      _dateCodeError = error.userMessage;
+      if (error.statusCode == 404) {
+        return await _unlockByEnteringParentMode(trimmed);
+      }
+      _appLockError = error.userMessage;
+      if (error is ParentPinLockException) {
+        _parentPinLockSeconds = error.retryAfterSeconds;
+      }
+      // 403（PIN 被改）/ 409（PIN 被移除 / 成员变了）⇒ 服务端事实变了，对齐一次。
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshParentMode();
+      }
       return error.userMessage;
     } catch (error) {
-      const String message = '验证码请求已发出，但结果无法确认。请重试。';
+      const String message = '校验请求已发出，但结果无法确认。请重试。';
       if (_disposed) return message;
-      _dateCodeError = message;
+      _appLockError = message;
       return message;
     } finally {
-      _dateCodeBusy = false;
+      _appLockBusy = false;
       _notify();
     }
   }
 
-  /// 重新锁上闸门（仅供测试 / 诊断使用）。
-  ///
-  /// ★ 2026-11-03：用户要求**去掉**「我的 → 立即锁定入口」这个功能，
-  /// 所以生产界面不再有调用方。方法保留是因为重开 App 本来就是同一条路径，
-  /// 用例靠它断言「清回锁着之后还能再次校验」；它不发任何请求。
-  void lockDateCodeGate() {
-    if (_dateCodeUnlockedAt == null) return;
-    _dateCodeUnlockedAt = null;
-    _dateCodeError = null;
-    _dateCodeRetryUntil = null;
-    _lastDateCodeVerdict = null;
+  /// 用家长 PIN 解锁本机（冷启动 / 从后台回来）。
+  Future<String?> unlockAppWithPin(String pin) async {
+    if (_appUnlocked) return null;
+    final String? failure = await checkParentPin(pin);
+    if (failure != null || _disposed) return failure;
+    _appUnlocked = true;
+    _relockPending = false;
+    _appLockError = null;
     _notify();
+    return null;
+  }
+
+  /// 旧服务端（没有 verify 路由）的降级路径：用「进入家长模式」代替校验。
+  Future<String?> _unlockByEnteringParentMode(String pin) async {
+    final String? failure = await enterParentMode(pin);
+    if (_disposed) return failure;
+    if (failure != null) {
+      _appLockError = failure;
+      return failure;
+    }
+    return null;
   }
 
   // ------------------------------------------------------------ 内部工具

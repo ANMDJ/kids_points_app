@@ -1,5 +1,15 @@
 # 41 · W9-C 交接单：固定规则「日期 ＋ 星期」6 位验证码（2026-10-29）
 
+> ⛔ **2026-11-04：App 侧已整条下线**（用户原话：「去掉日期规则验证功能，那个锁屏没有意义，
+> 把它改成 PIN 锁」）。下文描述的是**历史实现**，不要照着做：
+>
+> - **删除**：`lib/screens/date_code_gate.dart`、`lib/data/date_code_api.dart`、
+>   `lib/data/date_code_dto.dart`、`test/date_code_gate_test.dart`、`test/date_code_test.dart`；
+>   `AppStore` 的 `verifyDateCodeGate()` / `dateCodeError` / `hasDateCodeGate` 等也一并移除。
+> - **替代**：`lib/screens/pin_guard.dart`（本机 PIN 锁，见 [`52`](./52-app-pin-lock.md)）。
+> - **仍在**：服务端 `POST /auth/date-code`（`backend/src/identity/`）与本文档的规则描述 ——
+>   删除它要动迁移与小程序契约，属产品裁定（`52` §6）。
+>
 > 前置：W9-A / W9-B 把**小程序**的登录链路打通（`40-login-and-session-design.md`），
 > 而 Flutter 端仍靠 `--dart-define=KP_DEVICE_ID/KP_CHILD_ID` 冒充身份 —— `lib/` 里
 > 一行 login 代码都没有。

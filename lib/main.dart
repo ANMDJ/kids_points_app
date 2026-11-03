@@ -4,7 +4,6 @@ import 'data/app_scope.dart';
 import 'data/app_store.dart';
 import 'data/app_version_api.dart';
 import 'data/auth_api.dart';
-import 'data/date_code_api.dart';
 import 'data/device_token_api.dart';
 import 'data/identity_api.dart';
 import 'data/onboarding_api.dart';
@@ -17,9 +16,9 @@ import 'data/session_scope.dart';
 import 'data/token_store.dart';
 import 'data/write_api.dart';
 import 'screens/account_gate.dart';
-import 'screens/date_code_gate.dart';
 import 'screens/home_shell.dart';
 import 'screens/onboarding_gate.dart';
+import 'screens/pin_guard.dart';
 import 'screens/update_gate.dart';
 import 'theme/app_theme.dart';
 
@@ -78,9 +77,6 @@ Future<void> main() async {
     parentModeApi: configured
         ? ParentModeApiClient(config: config, tokenProvider: bearerToken)
         : null,
-    // W9-C：启动闸门用的 6 位验证码。注入的**唯一**后果是「启动时先要一次
-    // 今天的码」；它不产生凭据，也不改变身份（见 `date_code_gate.dart` 文件头）。
-    dateCodeApi: configured ? DateCodeApiClient(config: config) : null,
   );
 
   runApp(
@@ -188,8 +184,12 @@ class PointsApp extends StatelessWidget {
             config: config,
             // 换账号 / 建孩子后清空首页缓存，避免上一个孩子的数据残留。
             onIdentityChanged: store.resetForIdentity,
-            child: const DateCodeGate(
-              child: OnboardingGate(child: HomeShell()),
+            // 2026-11-04：本机 PIN 锁（替代原来的 6 位日期码闸门）。
+            // ★ 它在 `OnboardingGate` **里面**：引导第 6 步就是「设家长 PIN」，
+            //   先让家长把 PIN 设好，锁才有东西可验（否则会先弹一次「先设 PIN」
+            //   再进引导，同一件事问两遍）。
+            child: const OnboardingGate(
+              child: PinGuard(child: HomeShell()),
             ),
           ),
         ),

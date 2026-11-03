@@ -23,6 +23,7 @@ import type { EnterParentModeDto } from './dto/enter-parent-mode.dto'
 import type { EnterKidModeDto } from './dto/enter-kid-mode.dto'
 import type { ExitKidModeDto } from './dto/exit-kid-mode.dto'
 import type { SetParentPinDto } from './dto/set-parent-pin.dto'
+import type { VerifyParentPinDto } from './dto/verify-parent-pin.dto'
 import {
   clampKidModeMinutes,
   kidModeExpiresAt,
@@ -97,6 +98,20 @@ export interface ParentModeView {
 
 /** `POST /auth/parent-pin` 的回包：PIN 这一件事 + 重置后的剩余次数。 */
 export interface ParentPinView extends ParentPinState {
+  remainingAttempts: number
+}
+
+/**
+ * `POST /auth/parent-pin/verify` 的回包（2026-11-04，本机 PIN 锁）。
+ *
+ * ★ 这里**没有** `activeRole` / `parentModeExpiresAt` —— 这个端点不改会话行，
+ *   回包里放角色字段会让人误以为「验过 PIN 就提权了」。要提权请走
+ *   `POST /auth/parent-mode`（那是另一件事，也是另一个按钮）。
+ */
+export interface ParentPinVerifyView {
+  /** 校验通过；失败走 403 / 400 / 409 / 429，绝不回 200 + false。 */
+  valid: true
+  /** 还能错几次（成功不清零，见 `verifyParentPin()` 的口径）。 */
   remainingAttempts: number
 }
 
@@ -206,6 +221,66 @@ export class AuthService {
       operator
     })
     return viewOf(updated, now)
+  }
+
+  /**
+   * 只校验家长 PIN，**不改变**这台设备的角色 / TTL（2026-11-04）。
+   *
+   * ── 它为什么必须存在（而不是让 App 用 `POST /auth/parent-mode` 当解锁）──────
+   *   App 的「PIN 锁」在本机入口上多了一道门：冷启动 / 从后台回来要输 PIN。
+   *   如果解锁直接走 `enterParentMode`，一台**以家长身份登录**的设备
+   *   （邀请码加入，会话 30 天）会被压成 5 分钟 —— 家长解锁几次之后
+   *   忽然就不再是家长模式了。锁屏是「谁拿着手机」，不是「提权」，
+   *   两件事必须能分开调用。
+   *
+   * ── 五条口径（与 `enterParentMode` 逐条对齐，只有最后一条不同）─────────────
+   *   ① 没有 PIN ⇒ 409 `PARENT_PIN_NOT_SET`（身份没问题，「没钥匙」是状态）；
+   *   ② 锁定期内 ⇒ 429 且**不跑 scrypt**（防暴力真正的一道门）；
+   *   ③ 格式错 ⇒ 400 且**不计次**（手滑不是猜测）；
+   *   ④ 值不对 ⇒ 计一次（`recordPinFailure`，成员级，换设备也绕不过）+ 403/429；
+   *   ⑤ 值对了 ⇒ **什么也不写**：不改 `activeRole` / `expiresAt`，也**不清零**
+   *      `pinFailedCount`。清零点仍然只有 `enterParentMode` / `setParentPin`——
+   *      这个端点必须能对「孩子模式进行中」的设备使用（锁屏不该被 409 卡住），
+   *      而任何一次写会话行都会与 `kidModeUntil` 的优先级打架。
+   *
+   * ── 为什么**不**要求成员位是 guardian ──────────────────────────────────────
+   *   PIN 落在成员位的 `pinHash` 上。若一位家长被降级成 child（成员角色变更），
+   *   他仍然应该能解开自己手机上的锁 —— 这个端点不授予任何权限，只是回答
+   *   「PIN 对不对」。要求 guardian 会让那台设备变成**永久打不开**（又一个 D7）。
+   */
+  async verifyParentPin(
+    childId: string,
+    deviceId: string,
+    dto: VerifyParentPinDto,
+    operator: AuthOperator
+  ): Promise<ParentPinVerifyView> {
+    const now = new Date()
+    const row = await this.load(childId, deviceId, operator.userId)
+
+    if (row.pinHash === null) {
+      throw new ConflictException({
+        code: 'PARENT_PIN_NOT_SET',
+        message: '这个账号还没有设置家长 PIN —— 请先在家长登录的设备上设置。'
+      })
+    }
+    assertNotLocked(row, now)
+    if (!isPinFormatValid(dto.pin)) {
+      throw new BadRequestException({
+        code: 'PARENT_PIN_FORMAT_INVALID',
+        message: '家长 PIN 是 4–6 位数字（这次没有计入错误次数）。'
+      })
+    }
+    if (!(await verifyPin(dto.pin, row.pinHash))) {
+      const failed = await this.repository.recordPinFailure({
+        childId,
+        userId: operator.userId,
+        deviceId,
+        now,
+        operator
+      })
+      throw pinRejected(failed, now)
+    }
+    return { valid: true, remainingAttempts: remainingAttempts(row.pinFailedCount) }
   }
 
   async exitParentMode(

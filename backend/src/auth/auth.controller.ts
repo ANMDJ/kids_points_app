@@ -17,11 +17,17 @@ import { PermissionsGuard } from '../permissions/permissions.guard'
 import { RequireAction } from '../permissions/require-action.decorator'
 import type { RequestWithActor } from '../permissions/actor'
 import type { AuthOperator } from './auth.repository'
-import { AuthService, type ParentModeView, type ParentPinView } from './auth.service'
+import {
+  AuthService,
+  type ParentModeView,
+  type ParentPinVerifyView,
+  type ParentPinView
+} from './auth.service'
 import { EnterKidModeDto } from './dto/enter-kid-mode.dto'
 import { EnterParentModeDto } from './dto/enter-parent-mode.dto'
 import { ExitKidModeDto } from './dto/exit-kid-mode.dto'
 import { SetParentPinDto } from './dto/set-parent-pin.dto'
+import { VerifyParentPinDto } from './dto/verify-parent-pin.dto'
 
 /**
  * 家长模式 / 家长 PIN 的 HTTP 入口（W8-C，2026-10-27 / `docs/design/02` §7、§9.18）。
@@ -31,6 +37,8 @@ import { SetParentPinDto } from './dto/set-parent-pin.dto'
  *   `POST   /auth/parent-mode`  `switch_role_mode`  用 PIN 换 5 分钟家长模式
  *   `DELETE /auth/parent-mode`  `switch_role_mode`  主动退出（不需要 PIN）
  *   `POST   /auth/parent-pin`   `manage_parent_pin` 首次设置 / 修改家长 PIN
+ *   `POST   /auth/parent-pin/verify` `switch_role_mode` 只校验 PIN，不改角色（2026-11-04，
+ *      App 本机 PIN 锁：解锁不能顺手把 30 天家长会话压成 5 分钟）
  *
  * ── W14（2026-11-03）新增孩子模式的两条 ─────────────────────────────────────
  *   `POST   /auth/kid-mode`     `switch_role_mode`  把手机交给孩子用 1–30 分钟
@@ -120,6 +128,31 @@ export class AuthController {
     @Req() req: RequestWithActor
   ): Promise<ParentPinView> {
     return await this.service.setParentPin(
+      this.childIdOf(req),
+      this.deviceIdOf(deviceId),
+      dto,
+      this.actorOf(req)
+    )
+  }
+
+  /**
+   * 只校验家长 PIN，不改变角色 / TTL（2026-11-04，App 本机 PIN 锁）。
+   *
+   * ★ 权限用 `switch_role_mode` 而不是 `manage_parent_pin`：
+   *   它不设置 / 不修改任何东西，只回答「这个 PIN 对不对」——
+   *   与「按一下家长模式按钮」是同一类动作（矩阵对孩子也 ALLOW）。
+   *   用 `manage_parent_pin`（孩子 DENY）会让锁屏在**孩子模式进行中**
+   *   解不开，而那正是最需要解锁的时刻。
+   */
+  @Post('parent-pin/verify')
+  @HttpCode(200)
+  @RequireAction('switch_role_mode')
+  async verifyParentPin(
+    @Body() dto: VerifyParentPinDto,
+    @Headers(DEVICE_ID_HEADER) deviceId: string | undefined,
+    @Req() req: RequestWithActor
+  ): Promise<ParentPinVerifyView> {
+    return await this.service.verifyParentPin(
       this.childIdOf(req),
       this.deviceIdOf(deviceId),
       dto,

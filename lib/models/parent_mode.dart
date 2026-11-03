@@ -198,7 +198,18 @@ class ParentMode {
   }
 }
 
-/// `POST /auth/parent-pin` 的结果（设 / 改家长 PIN）。
+/// `POST /auth/parent-pin/verify` 的结果（2026-11-04，本机 PIN 锁）。
+///
+/// ★ 这里**没有**角色 / 到期时刻：那个端点不改会话行（见
+///   `backend/src/auth/auth.service.ts#verifyParentPin`）。把它当成「进入家长
+///   模式」的返回类型用，会让 App 以为解锁顺手提权了 —— 而实际上没有。
+class PinVerifyResult {
+  const PinVerifyResult({required this.remainingAttempts});
+
+  /// 成功后还剩几次机会（成功**不清零**，清零点仍是「进入家长模式」）。
+  final int remainingAttempts;
+}
+
 class ParentPinResult {
   const ParentPinResult({
     required this.pinConfigured,

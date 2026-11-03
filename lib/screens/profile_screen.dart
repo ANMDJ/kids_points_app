@@ -13,6 +13,8 @@ import '../widgets/gradient_page.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
 import 'family_join_actions.dart';
+import 'my_applications_screen.dart';
+import 'notifications_screen.dart';
 import 'session_actions.dart';
 import 'onboarding_screen.dart';
 import 'update_gate.dart';
@@ -23,8 +25,6 @@ import 'sheets/family_deletion_sheet.dart';
 import 'sheets/invite_sheet.dart';
 import 'sheets/join_family_sheet.dart';
 import 'sheets/member_sheet.dart';
-import 'sheets/my_applications_sheet.dart';
-import 'sheets/notifications_sheet.dart';
 import 'sheets/parent_mode_sheet.dart';
 import 'sheets/trash_sheet.dart';
 
@@ -203,9 +203,14 @@ class ProfileScreen extends StatelessWidget {
                     icon: Icons.assignment_outlined,
                     // W5-J：我提交过的申请 + 撤回。与家长收件箱是**两个**
                     // 入口：这里孩子也有，且动作是撤回而不是批 / 拒。
+                    // 2026-11-04：改成**整页列表**（用户要求，不再用弹窗）。
                     color: AppColors.primaryDeep,
                     label: '我的申请',
-                    onTap: () => showMyApplicationsSheet(context),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const MyApplicationsScreen(),
+                      ),
+                    ),
                   ),
                   const Divider(
                     height: 1,
@@ -218,12 +223,16 @@ class ProfileScreen extends StatelessWidget {
                     // W5-L：站内通知中心。审批出结果时服务端会给申请人写一条，
                     // W5-M 起有人提交申请时也会给家长写一条；未读数由
                     // `unreadNotificationCount` 下发的整份计数决定。
+                    // 2026-11-04：改成**整页列表**（用户要求，不再用弹窗）。
                     color: AppColors.starYellow,
                     label: '消息',
                     badgeCount: unreadNotifications,
-                    onTap: () => showNotificationSheet(
-                      context,
-                      onOpenApprovals: onOpenApprovals,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => NotificationsScreen(
+                          onOpenApprovals: onOpenApprovals,
+                        ),
+                      ),
                     ),
                   ),
                   const Divider(

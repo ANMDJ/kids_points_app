@@ -1,56 +1,35 @@
 import 'package:flutter/material.dart';
 
-import '../../data/app_scope.dart';
-import '../../data/app_store.dart';
-import '../../data/read_api_errors.dart';
-import '../../models/approval.dart';
-import '../../theme/app_colors.dart';
-import '../../widgets/app_card.dart';
-import '../../widgets/pills.dart';
-import '../../widgets/sheet_frame.dart';
-
-/// 打开「我的申请」面板（W5-J）—— 入口固定在「我的」页，与 Taro 侧同一处。
-Future<void> showMyApplicationsSheet(BuildContext context) async {
-  final AppStore store = AppScope.of(context);
-  final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
-  await showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (BuildContext sheetContext) {
-      return MyApplicationsSheet(store: store, messenger: messenger);
-    },
-  );
-}
+import '../data/app_scope.dart';
+import '../data/read_api_errors.dart';
+import '../models/approval.dart';
+import '../theme/app_colors.dart';
+import '../widgets/app_card.dart';
+import '../widgets/gradient_page.dart';
+import '../widgets/page_header.dart';
+import '../widgets/pills.dart';
 
 /// 「我的申请」：**我提交的**审批（W5-J），含撤回。
 ///
-/// ── 为什么不复用家长收件箱（`ApprovalInboxSheet`）─────────────────────────
+/// ── 2026-11-04：从底部弹窗改成**整页列表**（用户要求）─────────────────────
+///   弹窗只装得下两三行，申请一多就得在里面滚；而这是一份会被反复回看的
+///   记录（「上次那条为什么被拒」）。改成二级页后有返回、有刷新，
+///   列表高度 = 整屏。
+///
+/// ── 为什么不复用家长收件箱（`ApprovalsScreen`）───────────────────────────
 ///   两个列表的数据源、权限与动作都不同：
 ///     · 收件箱 = `GET /approvals` + 批 / 拒（`review_approvals`，孩子 403）；
 ///     · 这里   = `GET /approvals/mine` + 撤回（`view_own_approvals`，两角色 ALLOW）。
-///   把「批准」按钮放进这里会诱导家长给**自己**提的申请盖章，而服务端
-///   本来就禁止自批（`review_approvals` 的 self 规则）—— 界面不该先给一个
-///   按下去必然失败的动作。
-///
-/// ── 撤回能做什么 / 不能做什么 ──────────────────────────────────────────────
-///   只把 `pending → withdrawn`：不写流水、不动积分、不恢复已删的心愿。
-///   因此这里**没有**「撤销撤回」，只有「需要时重新提交」。
-class MyApplicationsSheet extends StatefulWidget {
-  const MyApplicationsSheet({
-    super.key,
-    required this.store,
-    required this.messenger,
-  });
-
-  final AppStore store;
-  final ScaffoldMessengerState messenger;
+///   把「批准」按钮放进这里会诱导家长给**自己**提的申请盖章，而服务端本来就
+///   禁止自批 —— 界面不该先给一个按下去必然失败的动作。
+class MyApplicationsScreen extends StatefulWidget {
+  const MyApplicationsScreen({super.key});
 
   @override
-  State<MyApplicationsSheet> createState() => _MyApplicationsSheetState();
+  State<MyApplicationsScreen> createState() => _MyApplicationsScreenState();
 }
 
-class _MyApplicationsSheetState extends State<MyApplicationsSheet> {
+class _MyApplicationsScreenState extends State<MyApplicationsScreen> {
   final List<ApprovalInboxItem> _items = <ApprovalInboxItem>[];
   String? _nextCursor;
   bool _hasMore = false;
@@ -86,7 +65,7 @@ class _MyApplicationsSheetState extends State<MyApplicationsSheet> {
     });
 
     try {
-      final ApprovalsPage page = await widget.store.fetchMyApprovals(
+      final ApprovalsPage page = await AppScope.of(context).fetchMyApprovals(
         cursor: reset ? null : _nextCursor,
       );
       if (!mounted) return;
@@ -118,11 +97,11 @@ class _MyApplicationsSheetState extends State<MyApplicationsSheet> {
     if (!confirmed || !mounted) return;
 
     setState(() => _withdrawingId = item.id);
-    final String? error = await widget.store.withdrawApproval(item.id);
+    final String? error = await AppScope.of(context).withdrawApproval(item.id);
     if (!mounted) return;
     setState(() => _withdrawingId = null);
 
-    widget.messenger.showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(error ?? '已撤回；家长那边不会再看到这条申请。')),
     );
     // 成功要重拉（状态以服务端为准）；409（已批 / 已过期）也要重拉，
@@ -168,37 +147,75 @@ class _MyApplicationsSheetState extends State<MyApplicationsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final bool readOnly = !widget.store.canWithdrawApprovals;
-    return SheetFrame(
-      title: '我的申请',
-      subtitle: readOnly ? '只读模式：暂时不能撤回' : '你提交的申请都在这里；待处理的可以自己撤回',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          if (_loadError != null) _errorRow(_loadError!),
-          if (_loading && _items.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Text(
-                  '正在加载申请…',
-                  style:
-                      TextStyle(fontSize: 13, color: AppColors.textSecondary),
+    final bool readOnly = !AppScope.of(context).canWithdrawApprovals;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: GradientPage(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            PageHeader(
+              title: '我的申请',
+              onBack: () => Navigator.of(context).maybePop(),
+              trailing: IconButton(
+                tooltip: '刷新',
+                splashRadius: 20,
+                iconSize: 19,
+                onPressed: _loading ? null : () => _load(reset: true),
+                icon: const Icon(
+                  Icons.refresh_rounded,
+                  color: AppColors.textSecondary,
                 ),
               ),
             ),
-          if (!_loading && _items.isEmpty) _emptyState(),
-          ..._items.map((ApprovalInboxItem item) => _row(item, readOnly)),
-          if (_hasMore) ...<Widget>[
-            const SizedBox(height: 4),
-            Center(
-              child: SmallPill(
-                label: _loading ? '加载中…' : '加载更多',
-                onTap: _loading ? null : () => _load(reset: false),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Text(
+                readOnly ? '只读模式：暂时不能撤回' : '你提交的申请都在这里；待处理的可以自己撤回',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+            if (_loading && _items.isNotEmpty)
+              const LinearProgressIndicator(minHeight: 2),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 28),
+                children: <Widget>[
+                  if (_loadError != null) _errorRow(_loadError!),
+                  if (_loading && _items.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          '正在加载申请…',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (!_loading && _items.isEmpty) _emptyState(),
+                  ..._items.map(
+                    (ApprovalInboxItem item) => _row(item, readOnly),
+                  ),
+                  if (_hasMore) ...<Widget>[
+                    const SizedBox(height: 4),
+                    Center(
+                      child: SmallPill(
+                        label: _loading ? '加载中…' : '加载更多',
+                        onTap: _loading ? null : () => _load(reset: false),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -209,7 +226,7 @@ class _MyApplicationsSheetState extends State<MyApplicationsSheet> {
     final String text;
     if (_loadError == null && !_loadedOnce) {
       text = '申请列表还没加载';
-    } else if (!widget.store.isLiveMode) {
+    } else if (!AppScope.of(context).isLiveMode) {
       text = '预览模式没有申请记录';
     } else {
       text = '还没有提交过申请';

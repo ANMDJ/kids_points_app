@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../data/app_scope.dart';
 import '../data/app_store.dart';
@@ -12,6 +11,7 @@ import '../widgets/app_card.dart';
 import '../widgets/form_fields.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/pills.dart';
+import '../widgets/pin_pad.dart';
 import '../widgets/soft_button.dart';
 
 /// 首启引导（W8-B，2026-10-27 / `04` §2、§5、§6）。
@@ -72,8 +72,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // 第⑤步
   final Set<String> _selectedSlugs = <String>{};
 
-  // 第⑥步
-  late final TextEditingController _pinController;
+  // 第⑥步：锁屏式数字键盘（2026-11-04，与锁屏 / 家长模式面板同一个组件）
+  final PinInputController _pinController = PinInputController();
 
   /// 每一步的标题 / 副标题（与 `04` §2 的七个步骤逐条对应）。
   static const List<String> _titles = <String>[
@@ -100,7 +100,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     _nameController = TextEditingController();
-    _pinController = TextEditingController();
+    // 输入时清掉上一轮的错误提示（与旧 `TextField.onChanged` 同一行为）。
+    _pinController.addListener(_clearPinError);
     // 必须在首帧之后再发请求：`refreshConsent` 一开始就 `_notify()`，
     // 在 initState 里同步调用等于 build 期间 setState。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -122,8 +123,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _pinController.removeListener(_clearPinError);
     _pinController.dispose();
     super.dispose();
+  }
+
+  void _clearPinError() {
+    if (_error == null) return;
+    setState(() => _error = null);
   }
 
   /// 首帧之后：从服务端快照恢复草稿 + 补一次同意状态。
@@ -369,7 +376,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   ///   `validateRequiredParentPin()` 一处，本地不通过就**不发请求**。
   ///   放行空串等于让这个账号在 5 分钟后失去补设 PIN 的权限（见该函数注释）。
   Future<void> _complete(AppStore store) async {
-    final String pin = _pinController.text.trim();
+    final String pin = _pinController.value.trim();
     final String? invalid = validateRequiredParentPin(pin);
     if (invalid != null) {
       setState(() => _error = invalid);
@@ -1008,47 +1015,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         const FieldLabel('家长 PIN（4–6 位数字）'),
-        TextField(
+        // 2026-11-04：与锁屏 / 家长模式面板同一个 `PinPad` —— 圆点 + 自绘数字
+        // 键盘，不弹系统键盘。三处输入 PIN 的地方从此只有一种手感。
+        PinPad(
           controller: _pinController,
-          keyboardType: TextInputType.number,
-          obscureText: true,
-          inputFormatters: <TextInputFormatter>[
-            FilteringTextInputFormatter.digitsOnly,
-            LengthLimitingTextInputFormatter(6),
-          ],
-          onChanged: (_) {
-            // 只清错误；底部按钮文案固定是「完成引导」（必填，没有跳过态）。
-            if (_error != null) setState(() => _error = null);
-          },
-          style: const TextStyle(
-            fontSize: 16,
-            letterSpacing: 6,
-            color: AppColors.textPrimary,
-          ),
-          decoration: InputDecoration(
-            hintText: '4–6 位数字',
-            hintStyle: const TextStyle(
-              fontSize: 13.5,
-              letterSpacing: 0,
-              color: AppColors.textHint,
-            ),
-            filled: true,
-            fillColor: AppColors.chipBg,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide.none,
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: AppColors.primary, width: 1.4),
-            ),
-          ),
+          hintText: '4–6 位数字',
         ),
         const SizedBox(height: 10),
         const Text(

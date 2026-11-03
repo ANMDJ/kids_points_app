@@ -10,6 +10,7 @@ import 'package:kids_points_app/data/read_api.dart';
 import 'package:kids_points_app/data/read_api_errors.dart';
 import 'package:kids_points_app/data/write_api.dart';
 import 'package:kids_points_app/data/write_api_errors.dart';
+import 'package:kids_points_app/models/parent_mode.dart';
 import 'package:kids_points_app/screens/sheets/parent_mode_sheet.dart';
 
 /// W8-C：家长模式 ＋ 家长 PIN（Flutter 侧）。
@@ -1198,10 +1199,18 @@ class _FakeParentModeApi implements ParentModeApi {
   int setPinCalls = 0;
   int enterKidModeCalls = 0;
   int exitKidModeCalls = 0;
+  /// 2026-11-04：`POST /auth/parent-pin/verify`（本机 PIN 锁）的调用次数。
+  int verifyPinCalls = 0;
   String? lastPin;
   String? lastCurrentPin;
   int? lastKidMinutes;
   bool closed = false;
+
+  /// 校验 PIN 时抛出的异常（默认 null ⇒ 通过）。
+  Object? verifyPinError;
+
+  /// 校验通过时回的「还剩几次」。
+  int verifyPinRemaining = 5;
 
   @override
   Future<ParentModeDto> fetch() async {
@@ -1251,6 +1260,14 @@ class _FakeParentModeApi implements ParentModeApi {
     lastCurrentPin = currentPin;
     if (setPinError != null) throw setPinError!;
     return pinValue!;
+  }
+
+  @override
+  Future<PinVerifyResult> verifyPin(String pin) async {
+    verifyPinCalls++;
+    lastPin = pin;
+    if (verifyPinError != null) throw verifyPinError!;
+    return PinVerifyResult(remainingAttempts: verifyPinRemaining);
   }
 
   @override

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import '../models/kid_mode.dart' show validateKidModeMinutes;
 import '../models/onboarding.dart' show validateParentPin;
+import '../models/parent_mode.dart' show PinVerifyResult;
 import 'http_transport.dart';
 import 'parent_mode_dto.dart';
 import 'read_api.dart' show ReadApiConfig, kChildIdHeader, kDeviceIdHeader;
@@ -50,6 +51,16 @@ abstract class ParentModeApi {
   /// **到期后也走这一条**（A 方案）：到点不会自动回家长模式，必须验 PIN。
   /// 失败语义与 [enter] 完全一致（400 不计次 / 403 计次 / 429 锁定）。
   Future<ParentModeDto> exitKidMode(String pin);
+
+  /// `POST /auth/parent-pin/verify`：只校验 PIN，**不改变**角色 / TTL（2026-11-04）。
+  ///
+  /// App 的本机 PIN 锁用它。为什么不复用 [enter]：
+  ///   以家长身份登录的设备（邀请码加入，会话 30 天）一旦走 [enter]，TTL 会被
+  ///   压成 5 分钟 —— 解锁几次之后家长模式就没了。锁屏只是「谁拿着手机」。
+  ///
+  /// 失败语义与 [enter] 逐字一致（400 不计次 / 403 计次 / 409 没设过 PIN /
+  /// 429 锁定）。**旧服务端**没有这条路由时会回 404，由调用方决定降级策略。
+  Future<PinVerifyResult> verifyPin(String pin);
 
   /// `POST /auth/parent-pin`：首次设置 / 修改家长 PIN。
   ///
@@ -191,6 +202,21 @@ class ParentModeApiClient implements ParentModeApi {
       decoded,
       (Object? raw, String path) => ParentPinDto.fromJson(raw, path),
     );
+  }
+
+  @override
+  Future<PinVerifyResult> verifyPin(String pin) async {
+    final String normalized = _requirePin(pin);
+    final Object? decoded = await _send(
+      'POST',
+      '/auth/parent-pin/verify',
+      <String, Object?>{'pin': normalized},
+    );
+    final ParentPinVerifyDto dto = _parse(
+      decoded,
+      (Object? raw, String path) => ParentPinVerifyDto.fromJson(raw, path),
+    );
+    return PinVerifyResult(remainingAttempts: dto.remainingAttempts);
   }
 
   /// PIN 的本地预检：4–6 位数字（与后端 `PIN_PATTERN` 同口径）。

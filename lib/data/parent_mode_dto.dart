@@ -271,3 +271,47 @@ class ParentPinDto {
     }
   }
 }
+
+/// `POST /auth/parent-pin/verify` 的回包（2026-11-04，本机 PIN 锁）。
+///
+/// ── 为什么 `valid` 必须是 `true` ────────────────────────────────────────────
+///   服务端把「不对」表达成 403 / 429，而不是 `200 {valid:false}` —— 与
+///   `POST /auth/parent-mode` 同一口径。收到 `valid:false` 只可能是版本漂移，
+///   按 malformed 处理，界面会显示「结果不符合约定」，而不是含糊地停在锁屏
+///   让人一直重试。
+class ParentPinVerifyDto {
+  ParentPinVerifyDto({required this.valid, required this.remainingAttempts});
+
+  factory ParentPinVerifyDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    final ParentPinVerifyDto dto = ParentPinVerifyDto(
+      valid: readBool(json, 'valid', '$path.valid'),
+      remainingAttempts:
+          readInt(json, 'remainingAttempts', '$path.remainingAttempts'),
+    );
+    dto._validateShape(path);
+    return dto;
+  }
+
+  /// 校验通过（这个端点只会回 true）。
+  final bool valid;
+
+  /// 还能错几次（成功不清零）。
+  final int remainingAttempts;
+
+  void _validateShape(String path) {
+    if (!valid) {
+      throw ReadApiException.malformed(
+        '$path.valid',
+        detail: '校验失败必须用 403 / 429 表达，不能回 200 + valid:false',
+      );
+    }
+    if (remainingAttempts < 0 || remainingAttempts > 5) {
+      throw ReadApiException.malformed(
+        '$path.remainingAttempts',
+        detail: '剩余次数越界（0–5）：$remainingAttempts',
+      );
+    }
+  }
+}
+
