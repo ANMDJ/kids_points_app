@@ -237,8 +237,23 @@ App 在提交前用 `lib/data/password_rules.dart` 本地判一次（服务端�
 2. **混合内容**：页面是 `https://` 而接口是 `http://` 会被浏览器直接拦掉。
 3. `--web-browser-flag="--disable-web-security"` 只能用于排查，**不要**当成方案。
 
-Web 版定位是**预览 / 联调**：不做推送（`PushTokenConfig` 会明确拒绝 `web`），
-也没有离线缓存策略。产出可部署静态站点用 `flutter build web --release`（输出到 `build/web/`）。
+### Web 版定位（P1-10 裁定，2026-11-04）：**仅供内部联调，不对外发布**
+
+写死这条是为了不再被当成「产品入口」。三条判据（都是可复核的事实）：
+
+1. **不做推送**：`PushTokenConfig` 明确拒绝 `web`（`lib/data/push_token_registration.dart`）；
+2. **没有离线缓存 / 版本策略**：`flutter build web` 未进 CI，也没有部署脚本（`deploy/` 里无 web 产物）；
+3. **token 落在 `localStorage`**：任意一个 XSS 都能读走它，而这条通路**没有**做过
+   内容安全策略（CSP）与第三方脚本审计。
+
+⇒ 结论：Web 只是**开发机上看界面 / 联调接口**的工具（`flutter run -d chrome`）。
+`flutter build web --release` 的产物（`build/web/`）**不要**挂在公网域名上。
+
+如果哪天真要对外可用，必须先补齐四件事（缺一不可）：
+① 静态资源缓存策略（`index.html` 不缓存、带 hash 的资源长缓存）；
+② `localStorage` token 的 XSS 说明 ＋ CSP（`script-src` 白名单）；
+③ CORS 生产白名单（`backend/src/cors.setup.ts`，现在是"留空即不启用"）；
+④ `flutter build web` 进 CI ＋ 部署脚本（含回滚）。
 
 ### 在浏览器里走一遍「登录 → 验证码 → 引导」（W10-A 已验证）
 

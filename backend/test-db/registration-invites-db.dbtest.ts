@@ -78,15 +78,24 @@ function inputFor(
   dailyLimit = DAILY_LIMIT,
   overrides: Partial<CreateRegistrationInviteInput> = {}
 ): CreateRegistrationInviteInput {
-  return {
+  const now = Date.now()
+  // ★ W12 边界（2026-11-04）：`ipDailyLimit` 默认放宽（50），这样原有 6 条用例的
+  //   语义不变（它们不关心 IP）；要验 IP 上限的用例显式覆盖 `issuedIpHash` /
+  //   `ipDailyLimit`。`dayStart/dayEnd` 取一个足够宽的窗口（前端业务日窗口同形）。
+  const base: CreateRegistrationInviteInput = {
     phone: '19900000001',
     email: `dbtest-${RUN}-${label}@example.com`,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    expiresAt: new Date(now + 24 * 60 * 60 * 1000),
     day,
     dailyLimit,
     issuedIpHash: null,
-    ...overrides
+    ipDailyLimit: 50,
+    dayStart: new Date(now - 60 * 60 * 1000),
+    dayEnd: new Date(now + 24 * 60 * 60 * 1000)
   }
+  // 用 `Object.assign` 而不是 `{ ...base, ...overrides }`：后者会把
+  // `Partial<T>` 的每个键都摊成 `T[K] | undefined`，Required 字段就过不了编译。
+  return Object.assign(base, overrides)
 }
 
 function createdRows(results: CreateRegistrationInviteResult[]) {

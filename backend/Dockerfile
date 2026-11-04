@@ -54,6 +54,12 @@ COPY --from=build /app/scripts ./scripts
 # src 必须带上：seed 用 tsx 直接跑 TS 源码，templates.data.ts 会 import ../../src/contracts/onboarding
 COPY --from=build /app/src ./src
 COPY --from=build /app/nest-cli.json /app/tsconfig.json /app/prisma.config.ts ./
+# ★ P2（2026-11-04）：迁移随启动。入口先跑 `prisma migrate deploy`（幂等），
+#   失败则不启动服务（fallback 见 entrypoint 文件头）。
+COPY --from=build /app/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 EXPOSE 3000
-# 默认行为 = 跑服务；部署时用 docker compose run --rm ... 覆盖成 CLI 命令
+# 默认行为 = 先迁移、再跑服务；部署时用 docker compose run --rm ... 覆盖成 CLI 命令
+# （那时入口同样先跑一次迁移，幂等 ⇒ 不会重复应用）。
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "dist/main.js"]

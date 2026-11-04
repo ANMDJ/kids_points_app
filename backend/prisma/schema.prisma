@@ -780,7 +780,10 @@ model RegistrationInvite {
   revoked      Boolean   @default(false)
 
   /// 发放时来源 IP 的 HMAC（`consent/hash-pii.ts`；没有盐时为 NULL）。
-  /// ★ 只用于事后排查「某一天 50 张码是不是同一个人刷的」，不做任何判定。
+  /// ★ 2026-11-04 起**参与一个判定**：同一 IP 每业务日的发放上限
+  ///   （`REGISTRATION_INVITE_IP_DAILY_LIMIT`，见 `registration-invite.prisma.repository.ts`
+  ///   的 `insertWithQuota()`）。在此之前它只用于事后排查。
+  /// ★ 存的是 HMAC 不是原 IP：限流只需要"同一个人"，不需要知道他是谁。
   issuedIpHash String?
 
   createdAt DateTime @default(now())

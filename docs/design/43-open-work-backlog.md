@@ -50,11 +50,11 @@
 | **P1-4** | 习惯独立 CRUD（`POST/PATCH /habits`） | **未做**（B 类：D6 口径） | **本轮复核（2026-11-04）**：`backend/src/habits/habits.controller.ts` 只有 `POST check-in`（:60）与 `POST :id/reverse`（:97），`habits.lifecycle.controller.ts:50` 只有 `DELETE :id` ⇒ **没有** `POST /habits` / `PATCH /habits/:id`，独立 CRUD 未开工 |
 | **P1-5** | 孩子头像（预设 / 上传二选一） | **未做**（B 类：D6 口径） | **本轮复核（2026-11-04）**：`backend/src/children/dto/update-child-profile.dto.ts:23` 的字段只有 `name`，无 `avatar`；`children` 模块无上传端点 ⇒ 预设头像 / 上传都未开工 |
 | **P1-6** | 加分配额 / 金额阈值限制生效 | **未做** | 本轮复核：`backend/src/permissions/permissions.guard.ts:114` 仍写着「不传 `amount`」，`amount` 在 Guard 里无其他命中 |
-| **P1-7** | 忘记家长 PIN 的重置通道 | **未做** —— ★ 自 W14 起从 P1 变成**硬前置**：孩子模式到期后 PIN 是唯一出口，忘记 PIN = 这台设备停在 child 收不回来（缓解：没设 PIN 不许开孩子模式） | 本轮复核：`backend/src/auth/auth.service.ts` 的 `setParentPin` 注释仍写「没有找回通道」；全仓无 reset 端点 |
+| **P1-7** | 忘记家长 PIN 的重置通道 | ✅ **后端已完成（2026-11-04）**，双端入口未接 | 新增 `POST /auth/parent-pin/reset`（`auth.controller.ts` / `auth.service.ts#resetParentPin` / `dto/reset-parent-pin.dto.ts` / `auth.repository.ts` 两条端口方法 / `auth.prisma.repository.ts` 同事务写 + 审计 `after.via='account_password_reset'`）。口径：权限用 `switch_role_mode`（要救的设备正停在 child，`manage_parent_pin` 对它是 DENY）＋ 成员位必须 guardian ＋ 验 `User.passwordHash` ＋ 每账号每分钟 5 次（复用 `LoginRateLimiter`）。证据 = `test/auth-http.test.ts` **组 I 7 条**（成功 / 密码错零写 / 无密码 / 格式错零调用 / 孩子成员位 403 / 孩子模式窗口内也能重置且不动会话 / 第 6 次 429）。详见 [`53`](./53-request-id-pin-reset-and-c.md) §3。**仍未做**：App / 小程序「忘记 PIN」入口 |
 | **P1-9** | App token 持久化（现在 `Directory.systemTemp`，清缓存即掉登录） | **未做**（有意等 P1-1 一起改；B 类：D5 口径） | **本轮复核（2026-11-04）**：`lib/data/token_store_io.dart:23` 仍是 `Directory.systemTemp.path`（文件落缓存目录）⇒ 清缓存 / 系统清临时目录就要重登，token 持久化确实未做 |
-| **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | **未做**（B 类：产品定位） | **本轮复核（2026-11-04）**：`web/` 只有 Flutter Web 壳（`index.html` ＋ 图标），无任何「仅联调 / 对外可用」的口径说明；`deploy/README.md` 也未写 ⇒ 定位仍未写死 |
-| **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **未做**（整张表都在；C 类 ＋ 部分 A） | **本轮复核（2026-11-04，八项全查）**：① CI 平台 —— 仓库根**没有** `.github/`，全仓无 workflow；② requestId / 全局异常过滤器 —— `app.setup.ts` 与 `main.ts` 对 `Filter|requestId|helmet|limit` **0 命中**；③ 登录外限流 —— `LoginRateLimiter` 只由 `identity.service.ts` 的 `enforceRateLimit()` 调用（login / 账号登录 / 注册三处），其余写端点无应用层限流（`deploy/README.md:700` 同口径）；④ 单实例假设 —— `main.ts:58,63,67,68,73` **5 个** worker 直接进程内定时器，无分布式锁；⑤ 迁移随启动 —— `deploy/compose.yaml` 的 `kids-api` 服务**没有** `command:` 覆盖（只有 healthcheck 的 CMD），即 Dockerfile 的 `node dist/main.js`，迁移仍是手工链（`deploy/README.md:702`）；⑥ 镜像体积 —— 本机无 docker，**未复核**（沿用 `deploy/README.md` §1 的 912MB）；⑦ App 分发策略 —— 现状是**自托管 APK**（`deploy/README.md` §6.2 `/app/*` + `/k/app/version`），商店上架缺签名与开发者账号（A 类），策略本身未写死（B 类）；⑧ UI 级 E2E —— 见下面「验收边界」行 |
-| **W12 边界** | 网站发码 **IP 限流**、额度行清理、手机号/邮箱**不验证**、「重新申请」不吊销旧码 | **未做**（明确取舍） | **本轮复核（2026-11-04）**：① IP 限流 —— `registration-invites.service.ts:80` 只把 IP 存成 `issuedIpHash`，`schema.prisma:782-784` 注释明写「**不参与任何判定**」⇒ 同 IP 仍可刷完当天额度；② 额度行不清理 —— `main.ts:58,63,67,68,73` 只有 5 个 worker（审批到期 / 推送重试 / 通知对账 / 推送保留 / 家庭删除），**没有**额度清理；③ 重新申请不吊销旧码 —— 全仓 `registrationInvite.update*` **0 命中**（只有 `create` / `findUnique`）；④ 手机号/邮箱不验证 —— 代码里无短信/邮件发送依赖。四条都与 `48` §7 一致，**未做** |
+| **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | ✅ **已完成（2026-11-04，按默认建议写死「仅内部联调」）** | **本轮复核（2026-11-04）**：`web/` 只有 Flutter Web 壳（`index.html` ＋ 图标），无任何「仅联调 / 对外可用」的口径说明；`deploy/README.md` 也未写 ⇒ 2026-11-04 已在 README.md「Web 版定位」一节写死**仅内部联调、不对外发布**，并列出四个「要对外必须先补齐」的条件 |
+| **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **部分完成（2026-11-04）**：requestId ✅ ／ 迁移随启动 ✅；其余 6 项未做（C 类 ＋ 部分 A） | **本轮复核（2026-11-04，八项全查）**：① CI 平台 —— 仓库根**没有** `.github/`，全仓无 workflow；② requestId / 全局异常过滤器 —— `app.setup.ts` 与 `main.ts` 对 `Filter|requestId|helmet|limit` **0 命中**；③ 登录外限流 —— `LoginRateLimiter` 只由 `identity.service.ts` 的 `enforceRateLimit()` 调用（login / 账号登录 / 注册三处），其余写端点无应用层限流（`deploy/README.md:700` 同口径）；④ 单实例假设 —— `main.ts:58,63,67,68,73` **5 个** worker 直接进程内定时器，无分布式锁；⑤ 迁移随启动 —— `deploy/compose.yaml` 的 `kids-api` 服务**没有** `command:` 覆盖（只有 healthcheck 的 CMD），即 Dockerfile 的 `node dist/main.js`，迁移仍是手工链（`deploy/README.md:702`）；⑥ 镜像体积 —— 本机无 docker，**未复核**（沿用 `deploy/README.md` §1 的 912MB）；⑦ App 分发策略 —— 现状是**自托管 APK**（`deploy/README.md` §6.2 `/app/*` + `/k/app/version`），商店上架缺签名与开发者账号（A 类），策略本身未写死（B 类）；⑧ UI 级 E2E —— 见下面「验收边界」行 |
+| **W12 边界** | 网站发码 **IP 限流**、额度行清理、手机号/邮箱**不验证**、「重新申请」不吊销旧码 | **部分完成（2026-11-04）**：IP 限流 ✅；其余三项未做（明确取舍） | **本轮复核（2026-11-04）**：① IP 限流 —— `registration-invites.service.ts:80` 只把 IP 存成 `issuedIpHash`，`schema.prisma:782-784` 注释明写「**不参与任何判定**」⇒ 同 IP 仍可刷完当天额度；② 额度行不清理 —— `main.ts:58,63,67,68,73` 只有 5 个 worker（审批到期 / 推送重试 / 通知对账 / 推送保留 / 家庭删除），**没有**额度清理；③ 重新申请不吊销旧码 —— 全仓 `registrationInvite.update*` **0 命中**（只有 `create` / `findUnique`）；④ 手机号/邮箱不验证 —— 代码里无短信/邮件发送依赖。四条都与 `48` §7 一致，**未做** |
 | **发布边界** | 小程序 `dist/` 已构建但**未上传** | **未做** | 本轮复核：`kids_points_mp/dist/` 存在但未上传（微信开发者工具需要本机登录，见下「发布权限」）。**2026-11-04 已发 App 1.0.5+6（APK ＋ 后端镜像 ＋ `kid_mode` 迁移），小程序 `dist/` 仍未上传 —— A 类，只能你在开发者工具里点「上传」**。★ `.env.local` 里的 `/k` 入口**已于 2026-11-03 恢复**：Caddyfile 备份 → 插入 `handle_path /k/*` → `caddy validate` 通过 → `reload`；实测 `/k/health` 200、`/k/app/version` 200、`/k/invite` 200 |
 | **网站入口** | `https://www.littlewish.top:8443/invite` 连不上（`curl` 超时 000）；`ip:80/k/invite` 与 `hub…:8443/kids/invite` 均 **200** | **文档已修 ＋ `/k` 已恢复**（2026-11-03）；`www:8443` 仍不通（要不要恢复它需运维裁定） | **本轮复核（2026-11-04，发版后）**：`hub…:8443/kids/invite` → **200**；`www.littlewish.top:8443/invite` → **000**（curl 连接超时，仍不通，要不要恢复需运维裁定）；`www:8443` 的证书/反代未动 |
 | **测试边界** | `test-db/` 常驻套件补「网站发码并发」用例（目前只有手工探针 `npm run probe:invite-quota`） | ✅ **已完成（2026-11-04）** | 新增 `backend/test-db/registration-invites-db.dbtest.ts`（**6 条**：60 笔并发 ⇒ 恰好 50 `created` / 10 `quota_exhausted`、码两两不同、落库 50 行；用尽后再打 5 笔全被拒且 `issued` 不动；`dailyLimit=1` 首张不误判 / 两笔并发恰好 1 成功；落码失败（非法 `expiresAt`）⇒ 额度回滚且不留额度行；`readQuota` 只读）。**实跑**：`npm run typecheck:tests` **EXIT=0**；`npm run db:verify` **ALL PASS**；`npm run test:db` → **25 个用例文件 / 379 条全通过**（`PASS` 行，日志 `backend/.tmp_dbtest_20261104b.log`）。★ 补之前 `test/registration-invite-http.test.ts:13-16` 写的是「由 `test-db/` 负责」——指向一个**不存在的文件**（悬空承诺），本轮已把那句注释改成指向真实文件 |
@@ -138,6 +138,23 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
 **结论**：说「没有权限」是不准确的 —— 那是「需要一个只有你能提供的凭据/登录」。
 凡是不需要扫码、不需要商店账号的发布动作（后端镜像、APK 上传、Caddy、备份），
 我都可以直接做完并当场验证。
+
+### 0.2 2026-11-04 第二批：C 类（用户指令「B 没问题，你做 C、D 都做」）
+
+· **requestId ＋ 全局异常过滤器**（P2）：每个响应带 `x-request-id`；4xx 报文形状**一个字节不改**；
+  5xx 回 `{ statusCode, code:'INTERNAL_ERROR', message, requestId }` 且**不回显**内部原文；
+  日志一行 `[id] 方法 路径 ⇒ 原因`。证据 = `backend/test/request-id-http.test.ts` **9 条**。
+· **忘记家长 PIN 的重置**（P1-7 后端）：`POST /auth/parent-pin/reset`（账号密码再验证 ＋ 成员位必须
+  guardian ＋ 每账号每分钟 5 次）；**不**顺手提权、**不**清空 PIN、审计 `after.via='account_password_reset'`。
+  证据 = `auth-http.test.ts` 组 I **7 条**。**仍未做**：App / 小程序入口。
+· **网站发码 IP 限流**（W12 边界之一）：`REGISTRATION_INVITE_IP_DAILY_LIMIT`（默认 5，1..20），
+  同事务 `count` ＋ 落码，429 `REGISTRATION_INVITE_IP_LIMIT`（与"今日发完"两个 code）。
+  证据 = `registration-invite-http.test.ts` 新增 1 条；`schema.prisma` 的 `issuedIpHash` 注释同步更正
+  （它**现在参与判定**了，原文写的是"不做任何判定"）。
+· **迁移随启动**（P2）：`backend/docker-entrypoint.sh`（`prisma migrate deploy` → 失败 exit 1 →
+  `exec` 服务）；`Dockerfile` 加 `ENTRYPOINT`。**代码完成、未部署**（本机无 docker）。
+· **Web 版定位写死**（P1-10）：`README.md` 写明**仅内部联调、不对外发布** ＋ 四个对外前置条件。
+· 详见 [`53`](./53-request-id-pin-reset-and-c.md)。
 
 ---
 

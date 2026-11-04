@@ -31,7 +31,8 @@ import { Test } from '@nestjs/testing'
 import { applyGlobalPipes } from '../src/app.setup'
 import { AuthModule } from '../src/auth/auth.module'
 import { AUTH_REPOSITORY } from '../src/auth/auth.repository'
-import { hashPin } from '../src/common/pin-hash'
+import { hashPin, verifyPin } from '../src/common/pin-hash'
+import { hashPassword, verifyPassword } from '../src/common/password-hash'
 import {
   DEVICE_SESSION_REPOSITORY,
   type DeviceSessionPort
@@ -56,6 +57,15 @@ const DEV_DAD_PARENT = 'dev-dad-parent'
 const DEV_MOM = 'dev-mom'
 const DEV_MOM_PARENT = 'dev-mom-parent'
 const DEV_KID = 'dev-kid'
+/**
+ * 「另一个家长」—— 只给组 I（重置 PIN 的限流用例）用。
+ *
+ * ★ 必须有一条**干净**的账号：`AuthService` 的限流器是进程级 Map，
+ *   同一个 userId 在前面用例里消费过的额度会带到后面（组 I 的 mom 就吃过 1 次）。
+ *   用新账号才能确定性断言「第 1–5 次 403、第 6 次 429」。
+ */
+const DEV_AUNT = 'dev-aunt'
+const AUNT_ID = 'u-aunt'
 const DEV_GUEST = 'dev-guest'
 const MOM_ID = 'u-mom'
 const PIN = '1234'
@@ -71,6 +81,8 @@ const MOM = identity(DEV_MOM)
 const MOM_PARENT = identity(DEV_MOM_PARENT)
 const CHILD = identity(DEV_KID)
 const VIEWER = identity(DEV_GUEST)
+/** 组 I 专用：一个干净账号（限流额度没被别的用例吃过）。 */
+const AUNT = identity(DEV_AUNT)
 
 /**
  * 会话行的 `activeRole` 默认 **`child`** —— 这是真实形态：家长的微信登录着，
@@ -101,7 +113,8 @@ function makeSessionFake(): DeviceSessionPort {
       activeRole: 'guardian',
       expiresAt
     },
-    { deviceId: DEV_KID, childId: CHILD_ID, userId: FAKE_KID_ID, activeRole: 'child', expiresAt }
+    { deviceId: DEV_KID, childId: CHILD_ID, userId: FAKE_KID_ID, activeRole: 'child', expiresAt },
+    { deviceId: DEV_AUNT, childId: CHILD_ID, userId: AUNT_ID, activeRole: 'child', expiresAt }
     // DEV_GUEST 故意没有会话行：身份这一关就该挡住。
   ]
   return {
@@ -115,7 +128,8 @@ function makeMembershipFake(): MembershipPort {
   const rows: MembershipLookupRow[] = [
     { childId: CHILD_ID, userId: FAKE_DAD_ID, role: 'guardian', status: 'active', restrictions: {} },
     { childId: CHILD_ID, userId: MOM_ID, role: 'guardian', status: 'active', restrictions: {} },
-    { childId: CHILD_ID, userId: FAKE_KID_ID, role: 'child', status: 'active', restrictions: {} }
+    { childId: CHILD_ID, userId: FAKE_KID_ID, role: 'child', status: 'active', restrictions: {} },
+    { childId: CHILD_ID, userId: AUNT_ID, role: 'guardian', status: 'active', restrictions: {} }
   ]
   return {
     async findMembership(childId, userId) {
@@ -1077,5 +1091,165 @@ describe('组 H：POST /auth/parent-pin/verify（只校验，不改角色）', (
     assert.notEqual(auth.members[FAKE_DAD_ID]?.kidModeUntil, null)
   })
 })
+// ══ 组 I：POST /auth/parent-pin/reset（P1-7：忘记 PIN 的唯一旁路）════════════════
+describe('组 I：POST /auth/parent-pin/reset（凭账号密码重设 PIN）', () => {
+  let app!: INestApplication
+  let url = ''
+  let auth: AuthFake
+  const NEW_PIN = '2468'
+  const PASSWORD = 'jiazhang2026'
+
+  before(async () => {
+    PIN_HASH = await hashPin(PIN)
+    const passwordHash = await hashPassword(PASSWORD)
+    auth = makeAuthFake(
+      {
+        [FAKE_DAD_ID]: { memberRole: 'guardian', pinHash: PIN_HASH },
+        // 妈妈：成员位是家长，但账号**没设过密码**（微信登录直接建出来的那种）。
+        [MOM_ID]: { memberRole: 'guardian', pinHash: null },
+        [FAKE_KID_ID]: { memberRole: 'child', pinHash: null },
+        // 组 I 的限流用例要一条干净账号（成员位是家长、从没设过 PIN）。
+        [AUNT_ID]: { memberRole: 'guardian', pinHash: null }
+      },
+      {
+        [FAKE_DAD_ID]: passwordHash,
+        [MOM_ID]: null,
+        [FAKE_KID_ID]: await hashPassword(PASSWORD),
+        [AUNT_ID]: passwordHash
+      }
+    )
+    ;({ app, url } = await startApp(auth))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    resetDad(auth)
+    Object.assign(auth.members[MOM_ID], {
+      pinHash: null,
+      pinFailedCount: 0,
+      pinLockedUntil: null,
+      activeRole: 'child',
+      kidModeUntil: null
+    })
+  })
+
+  it('密码正确 ⇒ 200，新 PIN 立刻生效（旧 PIN 失效）、计数清零', async () => {
+    // 先制造"错了 3 次"的现场：重置必须把计数一起清掉，否则下次一错就锁。
+    auth.members[FAKE_DAD_ID]!.pinFailedCount = 3
+
+    const res = await request(url, 'POST', '/auth/parent-pin/reset', GUARDIAN, {
+      password: PASSWORD,
+      pin: NEW_PIN
+    })
+
+    assert.equal(res.status, 200)
+    assert.equal(res.body.pinConfigured, true)
+    assert.equal(res.body.changed, true)
+    assert.equal(res.body.clearedFailures, 3)
+    assert.equal(res.body.wasLocked, false)
+    assert.equal(res.body.remainingAttempts, 5)
+
+    // 端口收到的**是哈希**（明文不进端口）；旧 PIN 已失效，新 PIN 可用。
+    const resetCall = auth.calls.find((call) => call.method === 'resetParentPin')
+    assert.ok(resetCall !== undefined)
+    const pinHash = (resetCall.input as { pinHash: string }).pinHash
+    assert.equal(pinHash.includes(NEW_PIN), false, '端口不许收明文')
+    assert.equal(await verifyPin(NEW_PIN, pinHash), true)
+    assert.equal(await verifyPin(PIN, pinHash), false)
+
+    assert.equal(auth.members[FAKE_DAD_ID]?.pinFailedCount, 0)
+    assert.equal(auth.members[FAKE_DAD_ID]?.pinLockedUntil, null)
+  })
+
+  it('密码不对 ⇒ 403 CURRENT_PASSWORD_INVALID，且**一次写都没有**（旧 PIN 仍有效）', async () => {
+    const res = await request(url, 'POST', '/auth/parent-pin/reset', GUARDIAN, {
+      password: 'wrong-password',
+      pin: NEW_PIN
+    })
+
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'CURRENT_PASSWORD_INVALID')
+    assert.equal(auth.calls.some((call) => call.method === 'resetParentPin'), false)
+    const stored = auth.members[FAKE_DAD_ID]?.pinHash ?? ''
+    assert.equal(await verifyPassword(PASSWORD, auth.accountPasswords[FAKE_DAD_ID] ?? null), true)
+    assert.equal(await verifyPin(PIN, stored), true, '失败的重置不能改变旧 PIN')
+  })
+
+  it('账号没设过密码 ⇒ 403 ACCOUNT_PASSWORD_NOT_SET（不假装成功）', async () => {
+    const res = await request(url, 'POST', '/auth/parent-pin/reset', MOM, {
+      password: PASSWORD,
+      pin: NEW_PIN
+    })
+
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'ACCOUNT_PASSWORD_NOT_SET')
+    assert.equal(auth.calls.some((call) => call.method === 'resetParentPin'), false)
+  })
+
+  it('新 PIN 格式错 ⇒ 400 且**不读密码 / 不占限流额度**', async () => {
+    const res = await request(url, 'POST', '/auth/parent-pin/reset', GUARDIAN, {
+      password: PASSWORD,
+      pin: '12a4'
+    })
+
+    assert.equal(res.status, 400)
+    assert.equal(res.body.code, 'PARENT_PIN_FORMAT_INVALID')
+    assert.deepEqual(
+      auth.calls.map((call) => call.method),
+      []
+    )
+  })
+
+  it('成员位是孩子 ⇒ 403 PARENT_PIN_REQUIRES_GUARDIAN（密码对也不行）', async () => {
+    const res = await request(url, 'POST', '/auth/parent-pin/reset', CHILD, {
+      password: PASSWORD,
+      pin: NEW_PIN
+    })
+
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'PARENT_PIN_REQUIRES_GUARDIAN')
+    assert.equal(auth.calls.some((call) => call.method === 'resetParentPin'), false)
+  })
+
+  it('孩子模式进行中的设备也能重置（锁在 child 正是要救的那台）⇒ 200 且会话不动', async () => {
+    const until = new Date(Date.now() + 10 * 60_000)
+    resetDad(auth, { kidModeUntil: until })
+
+    const res = await request(url, 'POST', '/auth/parent-pin/reset', GUARDIAN, {
+      password: PASSWORD,
+      pin: NEW_PIN
+    })
+
+    assert.equal(res.status, 200)
+    // 重置只换钥匙：**不提权**、不清孩子模式窗口。
+    assert.equal(auth.members[FAKE_DAD_ID]?.activeRole, 'child')
+    assert.equal(auth.members[FAKE_DAD_ID]?.kidModeUntil?.toISOString(), until.toISOString())
+  })
+
+  it('连续试错密码 ⇒ 第 6 次 429 PIN_RESET_RATE_LIMITED（按 userId 限流）', async () => {
+    // 用**干净账号**（AUNT）确定性断言额度：前 5 次 403，第 6 次 429。
+    // 不能用 mom：她在这个组的前面用例里已经消费过额度（限流器是进程级 Map）。
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const res = await request(url, 'POST', '/auth/parent-pin/reset', AUNT, {
+        password: 'wrong-password',
+        pin: NEW_PIN
+      })
+      assert.equal(res.status, 403, `第 ${attempt} 次应是 403（还没到上限）`)
+    }
+
+    const limited = await request(url, 'POST', '/auth/parent-pin/reset', AUNT, {
+      password: 'wrong-password',
+      pin: NEW_PIN
+    })
+    assert.equal(limited.status, 429)
+    assert.equal(limited.body.code, 'PIN_RESET_RATE_LIMITED')
+    assert.ok(Number(limited.body.retryAfterSeconds) > 0)
+
+    // ★ 被限流时**不再跑 scrypt**、也不再写库：额度用尽后不能继续当密码探针。
+    assert.equal(auth.calls.some((call) => call.method === 'resetParentPin'), false)
+  })
+})
+
 
 

@@ -77,8 +77,35 @@ export class RegistrationInvitesService {
       expiresAt: new Date(now.getTime() + config.ttlDays * DAY_MS),
       day: day.day,
       dailyLimit: config.dailyLimit,
-      issuedIpHash: hashPii(clientIpOf(context.headers))
+      issuedIpHash: hashPii(clientIpOf(context.headers)),
+      ipDailyLimit: config.ipDailyLimit,
+      dayStart: day.start,
+      dayEnd: day.end
     })
+
+    if (result.kind === 'ip_limited') {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((day.end.getTime() - now.getTime()) / 1000)
+      )
+      // ★ 与「当天发完」用同一个 429 但**不同的 code / scope**：
+      //   运维看指标时能分清「50 张发完了（正常）」与「一个 IP 在刷（该看日志）」。
+      //   文案里不写具体 IP（那是对方的信息），只说"同一网络"。
+      throw new HttpException(
+        {
+          code: 'REGISTRATION_INVITE_IP_LIMIT',
+          scope: 'ip',
+          ipDailyLimit: result.limit,
+          used: result.used,
+          retryAfterSeconds,
+          message:
+            `同一个网络今天已申请过 ${result.used} 个邀请码（上限 ${result.limit} 个）。` +
+            `请${formatWait(retryAfterSeconds)}后再来；如果确实是不同家庭，` +
+            '换一个网络（用手机流量）即可。'
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      )
+    }
 
     if (result.kind === 'quota_exhausted') {
       const retryAfterSeconds = Math.max(

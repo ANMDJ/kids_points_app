@@ -1,5 +1,8 @@
 import { Logger, ValidationPipe, type INestApplication } from '@nestjs/common'
 
+import { AllExceptionsFilter } from './common/all-exceptions.filter'
+import { requestIdMiddleware } from './common/request-id'
+
 /**
  * 全局管道的**唯一装配点** —— `main.ts` 与 HTTP 测试**共用**它。
  *
@@ -20,6 +23,25 @@ export function applyGlobalPipes(app: INestApplication): void {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })
   )
+}
+
+/**
+ * 请求追踪 ＋ 全局异常过滤的**唯一装配点**（P2，2026-11-04）。
+ *
+ * 与 `applyGlobalPipes()` 分开的原因（不是洁癖，是顺序）：
+ *   · 管道在 **路由之后** 执行（参数校验靠 `design:paramtypes`），
+ *   · 中间件必须在 **路由之前**（`app.use` 的顺序就是执行顺序），
+ *   · 全局过滤器只影响"抛出去之后"。
+ * 三者时机不同，所以 `main.ts` 里的调用顺序是
+ * `applyHttpFoundation` → `applyCors` →（listen）。测试若想验 500 报文，
+ * 也必须调这一个函数 —— 否则"测的还是我自己在测试里搭的 app"。
+ *
+ * ★ 为什么 requestId 中间件排在 CORS **之前**：预检请求（OPTIONS）也要能被追踪，
+ *   而且 CORS 中间件在拒绝来源时直接短路返回，晚挂就永远拿不到 id。
+ */
+export function applyHttpFoundation(app: INestApplication): void {
+  app.use(requestIdMiddleware)
+  app.useGlobalFilters(new AllExceptionsFilter())
 }
 
 /** 只在 `main.ts` 里用的启动日志（测试不需要它，故不进 `applyGlobalPipes`）。 */

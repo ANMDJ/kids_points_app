@@ -82,6 +82,8 @@ interface RepoFake extends RegistrationInvitePort {
   quota: RegistrationInviteQuotaSnapshot
   /** 下一次 `createInvite` 是否直接回「额度用完」。 */
   exhaust: boolean
+  /** 非 null ⇒ 下一次 `createInvite` 回「同一 IP 今天已发够」（W12 边界）。 */
+  ipLimited: { used: number; limit: number } | null
 }
 
 function makeRepoFake(): RepoFake {
@@ -89,9 +91,13 @@ function makeRepoFake(): RepoFake {
     calls: [],
     quota: { dailyLimit: 50, issued: 0, remainingToday: 50 },
     exhaust: false,
+    ipLimited: null,
 
     async createInvite(input): Promise<CreateRegistrationInviteResult> {
       fake.calls.push(input)
+      if (fake.ipLimited !== null) {
+        return { kind: 'ip_limited', used: fake.ipLimited.used, limit: fake.ipLimited.limit }
+      }
       if (fake.exhaust || fake.quota.remainingToday <= 0) {
         return { kind: 'quota_exhausted', issued: fake.quota.issued }
       }
@@ -259,6 +265,36 @@ describe('网站邀请码（GET /invite ＋ POST /public/registration-invites）
     assert.equal(res.body.dailyLimit, 50)
     assert.ok((res.body.retryAfterSeconds as number) > 0)
     assert.match(res.text, /今天.*发完/)
+  })
+
+  it('★ 同一 IP 今天已发够 ⇒ 429 REGISTRATION_INVITE_IP_LIMIT（与"发完"可区分）', async () => {
+    // ⚠ 必须清掉上一条用例留下的 `exhaust`：否则会先撞"每日发完"那条分支。
+    harness.repo.exhaust = false
+    harness.repo.ipLimited = { used: 5, limit: 5 }
+    harness.repo.calls.length = 0
+
+    const res = await send(harness.url, '/public/registration-invites', {
+      body: { phone: '13800138000', email: 'dad@example.com' }
+    })
+
+    assert.equal(res.status, 429, res.text)
+    assert.equal(res.body.code, 'REGISTRATION_INVITE_IP_LIMIT')
+    // ★ 与"今日发完"必须是**两个** code：前端文案不同，运维指标也不同。
+    assert.notEqual(res.body.code, 'REGISTRATION_INVITE_DAILY_LIMIT')
+    assert.equal(res.body.scope, 'ip')
+    assert.equal(res.body.used, 5)
+    assert.equal(res.body.ipDailyLimit, 5)
+    assert.ok((res.body.retryAfterSeconds as number) > 0)
+    // 文案里**不许**出现具体 IP（那是对方的信息，且日志会被截图）。
+    assert.doesNotMatch(res.text, /\d+\.\d+\.\d+\.\d+/)
+    assert.match(res.text, /同一个网络/)
+
+    // 端口收到了配置里的 IP 上限与业务日窗口（不是没传 / 传了 undefined）。
+    const call = harness.repo.calls[0]
+    assert.ok(call !== undefined)
+    assert.equal(call.ipDailyLimit, 5)
+    assert.ok(call.dayEnd.getTime() > call.dayStart.getTime())
+    harness.repo.ipLimited = null
   })
 
   it('GET /public/registration-invites/quota 只读且如实回额度', async () => {

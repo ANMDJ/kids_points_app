@@ -20,12 +20,14 @@ import type { AuthOperator } from './auth.repository'
 import {
   AuthService,
   type ParentModeView,
+  type ParentPinResetView,
   type ParentPinVerifyView,
   type ParentPinView
 } from './auth.service'
 import { EnterKidModeDto } from './dto/enter-kid-mode.dto'
 import { EnterParentModeDto } from './dto/enter-parent-mode.dto'
 import { ExitKidModeDto } from './dto/exit-kid-mode.dto'
+import { ResetParentPinDto } from './dto/reset-parent-pin.dto'
 import { SetParentPinDto } from './dto/set-parent-pin.dto'
 import { VerifyParentPinDto } from './dto/verify-parent-pin.dto'
 
@@ -128,6 +130,41 @@ export class AuthController {
     @Req() req: RequestWithActor
   ): Promise<ParentPinView> {
     return await this.service.setParentPin(
+      this.childIdOf(req),
+      this.deviceIdOf(deviceId),
+      dto,
+      this.actorOf(req)
+    )
+  }
+
+  /**
+   * 忘记家长 PIN 时的重置（P1-7，2026-11-04）。
+   *
+   * ── 为什么路径挂在 `parent-pin/` 下面 ────────────────────────────────────────
+   *   它改的是同一个东西（`ChildMember.pinHash`），只是"凭什么改"不同：
+   *     · `POST /auth/parent-pin`        凭**旧 PIN**（`manage_parent_pin`）；
+   *     · `POST /auth/parent-pin/reset`  凭**账号密码**（`switch_role_mode`）。
+   *   放进 `/auth/account` 会让"改密码"与"重置 PIN"共用一条需要读账号的路径，
+   *   而需要重置的那台设备正停在 `child`，`manage_parent_pin` 对它是 DENY。
+   *
+   * ── 为什么权限必须是 `switch_role_mode` ──────────────────────────────────────
+   *   用户故事：孩子模式到期 ⇒ 设备停在 child ⇒ 家长忘了 PIN。
+   *   那一刻**恰好**是 `manage_parent_pin` 最不可用的时刻。真正的门在业务层：
+   *   成员位必须是 guardian（服务端读，不看请求体）＋ 账号密码必须对 ＋ 每分钟 5 次。
+   *
+   * ── 为什么是 POST 而不是 PATCH ───────────────────────────────────────────────
+   *   没有"局部修改"：一次调用同时换了钥匙、清了失败计数、解除锁定。
+   *   用 PATCH 会让人以为可以只传其中一个字段。
+   */
+  @Post('parent-pin/reset')
+  @HttpCode(200)
+  @RequireAction('switch_role_mode')
+  async resetParentPin(
+    @Body() dto: ResetParentPinDto,
+    @Headers(DEVICE_ID_HEADER) deviceId: string | undefined,
+    @Req() req: RequestWithActor
+  ): Promise<ParentPinResetView> {
+    return await this.service.resetParentPin(
       this.childIdOf(req),
       this.deviceIdOf(deviceId),
       dto,

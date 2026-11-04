@@ -117,6 +117,40 @@ export interface SetParentPinInput {
 }
 
 /**
+ * 用**账号密码**再验证后重置家长 PIN（P1-7，2026-11-04）。
+ *
+ * ── 它与 `SetParentPinInput` 的区别（别把两者混成一个方法）───────────────────
+ *   · `SetParentPinInput`：调用方已经证明「握着**旧 PIN**」（service 里验的），
+ *     入口权限是 `manage_parent_pin`（孩子 DENY）；
+ *   · `ResetParentPinInput`：调用方**不知道旧 PIN**（否则就走修改而不是重置），
+ *     证明的是「握着**账号密码**」。入口权限只能是 `switch_role_mode`
+ *     —— 因为要救的那台设备正停在 `child`（W14 孩子模式到期 / 忘记 PIN），
+ *     `manage_parent_pin` 对它是 DENY，用那条会在最需要重置时把门焊死。
+ *
+ *   两道证明谁更弱，由业务层回答：密码是账号级的（跨设备、跨孩子），
+ *   PIN 是成员级的 4–6 位数字 —— 所以**密码足够重设 PIN**，反之不成立。
+ *
+ * ★ 仍然要求成员位是 guardian（适配器里复核）：密码证明"你是这个账号"，
+ *   成员位证明"这个账号在这个孩子上是家长"。两者都要，缺一个都 409。
+ */
+export interface ResetParentPinInput {
+  childId: string
+  userId: string
+  deviceId: string
+  /** 新 PIN 的哈希（明文只在 service 的调用栈里）。 */
+  pinHash: string
+  operator: AuthOperator
+}
+
+/** `POST /auth/parent-pin/reset` 的结果：新 PIN 这一件事 ＋ 顺带说清解锁了什么。 */
+export interface ParentPinResetState extends ParentPinState {
+  /** 被清掉的错误次数（重置前库里的值；给界面说"之前的 N 次错误作废"）。 */
+  clearedFailures: number
+  /** 重置前是否处于锁定状态（true ⇒ 现在已解锁）。 */
+  wasLocked: boolean
+}
+
+/**
  * 开一次孩子模式（W14，2026-11-03 / `51-kid-mode-window.md`）。
  *
  * ★ 端口只收**算好的** `kidModeUntil`（与 `EnterParentModeInput.expiresAt` 同一条
@@ -179,6 +213,24 @@ export interface AuthPort {
   setParentPin(input: SetParentPinInput): Promise<ParentPinState>
 
   /**
+   * 读账号的**密码哈希**（P1-7 重置 PIN 的再验证凭据）。
+   *
+   * ★ 只给 service 做 `verifyPassword()` 用：明文不进端口，哈希不出 service 调用栈
+   *   （与 `ModeStateRow.pinHash` 同一纪律）。查不到 / 账号停用 ⇒ `null`，
+   *   **不抛** —— "这个账号没有密码"是正常分支（微信登录建出来的账号可能没设过）。
+   */
+  readAccountPasswordHash(userId: string): Promise<string | null>
+
+  /**
+   * 用账号密码再验证后**重设** PIN（P1-7）：
+   * 写新 `pinHash` / `pinSetAt` + 清零失败计数与锁定 + 审计，同一事务。
+   *
+   * ★ 适配器里复核「成员位是 guardian」——密码只证明"你是这个账号"，
+   *   不能证明"你在这个孩子上是家长"。
+   */
+  resetParentPin(input: ResetParentPinInput): Promise<ParentPinResetState>
+
+  /**
    * 开孩子模式（W14）：写 `DeviceSession.kidModeUntil` + 审计，同一事务。
    *
    * ★ **不改** `activeRole` / `expiresAt`：孩子模式是一个"覆盖层"，
@@ -234,6 +286,14 @@ export class NotImplementedAuthRepository implements AuthPort {
 
   setParentPin(_input: SetParentPinInput): Promise<ParentPinState> {
     return Promise.resolve(this.fail('setParentPin'))
+  }
+
+  readAccountPasswordHash(_userId: string): Promise<string | null> {
+    return Promise.resolve(this.fail('readAccountPasswordHash'))
+  }
+
+  resetParentPin(_input: ResetParentPinInput): Promise<ParentPinResetState> {
+    return Promise.resolve(this.fail('resetParentPin'))
   }
 
   enterKidMode(_input: EnterKidModeInput): Promise<ModeStateRow> {

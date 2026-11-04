@@ -6,6 +6,7 @@ import { MembershipModule } from '../membership/membership.module'
 import { PermissionsModule } from '../permissions/permissions.module'
 import { hasDatabaseUrl } from '../prisma/database-enabled'
 import { PrismaModule } from '../prisma/prisma.module'
+import { LoginRateLimiter } from '../identity/login-rate-limiter'
 import { AuthController } from './auth.controller'
 import { PrismaAuthRepository } from './auth.prisma.repository'
 import {
@@ -62,6 +63,10 @@ export class AuthModule {
       controllers: [AuthController],
       providers: [
         AuthService,
+        // ★ P1-7：重置 PIN 要验账号密码 ⇒ 必须有减速带。
+        //   同一个类在 IdentityModule 里也有一份（登录用）—— 两份各自计数是**有意的**：
+        //   重置 PIN 的额度不该被日常登录消耗掉，反之亦然。
+        LoginRateLimiter,
         // 控制器上的 `@UseGuards` 在本模块的注入器里解析：身份 Guard 要显式列出，
         // 它的端口由 `DeviceSessionModule.exports` 提供。
         // 屏障一 / 屏障二 的 Guard 由上面两个模块 `exports` 提供（与 OnboardingModule 同一写法）。

@@ -24,6 +24,20 @@ export const DEFAULT_REGISTRATION_INVITE_DAILY_LIMIT = 50
 /** 硬上限：超过它的配置会被夹住，防止「等于没有限额」。 */
 export const MAX_REGISTRATION_INVITE_DAILY_LIMIT = 1000
 
+/**
+ * 同一个来源 IP 每业务日最多发几张（W12 边界，2026-11-04）。
+ *
+ * ── 为什么默认 5 而不是 1 ────────────────────────────────────────────────────
+ *   同一个公网 IP 后面坐着**一个家庭 / 一所学校 / 一个运营商 NAT**。
+ *   限成 1 会让「一家人给两个亲戚申请」直接失败，而限流要挡的是
+ *   「一个脚本刷完 50 个名额」，不是「同一屋檐下的第二个人」。
+ *
+ * ── 为什么是硬上限 20 ────────────────────────────────────────────────────────
+ *   配成 1000 等于没有这一层（与 `MAX_REGISTRATION_INVITE_DAILY_LIMIT` 同一条理由）。
+ */
+export const DEFAULT_REGISTRATION_INVITE_IP_DAILY_LIMIT = 5
+export const MAX_REGISTRATION_INVITE_IP_DAILY_LIMIT = 20
+
 /** 默认有效期（天）：给用户留出「今天拿到、过两天再注册」的余量。 */
 export const DEFAULT_REGISTRATION_INVITE_TTL_DAYS = 7
 
@@ -35,6 +49,8 @@ export interface RegistrationInviteConfig {
   dailyLimit: number
   /** 每张码的有效期（1..30 天）。 */
   ttlDays: number
+  /** 同一个来源 IP 每业务日最多几张（1..20，W12 边界）。 */
+  ipDailyLimit: number
 }
 
 /**
@@ -58,6 +74,12 @@ export function resolveRegistrationInviteConfig(
       DEFAULT_REGISTRATION_INVITE_TTL_DAYS,
       1,
       MAX_REGISTRATION_INVITE_TTL_DAYS
+    ),
+    ipDailyLimit: readBoundedInt(
+      env.REGISTRATION_INVITE_IP_DAILY_LIMIT,
+      DEFAULT_REGISTRATION_INVITE_IP_DAILY_LIMIT,
+      1,
+      MAX_REGISTRATION_INVITE_IP_DAILY_LIMIT
     )
   }
 }

@@ -9,19 +9,23 @@ import {
 } from '@nestjs/common'
 
 import { hashPin, verifyPin } from '../common/pin-hash'
+import { burnPasswordHashCost, verifyPassword } from '../common/password-hash'
 import { isPinFormatValid } from '../common/pin-format'
 import type { Role } from '../contracts/permission-matrix'
 import { effectiveRole } from '../device-session/session.gate'
+import { LoginRateLimiter } from '../identity/login-rate-limiter'
 import {
   AUTH_REPOSITORY,
   type AuthOperator,
   type AuthPort,
   type ModeStateRow,
+  type ParentPinResetState,
   type ParentPinState
 } from './auth.repository'
 import type { EnterParentModeDto } from './dto/enter-parent-mode.dto'
 import type { EnterKidModeDto } from './dto/enter-kid-mode.dto'
 import type { ExitKidModeDto } from './dto/exit-kid-mode.dto'
+import type { ResetParentPinDto } from './dto/reset-parent-pin.dto'
 import type { SetParentPinDto } from './dto/set-parent-pin.dto'
 import type { VerifyParentPinDto } from './dto/verify-parent-pin.dto'
 import {
@@ -102,6 +106,26 @@ export interface ParentPinView extends ParentPinState {
 }
 
 /**
+ * `POST /auth/parent-pin/reset` 的回包（P1-7，2026-11-04）。
+ *
+ * ★ 仍然**没有** `activeRole` / `parentModeExpiresAt`：重置只换钥匙，
+ *   不替用户提权。设备还在不在家长模式，由 `GET /auth/parent-mode` 回答 ——
+ *   这里多给一个角色字段，界面就会在"重置成功"之后错误地显示"已进入家长模式"。
+ */
+export interface ParentPinResetView extends ParentPinResetState {
+  remainingAttempts: number
+}
+
+/**
+ * 重置 PIN 的尝试上限（每个账号每分钟）。
+ *
+ * 与 `LOGIN_RATE_LIMIT_PER_DEVICE`（10/分钟）分开定一个更小的值：
+ * 这一步只该被"忘记 PIN 的家长"调用一次两次，正常人不需要一分钟试 5 次；
+ * 而拿到手机的人在这里试的是**账号密码**（8–64 位），5 次/分钟已是减速带。
+ */
+export const PIN_RESET_ATTEMPTS_PER_MINUTE = 5
+
+/**
  * `POST /auth/parent-pin/verify` 的回包（2026-11-04，本机 PIN 锁）。
  *
  * ★ 这里**没有** `activeRole` / `parentModeExpiresAt` —— 这个端点不改会话行，
@@ -146,7 +170,17 @@ export interface ParentPinVerifyView {
  */
 @Injectable()
 export class AuthService {
-  constructor(@Inject(AUTH_REPOSITORY) private readonly repository: AuthPort) {}
+  constructor(
+    @Inject(AUTH_REPOSITORY) private readonly repository: AuthPort,
+    /**
+     * P1-7：重置 PIN 要验**账号密码**，所以必须有减速带。
+     * 复用登录那一份滑动窗口实现（同一个类、同一套判据），不另造一套阈值表 ——
+     * "两套限流各自漂移"比"没有限流"更难查。
+     * 默认值只为直接 `new AuthService(fake)` 的用例方便；Nest 装配时由模块注入。
+     */
+    private readonly limiter: LoginRateLimiter = new LoginRateLimiter()
+  ) {}
+
 
   async readMode(childId: string, deviceId: string, operator: AuthOperator): Promise<ParentModeView> {
     const row = await this.load(childId, deviceId, operator.userId)
@@ -504,6 +538,107 @@ export class AuthService {
       userId: operator.userId,
       pinHash: await hashPin(dto.pin),
       hadPinBefore: row.pinHash !== null,
+      operator
+    })
+    return { ...state, remainingAttempts: remainingAttempts(0) }
+  }
+
+  /**
+   * 用**账号密码**再验证后重设家长 PIN（P1-7，2026-11-04）。
+   *
+   * ── 它补的是哪个洞（W14 之后从"可选"变成"硬前置"）───────────────────────────
+   *   孩子模式（`51`）到期后 **不**自动回家长模式：设备停在 `child`，唯一出口是
+   *   家长 PIN。所以「设过 PIN 但忘了」= 这台设备回不去家长权限，
+   *   而 `POST /auth/parent-pin`（改 PIN）又要求先输旧 PIN —— 死锁。
+   *   本方法是那条**唯一**被允许的旁路，且它要求比 PIN 更强的证明（账号密码）。
+   *
+   * ── 五条顺序（每条都有 HTTP 用例）────────────────────────────────────────────
+   *   ① 新 PIN 格式错 ⇒ 400（手滑，不消耗限流额度、不算密码尝试）；
+   *   ② 每账号每分钟 `PIN_RESET_ATTEMPTS_PER_MINUTE` 次 ⇒ 超了 429
+   *      （★ 必须按 `operator.userId`：那是会话里的事实，不是客户端头）；
+   *   ③ 成员位 / 会话对不上 ⇒ 走 `load()` 的 403 / 409（与其它几条同一语义）；
+   *   ④ 账号没有密码 ⇒ 403 `ACCOUNT_PASSWORD_NOT_SET`（微信登录建的账号可能没设过）；
+   *      密码不对 ⇒ 403 `CURRENT_PASSWORD_INVALID`（与「我的 → 登录账号」改密同一个码，
+   *      双端错误映射不用再加一条）；
+   *   ⑤ 写库：新 `pinHash` + 清零失败计数与锁定 + 审计，同一事务。
+   *
+   * ── 为什么**不**顺手把会话改回 `guardian` ────────────────────────────────────
+   *   改会话就是提权，而这一步的证明只到"你是这个账号"。用户拿着密码应当
+   *   自己走 `POST /auth/parent-mode`（现在新 PIN 已经可用），或重新登录 ——
+   *   两条路都会留下各自的审计行。这里顺手改角色会让「重置 PIN」变成
+   *   「一台被孩子拿着的手机，只要家长打错一次密码就换人」的相邻风险。
+   *
+   * ── 为什么**不**清空 PIN（而是要求给一个新的）───────────────────────────────
+   *   清空之后设备处于"没有钥匙"的状态，而 W14 之后没 PIN 的设备是另一种锁死。
+   *   重置的语义是"换一把能用的钥匙"，不是"拆掉锁"。
+   */
+  async resetParentPin(
+    childId: string,
+    deviceId: string,
+    dto: ResetParentPinDto,
+    operator: AuthOperator
+  ): Promise<ParentPinResetView> {
+    const now = new Date()
+
+    // ① 先判新 PIN 的格式：这是最便宜的一道，且与"猜密码"无关，不该占额度。
+    if (!isPinFormatValid(dto.pin)) {
+      throw new BadRequestException({
+        code: 'PARENT_PIN_FORMAT_INVALID',
+        message: '新的家长 PIN 必须是 4–6 位数字（这次没有计入任何错误次数）。'
+      })
+    }
+
+    // ② 限流：key 用服务端可信的 userId。被拒的请求**不**记账（与登录同一条口径）。
+    const verdict = this.limiter.consume(
+      `parent-pin-reset:${operator.userId}`,
+      PIN_RESET_ATTEMPTS_PER_MINUTE,
+      now
+    )
+    if (!verdict.allowed) {
+      throw new HttpException(
+        {
+          code: 'PIN_RESET_RATE_LIMITED',
+          // 给客户端一个可直接显示 / 定时重试的秒数（与登录 429 同一字段名）。
+          retryAfterSeconds: verdict.retryAfterSeconds,
+          message: `密码尝试太频繁，请 ${verdict.retryAfterSeconds} 秒后再试。`
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      )
+    }
+
+    // ③ 成员位 + 会话（403 / 409 的语义与其它几条完全一致）。
+    const row = await this.load(childId, deviceId, operator.userId)
+    this.assertGuardianMember(
+      row,
+      'PARENT_PIN_REQUIRES_GUARDIAN',
+      '只有家长能重置家长 PIN。'
+    )
+
+    // ④ 账号密码：**不**回显"这个账号存不存在密码"以外的任何东西。
+    const stored = await this.repository.readAccountPasswordHash(operator.userId)
+    if (stored === null) {
+      // ★ 时序：没有密码时也要花掉一次 scrypt 的成本，
+      //   否则"有密码 / 没密码"能从响应时间上分辨出来（与登录端点同一条纪律）。
+      await burnPasswordHashCost()
+      throw new ForbiddenException({
+        code: 'ACCOUNT_PASSWORD_NOT_SET',
+        message:
+          '这个账号还没有设置密码 —— 请先在「我的 → 登录账号」设置密码，再回来重置家长 PIN。'
+      })
+    }
+    if (!(await verifyPassword(dto.password, stored))) {
+      throw new ForbiddenException({
+        code: 'CURRENT_PASSWORD_INVALID',
+        message: '账号密码不正确（这里要的是登录密码，不是家长 PIN）。'
+      })
+    }
+
+    // ⑤ 写：新哈希 + 清零计数 / 解锁 + 审计（端口内同一事务）。
+    const state = await this.repository.resetParentPin({
+      childId,
+      userId: operator.userId,
+      deviceId,
+      pinHash: await hashPin(dto.pin),
       operator
     })
     return { ...state, remainingAttempts: remainingAttempts(0) }

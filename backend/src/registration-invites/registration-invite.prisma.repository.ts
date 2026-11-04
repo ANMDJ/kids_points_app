@@ -80,6 +80,22 @@ export class PrismaRegistrationInviteRepository implements RegistrationInvitePor
     input: CreateRegistrationInviteInput
   ): Promise<CreateRegistrationInviteResult> {
     return await this.prisma.$transaction(async (tx): Promise<CreateRegistrationInviteResult> => {
+      // ★ W12 边界（2026-11-04）：同一个 IP 每业务日最多 `ipDailyLimit` 张。
+      //   放在占额度**之前**：被限流的请求不该烧掉一个当日名额。
+      //   用 `createdAt` 窗口而不是"哪天"列：表里没有 day 列，
+      //   而窗口边界由 service 按 `KP_TIMEZONE` 的业务日算好（同一份 `businessDayOf`）。
+      if (input.issuedIpHash !== null) {
+        const used = await tx.registrationInvite.count({
+          where: {
+            issuedIpHash: input.issuedIpHash,
+            createdAt: { gte: input.dayStart, lt: input.dayEnd }
+          }
+        })
+        if (used >= input.ipDailyLimit) {
+          return { kind: 'ip_limited', used, limit: input.ipDailyLimit }
+        }
+      }
+
       await tx.$executeRaw`
         INSERT INTO "RegistrationInviteQuota" ("day", "issued", "updatedAt")
         VALUES (${input.day}, 0, now())

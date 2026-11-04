@@ -26,9 +26,11 @@ import type {
   ExitKidModeInput,
   ExitParentModeInput,
   ModeStateRow,
+  ParentPinResetState,
   ParentPinState,
   ReadModeStateInput,
   RecordPinFailureInput,
+  ResetParentPinInput,
   SetParentPinInput
 } from '../../src/auth/auth.repository'
 import { nextPinFailureState } from '../../src/auth/parent-mode.policy'
@@ -56,6 +58,8 @@ export interface AuthCall {
     | 'exitParentMode'
     | 'recordPinFailure'
     | 'setParentPin'
+    | 'readAccountPasswordHash'
+    | 'resetParentPin'
     | 'enterKidMode'
     | 'exitKidMode'
   input?: unknown
@@ -64,6 +68,8 @@ export interface AuthCall {
 export interface AuthFake extends AuthPort {
   calls: AuthCall[]
   members: Record<string, AuthFakeMember>
+  /** P1-7：按 `userId` 给的账号密码哈希（省略 = 这个账号没设过密码）。 */
+  accountPasswords: Record<string, string | null>
 }
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000
@@ -73,7 +79,10 @@ const FIVE_MINUTES_MS = 5 * 60 * 1000
  *                `memberRole='guardian'` / 无 PIN / 未锁定 / `activeRole='child'`
  *                / `expiresAt=now+5min`（★ 默认是**孩子**：最小权限默认，与 `02` §7 一致）。
  */
-export function makeAuthFake(members: Record<string, Partial<AuthFakeMember>> = {}): AuthFake {
+export function makeAuthFake(
+  members: Record<string, Partial<AuthFakeMember>> = {},
+  accountPasswords: Record<string, string | null> = {}
+): AuthFake {
   const store: Record<string, AuthFakeMember> = {}
   for (const [userId, patch] of Object.entries(members)) {
     store[userId] = {
@@ -123,6 +132,7 @@ export function makeAuthFake(members: Record<string, Partial<AuthFakeMember>> = 
   return {
     calls,
     members: store,
+    accountPasswords,
 
     async readModeState(input: ReadModeStateInput): Promise<ModeStateRow | null> {
       calls.push({ method: 'readModeState', input })
@@ -172,6 +182,36 @@ export function makeAuthFake(members: Record<string, Partial<AuthFakeMember>> = 
         pinConfigured: true,
         pinSetAt: new Date().toISOString(),
         changed: input.hadPinBefore
+      }
+    },
+
+    async readAccountPasswordHash(userId: string): Promise<string | null> {
+      calls.push({ method: 'readAccountPasswordHash', input: { userId } })
+      return accountPasswords[userId] ?? null
+    },
+
+    async resetParentPin(input: ResetParentPinInput): Promise<ParentPinResetState> {
+      calls.push({ method: 'resetParentPin', input })
+      const member = must(input.userId)
+      // 与真适配器同一口径：只复核成员位角色，**不**信调用方。
+      if (member.memberRole !== 'guardian') {
+        throw new ConflictException({
+          code: 'PARENT_PIN_REQUIRES_GUARDIAN',
+          message: '只有家长能重置家长 PIN（替身与真适配器同一口径）。'
+        })
+      }
+      const clearedFailures = member.pinFailedCount
+      const wasLocked = member.pinLockedUntil !== null && member.pinLockedUntil > new Date()
+      const hadPin = member.pinHash !== null
+      member.pinHash = input.pinHash
+      member.pinFailedCount = 0
+      member.pinLockedUntil = null
+      return {
+        pinConfigured: true,
+        pinSetAt: new Date().toISOString(),
+        changed: hadPin,
+        clearedFailures,
+        wasLocked
       }
     },
 

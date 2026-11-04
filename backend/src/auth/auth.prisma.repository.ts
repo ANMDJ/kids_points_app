@@ -9,9 +9,11 @@ import type {
   ExitKidModeInput,
   ExitParentModeInput,
   ModeStateRow,
+  ParentPinResetState,
   ParentPinState,
   ReadModeStateInput,
   RecordPinFailureInput,
+  ResetParentPinInput,
   SetParentPinInput
 } from './auth.repository'
 import { isPinLocked, nextPinFailureState } from './parent-mode.policy'
@@ -390,6 +392,91 @@ export class PrismaAuthRepository implements AuthPort {
         pinConfigured: true,
         pinSetAt: (updated.pinSetAt ?? now).toISOString(),
         changed: input.hadPinBefore
+      }
+    })
+  }
+
+  /**
+   * 读账号密码哈希（P1-7）。**不**过滤 `status` 之外的东西：
+   * 停用账号返回 `null`（与 `login` 的 `USER_NOT_ACTIVE` 同一判据 —— 停用账号
+   * 不该还能重置任何东西）。
+   */
+  async readAccountPasswordHash(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true, status: true }
+    })
+    if (user === null || user.status !== 'active') return null
+    return user.passwordHash
+  }
+
+  /**
+   * 用账号密码再验证后重设 PIN（P1-7，2026-11-04）。
+   *
+   * ── 顺序（与 `setParentPin` 同一条纪律，只有"凭什么改"不同）─────────────────
+   *   锁成员位 → 复核 guardian → 写新 `pinHash`/`pinSetAt` + 清零计数/锁定 → 写审计。
+   *
+   * ── 为什么审计动作仍记 `manage_parent_pin`（不新造一个动作）─────────────────
+   *   `AuditLog.action` 是自由文本，但矩阵 / 诚实探针（`honesty-probe` D 项）
+   *   把"动作"与 `switch_role_mode` / `manage_parent_pin` 这两类语义对账。
+   *   重置**就是**管理 PIN 的一种，多造一个 `reset_parent_pin` 会让对账表出现
+   *   一行没有矩阵语义的条目。区别写进 `after.via = 'account_password_reset'`，
+   *   审计里照样能一眼分辨。
+   */
+  async resetParentPin(input: ResetParentPinInput): Promise<ParentPinResetState> {
+    return await this.prisma.$transaction(async (tx) => {
+      const now = new Date()
+      const member = await this.lockMember(tx, input.childId, input.userId)
+      if (member === null) throw memberNotActive(input)
+      if (member.role !== 'guardian') {
+        throw new ConflictException({
+          code: 'PARENT_PIN_REQUIRES_GUARDIAN',
+          message: '只有家长能重置家长 PIN（这个账号在这个孩子上不是家长）。'
+        })
+      }
+
+      const wasLocked = isPinLocked(member.pinLockedUntil, now)
+      const updated = await tx.childMember.update({
+        where: { id: member.id },
+        data: {
+          pinHash: input.pinHash,
+          pinSetAt: now,
+          pinFailedCount: 0,
+          pinLockedUntil: null
+        },
+        select: { pinSetAt: true }
+      })
+
+      await tx.auditLog.create({
+        data: {
+          childId: input.childId,
+          actorUserId: input.operator.userId,
+          actorRole: input.operator.role,
+          action: 'manage_parent_pin',
+          targetType: 'ChildMember',
+          targetId: member.id,
+          deviceId: input.deviceId,
+          // ★ 只记"有没有 PIN / 错了几次 / 是否锁定" —— 绝不记哈希、长度、明文。
+          before: {
+            pinSet: member.pinHash !== null,
+            pinFailedCount: member.pinFailedCount,
+            locked: wasLocked
+          },
+          after: {
+            pinSet: true,
+            pinFailedCount: 0,
+            locked: false,
+            via: 'account_password_reset'
+          }
+        }
+      })
+
+      return {
+        pinConfigured: true,
+        pinSetAt: (updated.pinSetAt ?? now).toISOString(),
+        changed: member.pinHash !== null,
+        clearedFailures: member.pinFailedCount,
+        wasLocked
       }
     })
   }

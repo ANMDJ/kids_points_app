@@ -8,7 +8,7 @@ import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { ApprovalsExpiryService } from './approvals/approvals-expiry.service'
-import { applyGlobalPipes, logBootstrap } from './app.setup'
+import { applyGlobalPipes, applyHttpFoundation, logBootstrap } from './app.setup'
 import { applyCors } from './cors.setup'
 import { FamilyDeletionWorker } from './deletion/deletion.worker'
 import { assertAuthBootConfig } from './identity/auth-config'
@@ -36,6 +36,11 @@ async function bootstrap(): Promise<void> {
   assertAuthBootConfig()
 
   const app = await NestFactory.create(AppModule)
+
+  // ★ P2（2026-11-04）：请求追踪 id ＋ 全局异常过滤器。
+  //   **必须**排在 `applyCors` 之前：CORS 拒绝来源时会直接短路返回，
+  //   晚挂的话这类请求在日志里永远没有 id（见 app.setup.ts 的说明）。
+  applyHttpFoundation(app)
 
   // 关闭 Nest 的隐式 200 —— 审批创建必须显式返回 202（见 02 §9.3）。
   applyGlobalPipes(app)

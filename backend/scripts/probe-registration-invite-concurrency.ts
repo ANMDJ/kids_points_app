@@ -46,7 +46,12 @@ async function main(): Promise<void> {
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
           day,
           dailyLimit: limit,
-          issuedIpHash: null
+          issuedIpHash: null,
+          // W12 边界（2026-11-04）：探针只验全局额度，不验 IP 上限 ⇒ 放宽到 50、
+          // 业务日窗口给足一天（否则会被"同 IP 每天 N 张"提前挡住，60 笔并发验不出额度）。
+          ipDailyLimit: 50,
+          dayStart: new Date(Date.now() - 60 * 60 * 1000),
+          dayEnd: new Date(Date.now() + 24 * 60 * 60 * 1000)
         })
       )
     )

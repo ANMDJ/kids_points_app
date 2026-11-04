@@ -42,17 +42,30 @@ export interface CreateRegistrationInviteInput {
   dailyLimit: number
   /** 来源 IP 的 HMAC；没有盐时 `null`。 */
   issuedIpHash: string | null
+  /**
+   * 同一个 IP 每业务日最多发几张（W12 边界，2026-11-04）。
+   *
+   * ★ 为什么必须传给**适配器**、而不是在 service 里先 `COUNT` 一次：
+   *   先查再发是 TOCTOU —— 同一 IP 的两笔并发会各自读到 `used = 4 < 5`。
+   *   计数与落码放进同一个事务，最坏也只是"并发多放一张"，
+   *   而不会出现"同一秒刷 20 张"。
+   */
+  ipDailyLimit: number
+  /** 业务日的起止（UTC 绝对时刻）—— 按 IP 计数时用它划窗口。 */
+  dayStart: Date
+  dayEnd: Date
 }
 
 /**
  * 创建结果。
  *
- * `quota_exhausted` 是**正常业务结局**（不是异常）：仓储返回它，
- * 服务层负责翻成 429 并给出「明天几点再来」。
+ * `quota_exhausted` / `ip_limited` 都是**正常业务结局**（不是异常）：
+ * 仓储返回它，服务层负责翻成 429 并给出「什么时候再来」。
  */
 export type CreateRegistrationInviteResult =
   | { kind: 'created'; row: CreatedRegistrationInviteRow }
   | { kind: 'quota_exhausted'; issued: number }
+  | { kind: 'ip_limited'; used: number; limit: number }
 
 /** 注册时用来**路由**的码行（只读；不参与授权判定）。 */
 export interface RegistrationInviteLookup {
