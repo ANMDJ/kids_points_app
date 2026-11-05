@@ -387,59 +387,88 @@ sudo docker compose run --rm kids-api npm run seed:account   # 13800138000 / dem
 | `/kids/*` | `handle_path` 剥前缀 → `127.0.0.1:3000` | Flutter App 的 API（baseUrl = `https://hub.littlewish.top:8443/kids`） |
 | `/app/*` | `handle_path` 剥前缀 → `file_server`，root `/var/www/cline-hub/app` | APK 静态下载（App 自更新） |
 
-> ⚠️ **为什么不是 `/k`**：2026-11-02 上午 cline-console 的部署把 IP 站点的
-> `@kids path /k/*` 整段移除了，kids API 曾短时间没有公网入口。
-> 现在 App 走 8443 的 `/kids`（证书系统可信，不需要明文例外）；
-> 小程序的 `http://82.157.153.22/k` 若要恢复，需要把 `@kids` 段加回 IP 站点。
+> ⚠️ **为什么两条都要**：App 走 8443 的 `/kids`（证书系统可信，不需要明文例外）；
+> 小程序 `.env.local` 走 `http://82.157.153.22/k`（微信要求域名备案，IP 入口是老的
+> 可用通道）。**两条都得在**，少一条就是一侧全 404。
+>
+> ⚠️ **cline-hub 的部署会整份覆盖 `/etc/caddy/Caddyfile`**（2026-11-02 与 2026-11-05
+> 各踩一次）：8443 站点被写回「只有 `/app/*` ＋ catch-all → `127.0.0.1:3100`」，
+> 两条 `handle_path` 一起消失，用户侧看到的是 App「报错说没有数据」（404 被客户端
+> 翻成「要操作的数据不存在」），而容器一直是 `(healthy)`。
+> **cline-hub 每次发版后都要重跑一次下面的脚本**（watchdog 现在也会自动补，见 §8）。
 
 **插入/修复路由（幂等，自动备份 + `caddy validate`）：**
 
 ```bash
-scp deploy/ensure-kids-route.sh deploy/caddy-kids-8443.snippet ubuntu@82.157.153.22:/tmp/
+scp deploy/ensure-kids-route.sh deploy/caddy-kids-8443.snippet deploy/caddy-kids-k.snippet \
+  ubuntu@82.157.153.22:/tmp/
 ssh ubuntu@82.157.153.22 \
-  'sudo cp /tmp/ensure-kids-route.sh /tmp/caddy-kids-8443.snippet /srv/kids-points/deploy/ && \
-   sudo sed -i "s/\r$//" /srv/kids-points/deploy/ensure-kids-route.sh /srv/kids-points/deploy/caddy-kids-8443.snippet && \
+  'sudo cp /tmp/ensure-kids-route.sh /tmp/caddy-kids-8443.snippet /tmp/caddy-kids-k.snippet /srv/kids-points/deploy/ && \
+   sudo sed -i "s/\r$//" /srv/kids-points/deploy/ensure-kids-route.sh \
+     /srv/kids-points/deploy/caddy-kids-8443.snippet /srv/kids-points/deploy/caddy-kids-k.snippet && \
    sudo bash /srv/kids-points/deploy/ensure-kids-route.sh'
+```
+
+修完的判据（四条都必须是 200）：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://hub.littlewish.top:8443/kids/health
+curl -s -o /dev/null -w '%{http_code}\n' http://82.157.153.22/k/health
+curl -s https://hub.littlewish.top:8443/kids/app/version   # latestVersion/latestBuild
+curl -s http://82.157.153.22/k/app/version                 # 同一个后端，应当一致
 ```
 
 > `sed -i 's/\r$//'` 不是可选项：仓库 `.gitattributes` 把脚本标成 `eol=lf`，
 > 但 **scp 不做换行转换**，带 CRLF 的脚本会报 `set: pipefail`（已知坑见 §6 第 6 条）。
 
-**发布 APK：**
+**发布 APK（以 1.0.6+7 为例）：**
 
 ```bash
-# 本机构建（不需要任何设备/孩子 id）
+# ① 版本号三处一起改：pubspec.yaml、lib/app_version.dart、部署机 kids.env。
+#    改完先跑 analyze + test —— test/app_version_test.dart 会把前两处双向钉住。
 flutter build apk --release \
   --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
 
+# ② 上传（50MB 左右，scp 要一两分钟；落盘后核对字节数一致）
 scp build/app/outputs/flutter-apk/app-release.apk \
-  ubuntu@82.157.153.22:/tmp/kids-points-1.0.3.apk
+  ubuntu@82.157.153.22:/tmp/kids-points-1.0.6.apk
 ssh ubuntu@82.157.153.22 \
-  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.3.apk /var/www/cline-hub/app/ && \
-   sudo cp /var/www/cline-hub/app/kids-points-1.0.3.apk /var/www/cline-hub/app/kids-points-app.apk'
+  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.6.apk /var/www/cline-hub/app/ && \
+   sudo cp /var/www/cline-hub/app/kids-points-1.0.6.apk /var/www/cline-hub/app/kids-points-app.apk'
+
+# ③ 版本信息：用脚本改（自动备份 kids.env；中文说明从文件读，避免 shell 改写引号）
+scp deploy/update-app-env.py ubuntu@82.157.153.22:/tmp/
+ssh ubuntu@82.157.153.22 \
+  'sudo python3 /tmp/update-app-env.py 1.0.6 7 @/tmp/release_notes.txt && \
+   cd /srv/kids-points/deploy && sudo docker compose up -d --force-recreate kids-api'
 ```
 
 - `kids-points-app.apk` 是**稳定地址**（`GET /app/version` 默认返回它）；
 - 版本化的 `kids-points-X.Y.Z.apk` 保留，便于回滚 / 对比；
-- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.3.apk` 应为 `200` + `content-length` ≈ 包大小。
+- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.6.apk` 应为 `200` + `content-length` ≈ 包大小；
+- ★ **用 `--force-recreate`，不要只 `up -d`**：`kids.env` 是 `env_file`，只改文件内容时
+  compose 不保证重建容器 —— 2026-11-05 就是靠它才让 `/app/version` 立刻变成 `1.0.6 / 7`；
+- ★ **`pubspec.yaml` 改了但没发包 = 用户手里仍是旧界面**。`52` §6 记着这条真实教训：
+  1.0.5+6 的包打包于 2026-11-04 04:25，比 PIN 锁提交（06:38）早两小时，用户第二天还在输日期码。
 
-**版本信息（`/srv/kids-points/kids.env`，改完 `docker compose up -d`）：**
+**版本信息（`/srv/kids-points/kids.env`，`update-app-env.py` 就是改这一段）：**
 
 ```dotenv
-APP_LATEST_VERSION="1.0.3"
-APP_LATEST_BUILD="4"
+APP_LATEST_VERSION="1.0.6"
+APP_LATEST_BUILD="7"
 APP_MINIMUM_VERSION="1.0.0"
 APP_MINIMUM_BUILD="1"
 APP_DOWNLOAD_URL="https://hub.littlewish.top:8443/app/kids-points-app.apk"
-APP_RELEASE_NOTES="新增网站「邀请码获取」页（每天限量）；小程序新增邀请码注册页；注册页说明与错误提示同步更新。"
-APP_PUBLISHED_AT=""
+APP_PUBLISHED_AT="2026-11-05T04:21:14Z"
+APP_RELEASE_NOTES="取消「日期＋星期」验证码锁屏，改为家长 PIN 锁；「我的申请 / 消息」改为整页列表；家长首次进入先设置 PIN。"
 ```
 
-**四条探针：**
+**五条探针（两个入口都要查 —— 2026-11-05 那次只修一侧就够不着小程序）：**
 
 ```bash
 curl -s -o /dev/null -w 'kids=%{http_code}\n' https://hub.littlewish.top:8443/kids/app/version   # 200
-curl -s https://hub.littlewish.top:8443/kids/app/version | head -c 200                            # JSON
+curl -s https://hub.littlewish.top:8443/kids/app/version | head -c 200                            # latestVersion/latestBuild
+curl -s -o /dev/null -w 'k=%{http_code}\n'    http://82.157.153.22/k/app/version                  # 200，且版本一致
 curl -s -o /dev/null -w 'apk=%{http_code}\n'  https://hub.littlewish.top:8443/app/kids-points-app.apk  # 200
 curl -s -o /dev/null -w 'hub=%{http_code}\n'  https://hub.littlewish.top:8443/api/v1/health      # 200（别挤掉 hub）
 ```
@@ -598,6 +627,20 @@ sudo install -m 755 deploy/watchdog-kids-api.sh /usr/local/bin/kids-watchdog.sh
 ( crontab -l 2>/dev/null; \
   echo "*/5 * * * * /usr/local/bin/kids-watchdog.sh >/dev/null 2>&1" ) | crontab -
 sudo tail -f /var/log/kids-watchdog.log
+```
+
+**公网入口探针（2026-11-05 新增，起因是一次真实故障）**：容器 healthy **不等于**
+用户能用 —— cline-hub 的部署把 Caddyfile 里的 `/kids/*`、`/k/*` 覆盖掉时，容器照样
+`(healthy)`，而 App 每个请求都是 404。所以 watchdog 在容器 healthy 时还会探一次
+`KP_PUBLIC_HEALTH`（默认 `https://hub.littlewish.top:8443/kids/health`），不是 200
+就重跑 `ensure-kids-route.sh`（幂等；两次自动修复之间至少间隔 `KP_ROUTE_MIN_INTERVAL`
+默认 600 秒，避免每 5 分钟 reload 一次 Caddy 制造噪音）。日志判据：
+
+```bash
+sudo grep -E '公网入口|FIX' /var/log/kids-watchdog.log | tail -5
+# 正常时**什么都不写**（只有出问题才记一行）；手动验一次：
+sudo KP_PUBLIC_HEALTH=https://hub.littlewish.top:8443/nope/health /usr/local/bin/kids-watchdog.sh
+sudo tail -2 /var/log/kids-watchdog.log   # 期望 WARN …=404 ＋ SKIP（或 FIX，若已过冷却期）
 ```
 
 ★ 三条判据（别搞反，搞反会制造事故）：

@@ -143,7 +143,7 @@ ssh -i ~/.ssh/kids.pem ubuntu@82.157.153.22 \
 
 | 事项 | 卡点 | 说明 |
 |---|---|---|
-| 新 App 包（APK / 小程序）没有构建与上传 | **C**（我能做，本轮未做） | 本轮只改了源码并部署了后端；`pubspec.yaml` 仍是 `1.0.5+6`，线上 APK 也还是旧的（旧包里的日期码闸门照旧工作）。要发版需按 `deploy/README.md` §6.2 构建并上传 |
+| 新 App 包（APK / 小程序）没有构建与上传 | **APK ✅ 已发（2026-11-05，1.0.6+7）· 小程序仍是 C** | **2026-11-05 已补发 APK**：`pubspec.yaml` / `lib/app_version.dart` → `1.0.6 / 7`，`flutter build apk --release --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids` 产出 **52,825,362 字节**，上传 `/app/kids-points-1.0.6.apk` ＋ 稳定地址 `kids-points-app.apk`，`kids.env` 的 `APP_LATEST_*` 同步后 `up -d --force-recreate kids-api`，线上 `/kids/app/version` = `1.0.6 / 7`。**上一轮（2026-11-04）就是漏了这一步**：1.0.5+6 的包打包于 04:25，比本文件对应的提交（06:38）早 2 小时，所以旧包里日期码闸门照旧 —— 用户 2026-11-05 报「不是已经去掉了吗」。小程序 `dist/` 仍未上传（A 类） |
 | 真机验收：锁屏键盘手感、后台往返、孩子模式到点 | **D**（要真机） | 本环境无 Android 设备 / 无 GUI |
 | `POST /auth/date-code` 服务端端点仍在 | **B**（要产品裁定） | 删它要动迁移 + `41` 交接单 + 小程序契约；App 已零调用方 |
 
