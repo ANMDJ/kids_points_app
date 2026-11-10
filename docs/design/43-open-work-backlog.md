@@ -47,11 +47,11 @@
 | **P0-7** | pg18 网络附加自愈（`docker network connect` 是运行时状态） | ✅ **已完成（2026-11-03）** | 本轮复核（线上）：`deploy/ensure-kids-pg-network.sh` → `/usr/local/bin/kids-pg-network.sh`，root crontab `*/10 * * * *`；实跑 `run_exit=0`（当前已连接，静默退出）；`docker inspect pg18` 的 Networks 里确有 `deploy_default`。**仍未做**：把 pg18 搬进 compose（要动 hub 编排） |
 | **P1-1** | 推送落地（厂商 SDK / 小程序订阅消息） | **未做** | 本轮复核：`requestSubscribeMessage` 全仓只在 `43`/`design/README` 被**讨论**，`kids_points_mp/src/**` 0 命中 |
 | **P1-2** | 回收站 90 天到期自动清理 worker | **未做**（B 类：D4 裁定） | **本轮复核（2026-11-04，发版时顺手查）**：`backend/src/trash/` 只有手工 `DELETE /trash/:kind/:id`（`trash.controller.ts:67`，`@RequireAction('purge_trash_item')`），**无定时器 / worker**；`deletion.worker.ts` 是「家庭数据删除」，不是回收站到期清理 ⇒ 到期自动清理确实还没开工（不是「跑不了」，是没人排期 ＋ D4 没定） |
-| **P1-3** | 审批详情页 ＋ 通知深链 | **未做**（C 类，可直接开工） | **本轮复核（2026-11-04）**：App 只有收件箱列表 `lib/screens/approvals_screen.dart`（按 `pending/approved/rejected/all` 过滤，卡片只显示结构化 `summary`），`lib/screens/` 下**无详情页文件**；小程序 `kids_points_mp/src/pages/approvals/` 只有 `index.tsx` ＋ `index.scss` ⇒ 详情页与通知深链均未开工 |
+| **P1-3** | 审批详情页 ＋ 通知深链 | ✅ **已完成（2026-11-10）**，双端 ＋ 后端；**待部署** | 见 [`55-approval-detail-and-deeplink.md`](./55-approval-detail-and-deeplink.md)。后端新增 `GET /approvals/:id`（`approvals.controller.ts`，`view_own_approvals` ＋ service 的 `detailDenial()`：有批准资格的家长可看本孩子任意一条，否则必须本人）；响应在列表行基础上补 `requesterRole` / `selfApproved`（`approval-inbox.mapper.ts#toApprovalDetail`）。App：`lib/screens/approval_detail_screen.dart`（内容 / 金额 / 规则快照 / 申请人 / 时间 / 执行流水 / 幂等键 / 动作），收件箱卡片、我的申请行、**通知胶囊**都打开这一条（`notifications_screen.dart` 的 `_open`）。小程序：`pages/approval-detail/` ＋ `ApprovalCard.onOpen` ＋ `MyApplicationsSheet` 行点击 ＋ `NotificationsSheet` 胶囊（`mode=decide/withdraw/view`）。证据 = 后端 `approvals-http.test.ts` **组 I 6 条**（全文件 72 条通过）、`flutter analyze` **No issues found**、`flutter test` **518 全通过**（新增 `approval_detail_test.dart` 8 条）、小程序 `tsc` **EXIT=0** ＋ `npm test` **21 个用例文件全通过**（新增 `run-w15.mjs` 9 条）。**未做**：镜像重建 / 客户端发版（A 类：`sudo docker` / 打包上传）、`审计行` 的读接口（审计表本来不外发，详情页给的是可核对时间线 ＋ 执行流水 ＋ 幂等键） |
 | **P1-4** | 习惯独立 CRUD（`POST/PATCH /habits`） | **未做**（B 类：D6 口径） | **本轮复核（2026-11-04）**：`backend/src/habits/habits.controller.ts` 只有 `POST check-in`（:60）与 `POST :id/reverse`（:97），`habits.lifecycle.controller.ts:50` 只有 `DELETE :id` ⇒ **没有** `POST /habits` / `PATCH /habits/:id`，独立 CRUD 未开工 |
 | **P1-5** | 孩子头像（预设 / 上传二选一） | **未做**（B 类：D6 口径） | **本轮复核（2026-11-04）**：`backend/src/children/dto/update-child-profile.dto.ts:23` 的字段只有 `name`，无 `avatar`；`children` 模块无上传端点 ⇒ 预设头像 / 上传都未开工 |
 | **P1-6** | 加分配额 / 金额阈值限制生效 | **未做** | 本轮复核：`backend/src/permissions/permissions.guard.ts:114` 仍写着「不传 `amount`」，`amount` 在 Guard 里无其他命中 |
-| **P1-7** | 忘记家长 PIN 的重置通道 | ✅ **后端已完成（2026-11-04）**，双端入口未接 | 新增 `POST /auth/parent-pin/reset`（`auth.controller.ts` / `auth.service.ts#resetParentPin` / `dto/reset-parent-pin.dto.ts` / `auth.repository.ts` 两条端口方法 / `auth.prisma.repository.ts` 同事务写 + 审计 `after.via='account_password_reset'`）。口径：权限用 `switch_role_mode`（要救的设备正停在 child，`manage_parent_pin` 对它是 DENY）＋ 成员位必须 guardian ＋ 验 `User.passwordHash` ＋ 每账号每分钟 5 次（复用 `LoginRateLimiter`）。证据 = `test/auth-http.test.ts` **组 I 7 条**（成功 / 密码错零写 / 无密码 / 格式错零调用 / 孩子成员位 403 / 孩子模式窗口内也能重置且不动会话 / 第 6 次 429）。详见 [`53`](./53-request-id-pin-reset-and-c.md) §3。**仍未做**：App / 小程序「忘记 PIN」入口 |
+| **P1-7** | 忘记家长 PIN 的重置通道 | ✅ **后端（2026-11-04）＋ App 入口（2026-11-10）**；小程序入口未接 | 新增 `POST /auth/parent-pin/reset`（`auth.controller.ts` / `auth.service.ts#resetParentPin` / `dto/reset-parent-pin.dto.ts` / `auth.repository.ts` 两条端口方法 / `auth.prisma.repository.ts` 同事务写 + 审计 `after.via='account_password_reset'`）。口径：权限用 `switch_role_mode`（要救的设备正停在 child，`manage_parent_pin` 对它是 DENY）＋ 成员位必须 guardian ＋ 验 `User.passwordHash` ＋ 每账号每分钟 5 次（复用 `LoginRateLimiter`）。证据 = `test/auth-http.test.ts` **组 I 7 条**（成功 / 密码错零写 / 无密码 / 格式错零调用 / 孩子成员位 403 / 孩子模式窗口内也能重置且不动会话 / 第 6 次 429）。**2026-11-10 补 App 入口**：`lib/data/parent_mode_api.dart#resetPin` ＋ `lib/data/app_store.dart#resetParentPin` ＋ `lib/screens/parent_pin_reset_screen.dart`（账号密码 → 新 PIN 两遍）；入口在**锁屏**（「忘记 PIN？用账号密码重置」，成功后用新 PIN 直接解锁）与**修改 PIN 页**（「忘记当前 PIN？…」）；详见 [`54`](./54-pin-window-tabs-and-habits.md)。**仍未做**：小程序入口 |
 | **P1-9** | App token 持久化（现在 `Directory.systemTemp`，清缓存即掉登录） | **未做**（有意等 P1-1 一起改；B 类：D5 口径） | **本轮复核（2026-11-04）**：`lib/data/token_store_io.dart:23` 仍是 `Directory.systemTemp.path`（文件落缓存目录）⇒ 清缓存 / 系统清临时目录就要重登，token 持久化确实未做 |
 | **P1-10** | Web 版定位（对外可用 / 仅联调）未写死 | ✅ **已完成（2026-11-04，按默认建议写死「仅内部联调」）** | **本轮复核（2026-11-04）**：`web/` 只有 Flutter Web 壳（`index.html` ＋ 图标），无任何「仅联调 / 对外可用」的口径说明；`deploy/README.md` 也未写 ⇒ 2026-11-04 已在 README.md「Web 版定位」一节写死**仅内部联调、不对外发布**，并列出四个「要对外必须先补齐」的条件 |
 | **P2** | CI 平台、requestId/全局异常过滤、登录外限流、单实例假设、迁移随启动、镜像体积、App 分发策略、UI 级 E2E | **部分完成（2026-11-04）**：requestId ✅ ／ 迁移随启动 ✅；其余 6 项未做（C 类 ＋ 部分 A） | **本轮复核（2026-11-04，八项全查）**：① CI 平台 —— 仓库根**没有** `.github/`，全仓无 workflow；② requestId / 全局异常过滤器 —— `app.setup.ts` 与 `main.ts` 对 `Filter|requestId|helmet|limit` **0 命中**；③ 登录外限流 —— `LoginRateLimiter` 只由 `identity.service.ts` 的 `enforceRateLimit()` 调用（login / 账号登录 / 注册三处），其余写端点无应用层限流（`deploy/README.md:700` 同口径）；④ 单实例假设 —— `main.ts:58,63,67,68,73` **5 个** worker 直接进程内定时器，无分布式锁；⑤ 迁移随启动 —— `deploy/compose.yaml` 的 `kids-api` 服务**没有** `command:` 覆盖（只有 healthcheck 的 CMD），即 Dockerfile 的 `node dist/main.js`，迁移仍是手工链（`deploy/README.md:702`）；⑥ 镜像体积 —— 本机无 docker，**未复核**（沿用 `deploy/README.md` §1 的 912MB）；⑦ App 分发策略 —— 现状是**自托管 APK**（`deploy/README.md` §6.2 `/app/*` + `/k/app/version`），商店上架缺签名与开发者账号（A 类），策略本身未写死（B 类）；⑧ UI 级 E2E —— 见下面「验收边界」行 |
@@ -61,7 +61,9 @@
 | **测试边界** | `test-db/` 常驻套件补「网站发码并发」用例（目前只有手工探针 `npm run probe:invite-quota`） | ✅ **已完成（2026-11-04）** | 新增 `backend/test-db/registration-invites-db.dbtest.ts`（**6 条**：60 笔并发 ⇒ 恰好 50 `created` / 10 `quota_exhausted`、码两两不同、落库 50 行；用尽后再打 5 笔全被拒且 `issued` 不动；`dailyLimit=1` 首张不误判 / 两笔并发恰好 1 成功；落码失败（非法 `expiresAt`）⇒ 额度回滚且不留额度行；`readQuota` 只读）。**实跑**：`npm run typecheck:tests` **EXIT=0**；`npm run db:verify` **ALL PASS**；`npm run test:db` → **25 个用例文件 / 379 条全通过**（`PASS` 行，日志 `backend/.tmp_dbtest_20261104b.log`）。★ 补之前 `test/registration-invite-http.test.ts:13-16` 写的是「由 `test-db/` 负责」——指向一个**不存在的文件**（悬空承诺），本轮已把那句注释改成指向真实文件 |
 | **验收边界** | 真机走查 / 浏览器 E2E（**从未做过**） | **未做** | **本轮复核（2026-11-04）**：① E2E 框架 —— `node tools/search-tracked.mjs 'playwright\|puppeteer\|webdriverio\|detox\|integration_test'` → **0 命中**（857 个受管文件）；② 仓库里有一个**已入库**的 CDP 探针 `kids_points_mp/.tmp_test/h5_probe.js`（手写 CDP + `ws`，量 H5 悬浮按钮样式并截图），但它只量样式、不是「登录 → 引导 → 打卡 → 审批」的流程用例；③ `flutter test` 全是 widget/单元级，无真机。⇒ 真机走查 / 流程级 E2E **仍未做（D 类）** |
 
-**已完成（不再列入汇报，详见对应交接单）**：P0-1 运行期身份闭环（W10-B，`44`）·
+| **撤回已通过的愿望（用户 2026-11-10 第 11 条）** | 「近两天内通过的愿望可以撤回」 | **未做**（B 类：三条产品口径未定；C 类：端点可做） | **本轮复核（2026-11-10）**：全仓 `revoke` / `un-redeem` / `Wish.redeemed=false` 的写路径 **0 命中**；`POST /approvals/:id/withdraw` 只对 `pending` 生效（`backend/src/approvals/approvals.controller.ts` 的 `withdraw`）；`Wish` 只有 `redeemed/redeemedAt` 两个字段、没有撤回入口。需要先定：① 撤回是「退分 + 心愿恢复」还是「只退分」；② 谁有权（家长 / 申请的孩子）；③ 「两天」按 `ApprovalRequest.decidedAt` 还是兑换流水时间。确定后新增 `POST /wishes/:id/revoke-redemption`（冲正流水 + `redeemed=false` + 审计）＋ 双端入口。详见 [`54`](./54-pin-window-tabs-and-habits.md) §3 |
+| **PIN 存本机 / 离线解锁（用户 2026-11-10 第 6 条）** | PIN 是否能缓存在手机上，不联网也能校验 | **未做**（B 类：安全权衡） | **本轮复核（2026-11-10）**：客户端只发明文 PIN、库里只有 `scrypt$…`（`lib/data/parent_mode_api.dart` 文件头、`backend/src/common/pin-hash.ts`），**没有**任何本地校验值；断网时 `GET /auth/parent-mode` 拉不到 ⇒ `PinGuard` 直接放行（`lib/screens/pin_guard.dart` 的 error 分支）。要做离线解锁必须接受：本地派生值可被改包爆破（4–6 位数字，10⁴–10⁶ 空间）、以及「本地错 N 次强制联网」的策略。口径与代价见 [`54`](./54-pin-window-tabs-and-habits.md) §3 |
+
 P1-8 邀请制注册（W11-A，`45`）· 网站发码 ＋ `/invite` 页面（W12，`48`，2026-11-03 已上线）·
 **P0-2a App「我的 → 退出登录」**（2026-11-03）· **P0-2b App「我的 → 登录账号」**
 （2026-11-03：`GET/PUT /auth/account` 都有了调用方；证据 = `test/account_sheet_test.dart` **6 条**）·
@@ -156,6 +158,33 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
   `exec` 服务）；`Dockerfile` 加 `ENTRYPOINT`。**代码完成、未部署**（本机无 docker）。
 · **Web 版定位写死**（P1-10）：`README.md` 写明**仅内部联调、不对外发布** ＋ 四个对外前置条件。
 · 详见 [`53`](./53-request-id-pin-reset-and-c.md)。
+
+### 0.3 2026-11-10 本轮完成（用户 13 条反馈）
+
+> 逐条对照与「为什么 / 改在哪」见 [`54-pin-window-tabs-and-habits.md`](./54-pin-window-tabs-and-habits.md)。
+
+· **① 5 分钟倒计时**：旧实现解锁走 `POST /auth/parent-pin/verify`（只校验、不写 `expiresAt`），
+  而家长设备是 30 天会话 ⇒ 根本没有 5 分钟可倒计时。现按用户模型改成**解锁 = 进入家长模式**
+  （`POST /auth/parent-mode`，`app_store.dart#unlockAppWithPin`），再输一次即重置 5 分钟；
+  孩子模式中/已到期时改走 `DELETE /auth/kid-mode`（旧实现「输对 PIN 但仍是 child」）。
+· **② 顶部倒计时**：`lib/widgets/parent_mode_banner.dart`，挂在 `HomeShell` 四个 tab 之上；
+  五种状态（孩子模式进行中 / 到点 / 家长剩余 mm:ss / 已结束 / 会话自带无倒计时），每秒从绝对时刻重算。
+· **③ 多孩子切换**：`child_switch_actions.dart` + `child_switch_screen.dart` + `account_gate.dart#_switchChild`
+  （`GET /auth/session` → `POST /auth/child-session` → `adoptChild` → 清缓存但**保持解锁**）；
+  入口「我的 → 切换孩子」（仅 live 模式且已登录）。
+· **④⑤ PIN 键盘**：`pin_pad.dart` 按键按屏宽算（72–96 宽 / 56–76 高），`compact` 给弹层；
+  锁屏改成「上说明 / 下键盘」，键盘贴底（`pin_guard.dart`）。
+· **⑦ 忘记 PIN**：`parent_pin_reset_screen.dart`（账号密码 → 新 PIN 两遍）＋
+  `parent_mode_api.dart#resetPin` ＋ `app_store.dart#resetParentPin`；锁屏与「修改 PIN」页各一个入口。
+· **⑧⑨⑩⑫**：删「数据来自服务器」常驻横幅（App + 小程序）；四个 tab 顶部留白收紧；
+  习惯**常显 `N/M` 进度**并分「未完成 / 已完成」（`habit.dart#progressTextOf`，小程序同构）；
+  撤销提示带「（今日已完成 N/M）」。
+· **⑬**：锁屏与家长模式面板的 PIN 语义统一（已开启 ⇒ 显示剩余 / 再输重置；未开启 ⇒ 开 5 分钟；
+  孩子模式 ⇒ 先收回），同一个 PIN。
+· **未做**：第 11 条「两天内撤回已通过的愿望」（B 类，三条口径待定）、第 6 条「PIN 存本机」
+  （B 类，安全权衡）、小程序侧的倒计时 / 切换孩子 / 忘记 PIN（C 类）、真机验收（D 类）。
+· **证据**：`flutter analyze` / `flutter test` / 小程序 `npm test` 的实跑结果见 `54` §4 与
+  本轮回复；**后端本轮零改动**（用到的三条端点都是既有实现）。
 
 ---
 
@@ -436,14 +465,20 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
 
 ### P1-3 · 审批只有列表，没有详情；通知也没有深链
 
+> ✅ **2026-11-10 已完成（双端 ＋ 后端）**，见 [`55-approval-detail-and-deeplink.md`](./55-approval-detail-and-deeplink.md)。
+> 下面保留原始判据，逐条对照结果写在 `55` §2。
+
 **证据**：双端 UI 里 `详情` **0 命中**；`NotificationsSheet` 只做列表与「去审批」。
 `12-w3c-handoff.md` §9 也把「详情」留在边界外。
 
 **验收判据**
 
-- [ ] 审批详情：申请内容 / 金额 / 规则快照 / 申请人 / 时间 / 幂等键结果 / 审计行。
-- [ ] 从通知点进来能定位到**这一条**（而不是只切 tab）。
-- [ ] 孩子侧「我的申请」同样能看详情与撤回结果。
+- [x] 审批详情：申请内容 / 金额 / 规则快照 / 申请人 / 时间 / 幂等键结果 / 审计行。
+      （`审计行`：审计表**不外发**；详情页给的是 createdAt / decidedAt / expiresAt ＋
+      `executedRecordId` ＋ `approval:<id>` 幂等键，足以核对「谁在什么时候做了什么」，
+      见 `55` §2 的诚实边界。）
+- [x] 从通知点进来能定位到**这一条**（而不是只切 tab）。
+- [x] 孩子侧「我的申请」同样能看详情与撤回结果。
 
 **估计** 1–1.5 人日（双端）· **依赖** 无
 
@@ -639,7 +674,7 @@ ubuntu 在 `sudo` 组，`docker` 需要 `sudo`（**这就是「permission denied
 
 | 编号 | 问题 | 为什么必须先定 | 默认建议 |
 |---|---|---|---|
-| D1 | App 首版是否支持**多个孩子** | 决定 P0-1 是做「直接进」还是「先选孩子」 | 首版只支持 1 个；多孩子返回明确文案，别静默取第一个 |
+| D1 | App 首版是否支持**多个孩子** | 决定 P0-1 是做「直接进」还是「先选孩子」 | **2026-11-10 已落地**：首启仍自动选第一个（不做强制选择），「我的 → 切换孩子」可在成员位之间换（`lib/screens/child_switch_{actions,screen}.dart`、`account_gate.dart#_switchChild`）。仍未做：小程序侧切换 |
 | D2 | 推送通道选哪个 | 决定 P1-1 的全部工作量与凭据等待 | 小程序走订阅消息；App 国内 Android 需厂商通道，iOS 走 APNs —— 先选**一个**平台打通 |
 | D3 | 未登录能否输入邀请码 | 决定 P0-3 的入口位置与后端是否需要「登录后认领」 | 先登录再输入（`accept` 已要求身份；少一条临时凭据链路） |
 | D4 | 回收站到期是「自动彻底删除」还是「只标记」 | 决定 P1-2 的数据风险 | 先归档到 `deletedAt` 90 天后**软删转硬删**，但保留审计摘要；不要无声抹掉 |

@@ -245,7 +245,14 @@ export class ApprovalInboxItemDto {
     readonly decidedAt: number | null,
     readonly expiresAt: number,
     /** `null` = payload 读不懂，或 `kind` 比客户端新 —— 一律显示「内容无法识别」。 */
-    readonly summary: ApprovalSummaryDto | null
+    readonly summary: ApprovalSummaryDto | null,
+    /**
+     * 申请人建请求时的成员位（`guardian` / `child`）。
+     *
+     * ★ P1-3（2026-11-10）：只有详情接口（`GET /approvals/:id`）会下发；
+     *   列表 / 老服务端没有 ⇒ `null`。界面兜底成「家庭成员提交」，**不猜**。
+     */
+    readonly requesterRole: string | null = null
   ) {}
 
   static fromJson(raw: unknown, path: string): ApprovalInboxItemDto {
@@ -261,7 +268,8 @@ export class ApprovalInboxItemDto {
       readDate(json, 'createdAt', `${path}.createdAt`),
       readOptionalDate(json, 'decidedAt', `${path}.decidedAt`),
       readDate(json, 'expiresAt', `${path}.expiresAt`),
-      readApprovalSummary(json.summary, `${path}.summary`)
+      readApprovalSummary(json.summary, `${path}.summary`),
+      readOptionalString(json, 'requesterRole', `${path}.requesterRole`)
     )
   }
 }

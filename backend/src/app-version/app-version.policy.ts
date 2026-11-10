@@ -52,11 +52,13 @@ export const DEFAULT_MINIMUM_BUILD = 1
 /**
  * 默认为「本仓库当前构建」的下载地址。
  *
- * ★ 路径与 Caddy 的 `handle_path /app/*` 对齐：站点根 `/var/www/cline-hub/app`，
- *   所以 URL 里带 `/app/` 前缀（见 deploy/README §6.2）。
+ * ★ 2026-11-10 起 Kids 的 APK 由 Kids 自己的子域提供（域名方案 A）：
+ *   Caddy 的 `handle_path /app/*` 指向 `/srv/kids-points/app`，
+ *   不再借用 hub.littlewish.top:8443。
+ *   稳定地址：https://kids.littlewish.top/app/kids-points-app.apk
  */
 export const DEFAULT_DOWNLOAD_URL =
-  'https://hub.littlewish.top:8443/app/kids-points-app.apk'
+  'https://kids.littlewish.top/app/kids-points-app.apk'
 
 export const DEFAULT_RELEASE_NOTES =
   '新增网站「邀请码获取」页（每天限量）；小程序新增邀请码注册页；注册页说明与错误提示同步更新。'

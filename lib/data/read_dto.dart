@@ -298,6 +298,7 @@ class ApprovalInboxItemDto {
     required this.decidedAt,
     required this.expiresAt,
     required this.summary,
+    this.requesterRole,
   });
 
   factory ApprovalInboxItemDto.fromJson(Object? raw, String path) {
@@ -316,6 +317,9 @@ class ApprovalInboxItemDto {
       decidedAt: readOptionalDate(json, 'decidedAt', '$path.decidedAt'),
       expiresAt: readDate(json, 'expiresAt', '$path.expiresAt'),
       summary: ApprovalSummaryDto.tryParse(json['summary'], '$path.summary'),
+      // P1-3：只有详情接口（`GET /approvals/:id`）会带它；列表不带 ⇒ null。
+      requesterRole:
+          readOptionalString(json, 'requesterRole', '$path.requesterRole'),
     );
   }
 
@@ -334,6 +338,10 @@ class ApprovalInboxItemDto {
   /// 或 `kind` 是本客户端还不认识的**新**摘要。两种情况都必须显示成
   /// 「内容无法识别」并禁用批准 —— 看不到内容就不该点批。
   final ApprovalSummaryDto? summary;
+
+  /// 申请人建请求时的成员位（`guardian` / `child`）。
+  /// 只有详情接口会下发；列表 / 老服务端为 null（界面兜底「家庭成员提交」）。
+  final String? requesterRole;
 }
 
 /// 摘要的线格式联合：按 `kind` 分派，字段逐个严格校验。

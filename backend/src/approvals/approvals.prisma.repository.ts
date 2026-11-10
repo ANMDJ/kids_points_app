@@ -248,10 +248,11 @@ export class PrismaApprovalsRepository implements ApprovalsPort {
   /**
    * 读一条（**不**在这里惰性过期：读接口不应改数据；过期在 `decide` / `withdraw` 时判定）。
    * ★ `childId` 进 `WHERE`（W3-B）：另一家的审批与「不存在」必须长得一模一样。
+   * ★ P1-3：详情页与列表共用 `ApprovalListRow`（payload + 三个时间戳）。
    */
-  async findById(id: string, childId: string): Promise<ApprovalRow | null> {
+  async findById(id: string, childId: string): Promise<ApprovalListRow | null> {
     const row = await this.prisma.approvalRequest.findFirst({ where: { id, childId } })
-    return row === null ? null : toRow(row)
+    return row === null ? null : toListRow(row)
   }
 
   /**
@@ -1192,6 +1193,8 @@ function toRow(row: ApprovalRequest): ApprovalRow {
     childId: row.childId,
     action: row.actionType as ActionType,
     requesterUserId: row.requesterUserId,
+    // P1-3：详情页的「谁提的」。建请求时的快照列，读侧原样交出去。
+    requesterRole: row.requesterRole,
     status: row.status,
     decidedByUserId: row.decidedByUserId,
     executedRecordId: row.executedRecordId,

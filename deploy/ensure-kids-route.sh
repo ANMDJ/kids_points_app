@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# ⚠️ 历史脚本（2026-11-10 起由 conf.d 方案替代）：
+#    正式配置是 deploy/conf.d/20-kids.caddyfile，安装用 deploy/install-kids-caddy.sh。
+#    本脚本只保留给「还没迁移到 conf.d」的旧单文件 Caddyfile 做应急/回滚。
 # ════════════════════════════════════════════════════════════════════════
 # ensure-kids-route.sh —— 把两条 kids 入口插回 Caddy
 #

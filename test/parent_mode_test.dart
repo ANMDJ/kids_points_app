@@ -1270,6 +1270,34 @@ class _FakeParentModeApi implements ParentModeApi {
     return PinVerifyResult(remainingAttempts: verifyPinRemaining);
   }
 
+  /// 2026-11-10（用户第 7 条）：忘记 PIN 的联网重置。
+  Object? resetPinError;
+
+  /// 重置回包（省略时拼一个「成功 + 清零」的形状）。
+  ParentPinResetDto? resetValue;
+
+  int resetPinCalls = 0;
+  String? lastResetPassword;
+
+  @override
+  Future<ParentPinResetDto> resetPin({
+    required String password,
+    required String pin,
+  }) async {
+    resetPinCalls++;
+    lastPin = pin;
+    lastResetPassword = password;
+    if (resetPinError != null) throw resetPinError!;
+    return resetValue ??
+        ParentPinResetDto(
+          pinConfigured: true,
+          pinSetAt: DateTime.now(),
+          remainingAttempts: 5,
+          clearedFailures: 0,
+          wasLocked: false,
+        );
+  }
+
   @override
   void close() => closed = true;
 }

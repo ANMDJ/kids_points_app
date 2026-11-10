@@ -68,6 +68,23 @@ abstract class ParentModeApi {
   /// （不是 403：缺字段是请求形状问题，不是「猜错了」）。
   Future<ParentPinDto> setPin({required String pin, String? currentPin});
 
+  /// `POST /auth/parent-pin/reset`：忘记 PIN 时，用**账号密码**换一把新 PIN。
+  ///
+  /// ── 为什么要它（用户 2026-11-10：「忘记 PIN 码时，可以选择联网重置」）──────
+  ///   孩子模式到期 / 忘记 PIN 的设备停在 `child`，而「改 PIN」（[setPin]）要
+  ///   `manage_parent_pin`（孩子 DENY）—— 那一刻正好用不了。服务端为此单开了一条
+  ///   只要求 `switch_role_mode` 的路由（`docs/design/53`），凭据是**登录密码**。
+  ///
+  /// 失败语义（服务端原文，客户端不重新解释）：
+  ///   · `400 PARENT_PIN_FORMAT_INVALID` ⇒ 新 PIN 形状不对（不计次）；
+  ///   · `403 PARENT_PIN_REQUIRES_GUARDIAN` ⇒ 成员位不是家长；
+  ///   · `403 ACCOUNT_PASSWORD_NOT_SET` / `CURRENT_PASSWORD_INVALID` ⇒ 密码问题；
+  ///   · `429 PIN_RESET_RATE_LIMITED` ⇒ 每分钟最多 5 次。
+  Future<ParentPinResetDto> resetPin({
+    required String password,
+    required String pin,
+  });
+
   void close() {}
 }
 
@@ -205,6 +222,31 @@ class ParentModeApiClient implements ParentModeApi {
   }
 
   @override
+  Future<ParentPinResetDto> resetPin({
+    required String password,
+    required String pin,
+  }) async {
+    final String normalized = _requirePin(pin);
+    final String secret = password.trim();
+    if (secret.isEmpty) {
+      throw WriteApiException(
+        WriteFailureKind.badRequest,
+        '请输入登录密码（这里要的是账号密码，不是家长 PIN）。',
+        code: 'CLIENT_PASSWORD_REQUIRED',
+      );
+    }
+    final Object? decoded = await _send(
+      'POST',
+      '/auth/parent-pin/reset',
+      <String, Object?>{'password': secret, 'pin': normalized},
+    );
+    return _parse(
+      decoded,
+      (Object? raw, String path) => ParentPinResetDto.fromJson(raw, path),
+    );
+  }
+
+  @override
   Future<PinVerifyResult> verifyPin(String pin) async {
     final String normalized = _requirePin(pin);
     final Object? decoded = await _send(
@@ -319,14 +361,24 @@ class ParentModeApiClient implements ParentModeApi {
       return WriteApiException.fromHttp(statusCode: statusCode, body: body);
     }
     int seconds = 0;
+    String? code;
     if (body is Map) {
       final Object? raw = body['retryAfterSeconds'];
       if (raw is num) seconds = raw.toInt();
+      final Object? rawCode = body['code'];
+      if (rawCode is String) code = rawCode;
     }
     if (seconds < 0) seconds = 0;
-    final String message = seconds > 0
-        ? '家长 PIN 已连续输错，暂时锁定。请 ${humanizeSeconds(seconds)}后再试。'
-        : '家长 PIN 已连续输错，暂时锁定。请稍后再试（不是网络问题）。';
+    // 重置 PIN 的 429 是「密码试太频繁」，与「PIN 连错被锁」不是一回事 ——
+    // 两句话必须分开，否则家长会以为锁的是 PIN。
+    final bool resetLimited = code == 'PIN_RESET_RATE_LIMITED';
+    final String message = resetLimited
+        ? (seconds > 0
+            ? '密码尝试太频繁，请 ${humanizeSeconds(seconds)}后再试。'
+            : '密码尝试太频繁，请稍后再试。')
+        : seconds > 0
+            ? '家长 PIN 已连续输错，暂时锁定。请 ${humanizeSeconds(seconds)}后再试。'
+            : '家长 PIN 已连续输错，暂时锁定。请稍后再试（不是网络问题）。';
     return ParentPinLockException(
       retryAfterSeconds: seconds,
       userMessage: message,

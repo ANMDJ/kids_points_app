@@ -202,16 +202,18 @@ App 在提交前用 `lib/data/password_rules.dart` 本地判一次（服务端�
   有新版本时两处都会直接变成「发现新版本 vY · 点此更新」，「我的」页头像下方还会出现横幅。
 - 发布新版要同时改三处：`pubspec.yaml` 的 `version:`、`lib/app_version.dart` 的常量、
   服务器的 `APP_LATEST_VERSION` / `APP_LATEST_BUILD`（测试会钉住前两处一致）。
-- APK 放在 Caddy 的 `/app/*` 静态目录：
+- APK 放在 **Kids 自己子域**的 `/app/*` 静态目录（域名方案 A，2026-11-10 起）：
 
   ```text
-  /var/www/cline-hub/app/kids-points-1.0.5.apk
-  https://hub.littlewish.top:8443/app/kids-points-1.0.5.apk
+  /srv/kids-points/app/kids-points-1.0.5.apk
+  https://kids.littlewish.top/app/kids-points-1.0.5.apk
   ```
 
-- 当前这一版（**1.0.5+6**，2026-11-04 发布）的下载地址：
-  <https://hub.littlewish.top:8443/app/kids-points-app.apk>
-  （52,808,674 字节；与 `kids-points-1.0.5.apk` 同一份文件）
+- 稳定下载地址：
+  <https://kids.littlewish.top/app/kids-points-app.apk>
+  （与 `kids-points-1.0.5.apk` 同一份文件；迁移前旧地址
+  `https://hub.littlewish.top:8443/app/kids-points-app.apk` 仍可用，
+  过渡期结束后关闭，见 `deploy/DOMAIN-PLAN-A.md`）
 
 
 浏览器里没有 `dart:io`，所以下面三处各自有一份平台实现，由条件导入

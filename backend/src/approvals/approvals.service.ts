@@ -13,13 +13,14 @@ import {
   canDecide,
   canReview,
   decideRequestOutcome,
+  detailDenial,
   isSelfApproved,
   withdrawDenial
 } from '../contracts/approval-policy'
 import { resolveVerdict } from '../contracts/permission-matrix'
 import type { Actor } from '../permissions/actor'
 import { decodeApprovalCursor } from './approval.cursor'
-import { toInboxPage, type ApprovalInboxPageDto } from './approval-inbox.mapper'
+import { toInboxPage, toApprovalDetail, type ApprovalInboxPageDto, type ApprovalDetailDto } from './approval-inbox.mapper'
 import {
   APPROVALS_REPOSITORY,
   type ApprovalRow,
@@ -136,6 +137,52 @@ export class ApprovalsService {
       cursor
     })
     return toInboxPage(rows, limit)
+  }
+
+  /**
+   * `GET /approvals/:id` —— 单条审批详情（P1-3，2026-11-10）。
+   *
+   * ── 它补的是什么 ────────────────────────────────────────────────────────────
+   *   列表卡片只装得下一行 `summary`。家长要看「规则快照 / 谁提的 / 什么时候批的 /
+   *   这笔审批到底生成了哪条流水」，孩子要看「家长为什么拒 / 我还能不能撤回」——
+   *   而通知里的深链只有一个 `approvalId`，目标那条**可能不在已加载的那一页**。
+   *   所以必须有「按 id 取一条」的读路径，不能靠客户端在列表里翻。
+   *
+   * ── 谁能看 ──────────────────────────────────────────────────────────────────
+   *   `detailDenial()`（`contracts/approval-policy.ts`）：
+   *   有批准资格的家长可看本孩子的任意一条（与收件箱一致）；
+   *   否则必须自己是申请人。判定不写在本文件里（头注释的硬约束）。
+   *
+   * ── 为什么 `404` 与 `403` 都要有 ────────────────────────────────────────────
+   *   跨孩子 / 不存在的 id ⇒ 404（`findById` 把 `childId` 当查询条件）；
+   *   存在的 id 但「既不能批、也不是本人」⇒ 403 `NOT_REQUESTER`
+   *   —— 不把「这条存在」当成可泄露的信息。
+   */
+  async detail(id: string, actor: Actor, childId: string): Promise<ApprovalDetailDto> {
+    const row = await this.port.findById(id, childId)
+    if (row === null) {
+      throw new NotFoundException({
+        code: 'APPROVAL_NOT_FOUND',
+        message: `没有这条审批请求：${id}（或它不属于当前孩子）`
+      })
+    }
+
+    switch (detailDenial(row, actor)) {
+      case null:
+        break
+      case 'DETAIL_FORBIDDEN_ROLE':
+        throw new ForbiddenException({
+          code: 'FORBIDDEN',
+          message: `角色 ${actor.role} 没有查看审批详情的资格（矩阵 view_own_approvals）。`
+        })
+      case 'NOT_REQUESTER':
+        throw new ForbiddenException({
+          code: 'NOT_REQUESTER',
+          message: '只有申请人本人或有权批准这条申请的家长可以查看详情。'
+        })
+    }
+
+    return toApprovalDetail(row)
   }
 
   /**

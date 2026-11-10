@@ -1,5 +1,9 @@
 # deploy/caddy-kids.caddyfile —— 「积分小管家」的两个入口（完整参考）
 #
+# ⚠️ 历史文件（2026-11-01 备案前绕行方案）：
+#    2026-11-10 起正式配置是 deploy/conf.d/20-kids.caddyfile（kids.littlewish.top，
+#    Caddy 自动签发/续期证书）。本文件只用于理解旧入口与回滚，不要作为新部署依据。
+#
 # 线上**同时**需要这两段，缺一段就有客户端连不上：
 #   ① `/k` 路径入口（HTTP）   → 小程序在用（备案未过，微信只认已备案域名）
 #   ② `www:8443` 站点（HTTPS）→ Flutter App 在用（腾讯云 DV 证书固定）

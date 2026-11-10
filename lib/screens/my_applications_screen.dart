@@ -8,6 +8,7 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/page_header.dart';
 import '../widgets/pills.dart';
+import 'approval_detail_screen.dart';
 
 /// 「我的申请」：**我提交的**审批（W5-J），含撤回。
 ///
@@ -275,6 +276,7 @@ class _MyApplicationsScreenState extends State<MyApplicationsScreen> {
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(
         radius: 16,
+        onTap: () => _openDetail(item),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -340,6 +342,25 @@ class _MyApplicationsScreenState extends State<MyApplicationsScreen> {
       ),
     );
   }
+
+  /// 打开详情（P1-3）：本页是「我提交的」，所以允许撤回、不显示批准。
+  ///
+  /// 返回时**总是重拉第一页**：详情页里可能撤回了 / 读到服务端最新状态，
+  /// 而本页的 `_items` 是打开时那一份 —— 不重拉就会留一行过时的「撤回」。
+  Future<void> _openDetail(ApprovalInboxItem item) async {
+    await Navigator.of(context).push<Object?>(
+      MaterialPageRoute<Object?>(
+        builder: (_) => ApprovalDetailScreen(
+          approvalId: item.id,
+          initial: item,
+          canWithdraw: true,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _load(reset: true);
+  }
+
 }
 
 String _formatTime(DateTime time) {

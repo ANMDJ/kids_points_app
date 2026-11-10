@@ -8,6 +8,7 @@ import { sharedDeviceContext } from './runtime_identity'
 import { readCompiledEnvironment } from './compiled_env'
 import { ReadApiException } from './read_api_errors'
 import {
+  ApprovalInboxItemDto,
   ApprovalsPageDto,
   ConsentStateDto,
   FamilyDeletionStateDto,
@@ -296,6 +297,27 @@ export class ReadApiClient {
       await this.get('/approvals/mine', approvalPageQuery(input))
     )
   }
+  /**
+   * 单条审批详情（`GET /approvals/:id`，P1-3，2026-11-10）。
+   *
+   * 为什么不能只靠列表：通知里的深链只有 `approvalId`，目标那条可能在后面的
+   * 页、或已不在 `pending` 筛选里。服务端按 `(id, childId)` 取一条；
+   * 跨孩子 / 不存在统一 404，由页面照实说明。
+   */
+  async fetchApproval(id: string): Promise<ApprovalInboxItemDto> {
+    const trimmed = id.trim()
+    if (trimmed === '') {
+      throw new ReadApiException('badRequest', '审批 id 不能为空。', {
+        code: 'APPROVAL_ID_REQUIRED'
+      })
+    }
+    return ApprovalInboxItemDto.fromJson(
+      await this.get(`/approvals/${encodeURIComponent(trimmed)}`),
+      'approval'
+    )
+  }
+
+
 
   /**
    * 站内通知（`GET /notifications`，W5-L）：**我自己的**消息。

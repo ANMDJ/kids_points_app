@@ -272,6 +272,66 @@ class ParentPinDto {
   }
 }
 
+/// `POST /auth/parent-pin/reset` 的回包（P1-7，2026-11-04；App 接入 2026-11-10）。
+///
+/// 重置只换一把钥匙：**没有** `activeRole` / `parentModeExpiresAt` ——
+/// 界面不能在「重置成功」之后顺手显示「已进入家长模式」（那是另一件事，
+/// 由 `POST /auth/parent-mode` 回答）。
+class ParentPinResetDto {
+  ParentPinResetDto({
+    required this.pinConfigured,
+    required this.pinSetAt,
+    required this.remainingAttempts,
+    required this.clearedFailures,
+    required this.wasLocked,
+  });
+
+  factory ParentPinResetDto.fromJson(Object? raw, String path) {
+    final Map<String, Object?> json = readObject(raw, path);
+    final ParentPinResetDto dto = ParentPinResetDto(
+      pinConfigured: readBool(json, 'pinConfigured', '$path.pinConfigured'),
+      pinSetAt: readOptionalDate(json, 'pinSetAt', '$path.pinSetAt'),
+      remainingAttempts:
+          readInt(json, 'remainingAttempts', '$path.remainingAttempts'),
+      clearedFailures: readInt(json, 'clearedFailures', '$path.clearedFailures'),
+      wasLocked: readBool(json, 'wasLocked', '$path.wasLocked'),
+    );
+    dto._validateShape(path);
+    return dto;
+  }
+
+  final bool pinConfigured;
+  final DateTime? pinSetAt;
+  final int remainingAttempts;
+
+  /// 重置前被清掉的错误次数（给界面说「之前的 N 次错误作废」）。
+  final int clearedFailures;
+
+  /// 重置前是否处于锁定（true ⇒ 现在已解锁）。
+  final bool wasLocked;
+
+  void _validateShape(String path) {
+    if (!pinConfigured) {
+      throw ReadApiException.malformed(
+        '$path.pinConfigured',
+        detail: '重置 PIN 成功后 pinConfigured 必须为 true',
+      );
+    }
+    if (remainingAttempts < 0 || remainingAttempts > 5) {
+      throw ReadApiException.malformed(
+        '$path.remainingAttempts',
+        detail: '剩余次数越界（0–5）：$remainingAttempts',
+      );
+    }
+    if (clearedFailures < 0) {
+      throw ReadApiException.malformed(
+        '$path.clearedFailures',
+        detail: '清掉的错误次数不能是负数：$clearedFailures',
+      );
+    }
+  }
+}
+
 /// `POST /auth/parent-pin/verify` 的回包（2026-11-04，本机 PIN 锁）。
 ///
 /// ── 为什么 `valid` 必须是 `true` ────────────────────────────────────────────

@@ -317,6 +317,7 @@ ApprovalInboxItem mapApprovalInboxItem(ApprovalInboxItemDto dto) {
     decidedAt: dto.decidedAt,
     expiresAt: dto.expiresAt,
     summary: dto.summary == null ? null : mapApprovalSummary(dto.summary!),
+    requesterRole: dto.requesterRole,
   );
 }
 

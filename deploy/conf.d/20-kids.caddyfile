@@ -1,0 +1,52 @@
+# 积分小管家（Kids Points）：kids.littlewish.top
+#
+# 方案 A：Caddy 为 kids 子域自动签发 / 自动续期证书（HTTP-01 + TLS-ALPN-01）。
+# 不再需要腾讯云手动 DV 证书，也不再使用 8443 非标端口。
+#
+# 由 kids_points_app 仓库安装：
+#   sudo bash deploy/install-kids-caddy.sh
+# 这样 cline-hub 发版（只覆盖主文件 + 00/10/90 分片）不会把它删掉。
+kids.littlewish.top {
+	encode zstd gzip
+
+	# ① App 版本端点必须优先于 /app/* 静态目录：
+	#    GET /app/version 是 API，不能交给 file_server（否则 404）。
+	@app_version path /app/version /app/version/
+	handle @app_version {
+		header Cache-Control "no-store"
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# ② Kids APK 下载：/app/xxx.apk -> /srv/kids-points/app/xxx.apk
+	#    与 Kids 产品同域；Hub 不再承载 Kids 的安装包。
+	#    稳定地址：https://kids.littlewish.top/app/kids-points-app.apk
+	handle_path /app/* {
+		root * /srv/kids-points/app
+		file_server
+	}
+
+	# ③ 其余全部是 API / 邀请页 / 探活
+	handle {
+		header Cache-Control "no-store"
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	log {
+		output file /var/lib/caddy/kids.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

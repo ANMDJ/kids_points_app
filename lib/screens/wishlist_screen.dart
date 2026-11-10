@@ -32,7 +32,8 @@ class _WishlistScreenState extends State<WishlistScreen> {
 
   /// 标题栏高度：标题行在其中垂直居中，滚动区域从标题栏下方开始
   /// （不再像浮层那样压在列表上）。
-  static const double _headerHeight = 56;
+  /// 2026-11-10（用户第 9 条「顶部标题太空了」）：56 → 46，去掉多余留白。
+  static const double _headerHeight = 46;
 
   final ScrollController _controller = ScrollController();
 

@@ -7,11 +7,9 @@ import '../theme/app_colors.dart';
 import '../widgets/animated_point_text.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/habit_tile.dart';
-import '../widgets/kid_mode_banner.dart';
 import '../widgets/page_header.dart';
 import '../widgets/points_jar.dart';
 import '../widgets/soft_button.dart';
-import 'sheets/parent_mode_sheet.dart';
 import 'sheets/quick_note_sheet.dart';
 
 /// 首页：当前可用积分 + 积分罐 + 今天的习惯 + 记一笔。
@@ -27,13 +25,15 @@ class HomeScreen extends StatelessWidget {
     final List<HabitView> habits = store.habitViews;
     final int doneCount =
         habits.where((HabitView habit) => habit.checked).length;
+    // 未完成 = 还没到今天的上限（1/2 的仍然算未完成，用户第 10 条）。
+    final List<HabitView> pendingHabits =
+        habits.where((HabitView habit) => !habit.checked).toList();
+    final List<HabitView> doneHabits =
+        habits.where((HabitView habit) => habit.checked).toList();
 
-    // W14：孩子模式期间首页顶部常驻一条状态条。
-    // ★ 这里**不**渲染倒计时：首页没有秒级刷新，写死的数字在切后台后会变成
-    //   谎言。精确剩余时间在「家长模式」面板里（那里每秒重绘）。
-    final DateTime now = DateTime.now();
-    final bool kidModeExpired = store.isKidModeExpiredAt(now);
-    final bool kidModeOn = kidModeExpired || store.isKidModeActiveAt(now);
+    // 2026-11-10：孩子模式 / 家长模式的倒计时与状态已移到**抬头栏**
+    // （`HomeShell` → `widgets/parent_mode_banner.dart`，四个 tab 都看得到）。
+    // 首页不再重复画一条 `KidModeBanner` —— 两行同样的字只会让人以为出了两次状态。
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -44,15 +44,8 @@ class HomeScreen extends StatelessWidget {
           child: ListView(
             // 内容比屏幕短时也要能下拉刷新（否则空态/一条记录时刷新手势无效）。
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 28),
             children: <Widget>[
-              if (kidModeOn) ...<Widget>[
-                KidModeBanner(
-                  expired: kidModeExpired,
-                  onTap: () => showParentModeSheet(context),
-                ),
-                const SizedBox(height: 14),
-              ],
               const Text(
                 '当前可用积分',
                 textAlign: TextAlign.center,
@@ -76,6 +69,9 @@ class HomeScreen extends StatelessWidget {
               ),
               const Center(child: PointsJar(width: 168)),
               const SizedBox(height: 20),
+              // 2026-11-10（用户第 10 条）：「可以完成两次的任务，把已完成和未完成
+              // 分开显示」。分组判据是**达上限**（`checked`），不是「打过一次」——
+              // 1/2 的任务必须留在「未完成」里，否则家长会以为它今天做完了。
               SectionTitle(
                 title: '今天的习惯',
                 trailing: Text(
@@ -86,38 +82,36 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ),
               ),
-              ...habits.map(
-                (HabitView habit) => HabitTile(
-                  habit: habit,
-                  onTap: () async {
-                    // live 模式走服务端写入口；预览模式由 store 回落到本地写。
-                    // 视图是快照，取回习惯本身交给 store（Dart 没有 TS 的结构类型兼容）
-                    final String? message =
-                        await store.submitCheckIn(habit.habit);
-                    if (!messenger.mounted) return;
-                    messenger.hideCurrentSnackBar();
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          message ?? '太棒了！“${habit.title}”+${habit.points} 积分',
-                        ),
-                      ),
-                    );
-                  },
-                  onLongPress: () async {
-                    // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
-                    final String? message =
-                        await store.submitUndoCheckIn(habit.habit);
-                    if (!messenger.mounted) return;
-                    messenger.hideCurrentSnackBar();
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(message ?? '已撤销“${habit.title}”的打卡'),
-                      ),
-                    );
-                  },
+              if (pendingHabits.isEmpty && doneHabits.isNotEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    '今天的习惯都完成了 🎉',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                 ),
+              ...pendingHabits.map(
+                (HabitView habit) => _tile(habit, store, messenger),
               ),
+              if (doneHabits.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 4),
+                SectionTitle(
+                  title: '已完成',
+                  trailing: Text(
+                    '${doneHabits.length} 项',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+                ...doneHabits.map(
+                  (HabitView habit) => _tile(habit, store, messenger),
+                ),
+              ],
               const SizedBox(height: 10),
               SoftButton(
                 label: '记一笔',
@@ -144,6 +138,50 @@ class HomeScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// 一张习惯卡（未完成 / 已完成两组共用）。
+  ///
+  /// ── 撤销后的提示为什么要带进度（用户第 12 条）────────────────────────────
+  ///   旧提示只说「已撤销」，而 1/2 的任务撤销后卡片**看起来没变**
+  ///   （`checked` 只在达上限时才变）—— 于是被读成「撤销没生效」。
+  ///   现在撤销成功后再取一次派生视图，把 `今日已完成 N/M` 写进同一句提示。
+  Widget _tile(
+    HabitView habit,
+    AppStore store,
+    ScaffoldMessengerState messenger,
+  ) {
+    return HabitTile(
+      habit: habit,
+      onTap: () async {
+        // live 模式走服务端写入口；预览模式由 store 回落到本地写。
+        // 视图是快照，取回习惯本身交给 store（Dart 没有 TS 的结构类型兼容）
+        final String? message = await store.submitCheckIn(habit.habit);
+        if (!messenger.mounted) return;
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              message ?? '太棒了！“${habit.title}”+${habit.points} 积分',
+            ),
+          ),
+        );
+      },
+      onLongPress: () async {
+        // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因
+        final String? message = await store.submitUndoCheckIn(habit.habit);
+        if (!messenger.mounted) return;
+        final HabitView after = store.habitViewOf(habit.habit);
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              message ?? '已撤销“${habit.title}”的打卡（${after.progressText}）',
+            ),
+          ),
+        );
+      },
     );
   }
 }

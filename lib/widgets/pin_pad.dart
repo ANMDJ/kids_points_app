@@ -63,6 +63,7 @@ class PinPad extends StatelessWidget {
     this.enabled = true,
     this.errorText,
     this.hintText,
+    this.compact = false,
   });
 
   final PinInputController controller;
@@ -75,6 +76,10 @@ class PinPad extends StatelessWidget {
 
   /// 圆点下面的常驻说明（例如「4–6 位数字」）。
   final String? hintText;
+
+  /// 紧凑模式：底部弹层里空间有限（没有整屏可以铺），按键取 64–84 宽、48–60 高。
+  /// 锁屏 / 设置页用默认尺寸（更大，符合用户第 4 条）。
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -113,44 +118,70 @@ class PinPad extends StatelessWidget {
                 ),
               ),
             ],
-            const SizedBox(height: 18),
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 268),
-                child: Column(
-                  children: <Widget>[
-                    for (final List<String> row in _digitRows)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
+            const SizedBox(height: 20),
+            // 2026-11-10（用户要求「PIN 页面有点小，做大一点并适配手机」）：
+            // 按键尺寸不再写死 76×56，而是按可用宽度算 ——
+            //   · 小屏（≤240dp）取 72 宽，手指仍点得准；
+            //   · 常见手机（360–420dp）取 (宽)/3 ≈ 120–140，明显比原来大；
+            //   · 平板 / Web 封顶 96，避免一排数字横跨整个屏幕。
+            LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                final double available = constraints.maxWidth.isFinite
+                    ? constraints.maxWidth.clamp(272.0, 420.0)
+                    : 320.0;
+                final double keyWidth = compact
+                    ? (available / 3).clamp(64.0, 84.0)
+                    : (available / 3).clamp(72.0, 96.0);
+                final double keyHeight = compact
+                    ? (keyWidth * 0.72).clamp(48.0, 60.0)
+                    : (keyWidth * 0.78).clamp(56.0, 76.0);
+                final double rowGap = compact ? 8.0 : 10.0;
+                return Center(
+                  child: SizedBox(
+                    width: keyWidth * 3,
+                    child: Column(
+                      children: <Widget>[
+                        for (final List<String> row in _digitRows)
+                          Padding(
+                            padding: EdgeInsets.only(bottom: rowGap),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: <Widget>[
+                                for (final String key in row)
+                                  _digit(key,
+                                      width: keyWidth, height: keyHeight),
+                              ],
+                            ),
+                          ),
+                        Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: <Widget>[
-                            for (final String key in row) _digit(key),
+                            _PinKey(
+                              key: const ValueKey<String>('pin-key-clear'),
+                              label: '清空',
+                              width: keyWidth,
+                              height: keyHeight,
+                              onTap: enabled ? controller.clear : null,
+                              subtle: true,
+                            ),
+                            _digit('0',
+                                width: keyWidth, height: keyHeight),
+                            _PinKey(
+                              key: const ValueKey<String>('pin-key-backspace'),
+                              icon: Icons.backspace_outlined,
+                              width: keyWidth,
+                              height: keyHeight,
+                              onTap: enabled ? controller.backspace : null,
+                              semanticLabel: '删除一位',
+                              subtle: true,
+                            ),
                           ],
-                        ),
-                      ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: <Widget>[
-                        _PinKey(
-                          key: const ValueKey<String>('pin-key-clear'),
-                          label: '清空',
-                          onTap: enabled ? controller.clear : null,
-                          subtle: true,
-                        ),
-                        _digit('0'),
-                        _PinKey(
-                          key: const ValueKey<String>('pin-key-backspace'),
-                          icon: Icons.backspace_outlined,
-                          onTap: enabled ? controller.backspace : null,
-                          semanticLabel: '删除一位',
-                          subtle: true,
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             ),
           ],
         );
@@ -165,10 +196,12 @@ class PinPad extends StatelessWidget {
     <String>['7', '8', '9'],
   ];
 
-  Widget _digit(String digit) {
+  Widget _digit(String digit, {required double width, required double height}) {
     return _PinKey(
       key: ValueKey<String>('pin-key-$digit'),
       label: digit,
+      width: width,
+      height: height,
       onTap: enabled ? () => controller.add(digit) : null,
       semanticLabel: '数字 $digit',
     );
@@ -201,15 +234,15 @@ class _PinDots extends StatelessWidget {
         for (int index = 0; index < PinInputController.maxLength; index += 1)
           AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            margin: const EdgeInsets.symmetric(horizontal: 7),
-            width: 14,
-            height: 14,
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            width: 17,
+            height: 17,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: index < length ? active : Colors.transparent,
               border: Border.all(
                 color: index < length ? active : AppColors.textHint,
-                width: index < length ? 1.2 : 1.6,
+                width: index < length ? 1.4 : 1.8,
               ),
             ),
           ),
@@ -227,6 +260,8 @@ class _PinKey extends StatelessWidget {
     required this.onTap,
     this.semanticLabel,
     this.subtle = false,
+    this.width = 76,
+    this.height = 56,
   });
 
   final String? label;
@@ -234,6 +269,10 @@ class _PinKey extends StatelessWidget {
   final VoidCallback? onTap;
   final String? semanticLabel;
   final bool subtle;
+
+  /// 按键尺寸由 [PinPad] 按屏宽算出（2026-11-10：原来写死 76×56，手机上偏小）。
+  final double width;
+  final double height;
 
   @override
   Widget build(BuildContext context) {
@@ -251,15 +290,15 @@ class _PinKey extends StatelessWidget {
           customBorder: const CircleBorder(),
           onTap: onTap,
           child: SizedBox(
-            width: 76,
-            height: 56,
+            width: width,
+            height: height,
             child: Center(
               child: icon != null
-                  ? Icon(icon, size: 22, color: fg)
+                  ? Icon(icon, size: height * 0.4, color: fg)
                   : Text(
                       label ?? '',
                       style: TextStyle(
-                        fontSize: 23,
+                        fontSize: height * 0.42,
                         fontWeight: FontWeight.w600,
                         color: fg,
                       ),

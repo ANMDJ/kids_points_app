@@ -9,23 +9,13 @@ import {
   isNotificationUnread
 } from '../data/notification'
 import type { NotificationItem } from '../data/notification'
+import { pushPage } from '../utils/nav'
 import { toast } from '../utils/toast'
 import './sheets.scss'
 
 export interface NotificationsSheetProps {
   visible: boolean
   onClose: () => void
-  /**
-   * 打开「我的申请」面板。**由页面提供**（而不是在这里再挂一个弹窗）：
-   * `.kp-sheet__panel` 带 `transform`，会把自己变成 `position: fixed` 的
-   * 包含块 —— 嵌套的子弹窗会按 panel 尺寸定位并被内容区裁掉。
-   */
-  onOpenApplications: () => void
-  /**
-   * 切到「审批」tab（W5-M）：家长收到「有人提交了申请」时，要去的是收件箱
-   * 而不是自己**没提交过**的「我的申请」。由页面提供 —— 只有页面持有 tab 下标。
-   */
-  onOpenApprovals: () => void
 }
 
 /**
@@ -43,9 +33,9 @@ export interface NotificationsSheetProps {
  * ── 点开 = 标记已读，但不强制跳转 ─────────────────────────────────────────
  *   点一条就打一次 `PATCH /notifications/:id/read`（失败原样提示，
  *   界面不回滚成未读 —— 服务端回包才是权威值）。
- *   审批类消息多一个胶囊，去向按 `type` 分（W5-M）：
- *     · `approval.approved` / `approval.rejected` ⇒「查看申请」→「我的申请」看结果；
- *     · `approval.submitted` ⇒「去审批」→ 切到「审批」页给答复。
+ *   审批类消息多一个胶囊，点它打开**这一条**的详情（P1-3）：
+ *     · `approval.submitted` ⇒ 详情页可批 / 拒（`mode=decide`）；
+ *     · `approval.approved` / `rejected` ⇒ 只看结果（`mode=view`）。
  *   普通消息（没有 `approvalId`）只是读掉，不做无意义的跳转。
  *
  * 列表与分页状态放在 store（`notifications` / `notificationsHasMore`）：
@@ -53,9 +43,7 @@ export interface NotificationsSheetProps {
  */
 export default function NotificationsSheet({
   visible,
-  onClose,
-  onOpenApplications,
-  onOpenApprovals
+  onClose
 }: NotificationsSheetProps) {
   const store = useStore()
   /** 有读请求（首次拉取 / 重试 / 加载更多）在途；写请求的忙碌状态由 store 表达。 */
@@ -152,18 +140,25 @@ export default function NotificationsSheet({
               void markRead(item)
             }}
             onOpenApplication={() => {
-              // 与 Flutter 一致：标记失败也打开「我的申请」——
-              // 用户想看的是结果，不该被一次写失败拦在门外。
+              // P1-3：打开**这一条**的详情（结果类消息只看，不显示动作）。
               void (async () => {
                 await markRead(item)
-                onOpenApplications()
+                pushPage(
+                  `/pages/approval-detail/index?id=${encodeURIComponent(
+                    item.approvalId ?? ''
+                  )}&mode=view`
+                )
               })()
             }}
             onOpenSubmitted={() => {
-              // 同理：标记失败也照样切过去，否则家长会以为「点了没反应」。
+              // 「有人提交了申请」⇒ 家长可批 / 拒（同一详情页，mode=decide）。
               void (async () => {
                 await markRead(item)
-                onOpenApprovals()
+                pushPage(
+                  `/pages/approval-detail/index?id=${encodeURIComponent(
+                    item.approvalId ?? ''
+                  )}&mode=decide`
+                )
               })()
             }}
           />

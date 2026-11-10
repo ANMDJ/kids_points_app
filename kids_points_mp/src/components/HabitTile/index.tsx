@@ -18,9 +18,9 @@ export default function HabitTile({
   onClick,
   onLongPress
 }: HabitTileProps) {
-  const subtitle = habit.checked
-    ? `${habit.condition} · ${habit.doneText}`
-    : `${habit.condition} · ${habit.limitText}`
+  // 2026-11-10（用户第 10 条）：进度由派生视图给（`0/2 → 1/2 → 2/2`），
+  // 组件不再自己拼「达上限才显示已完成」—— 那正是「完成一个也看不出来」的成因。
+  const subtitle = `${habit.condition} · ${habit.progressText}`
 
   return (
     <AppCard

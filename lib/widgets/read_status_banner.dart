@@ -11,8 +11,11 @@ import '../theme/app_colors.dart';
 ///   ① 只在 `store.isLiveMode` 时出现 —— 本地预览不打扰用户；
 ///   ② 失败时**明确说出现在看到的是哪份数据**（空态 / 旧的服务端数据），
 ///      不能把 501/401 显示成「暂无记录」；
-///   ③ 只读就说只读 —— 写客户端没就绪时不能让用户以为操作已经保存
-///      （W5-B/W5-E 之后「打卡 / 记一笔 / 兑换 / 昵称」都能真写，这句话只说给 false 分支）。
+///   ③ 只读就说只读 —— 写客户端没就绪时不能让用户以为操作已经保存。
+///   ★ 2026-11-10（用户第 8 条）：**成功态**的那行常驻文案
+///      （「数据来自服务器 · 打卡 / 记一笔 / 兑换 / 昵称均会实时保存」）已删除 ——
+///      它只是在说「一切正常」，正式版却天天占着抬头栏一行。
+///      现在只有**读取失败**（① / ②）与**首次读取中**才出现横条。
 class ReadStatusBanner extends StatelessWidget {
   const ReadStatusBanner({super.key});
 
@@ -58,14 +61,13 @@ class ReadStatusBanner extends StatelessWidget {
         text: '正在读取服务器数据…',
       );
     } else {
-      content = _Banner(
-        background: AppColors.primarySoft,
-        foreground: AppColors.primaryText,
-        icon: Icons.cloud_done_outlined,
-        text: store.usesServerWrites
-            ? '数据来自服务器 · 打卡 / 记一笔 / 兑换 / 昵称均会实时保存'
-            : '只读模式 · 数据来自服务器（写入口尚未接入）',
-      );
+      // 2026-11-10（用户第 8 条）：「数据来自服务器 · 打卡 / 记一笔 / 兑换 /
+      // 昵称均会实时保存」这条**常驻**提示被删掉了。
+      //   理由：它不是状态，而是「一切正常」的同义词 —— 每天占着抬头栏一行，
+      //   用户读不到任何新信息。真正需要看的话只在两种时候：读取失败（上面）
+      //   与首次读取中（上一分支）。所以「正式版是否还会一直存在」的答案是：
+      //   **不会**了；只有出错 / 首次加载才出现。
+      return const SizedBox.shrink();
     }
 
     return SafeArea(

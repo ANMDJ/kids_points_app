@@ -186,6 +186,9 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
       childId: input.childId,
       action: input.action,
       requesterUserId: input.requesterUserId,
+      // P1-3：详情页的「谁提的」来自建请求时的成员位快照（真适配器读同一列）。
+      requesterRole: input.requesterRole,
+
       status,
       decidedByUserId,
       executedRecordId: status === 'approved' ? `rec-${seq}` : null,
@@ -214,7 +217,8 @@ function makeFakePort(): ApprovalsPort & { calls: PortCall[]; rows: Map<string, 
       calls.push({ method: 'findById', input: { id, childId } })
       const row = rows.get(id)
       // ★ 与真适配器同一语义（W3-B）：`childId` 是查询条件，不是事后比较。
-      return row !== undefined && row.childId === childId ? row : null
+      // P1-3：详情与列表共用 `ApprovalListRow`，缺的时间戳 / payload 由 `asListRow` 补齐。
+      return row !== undefined && row.childId === childId ? asListRow(row) : null
     },
     async decide(input) {
       calls.push({ method: 'decide', input })
@@ -1591,6 +1595,132 @@ describe('组 F：我的申请（GET /approvals/mine，W5-J）', () => {
 
   it('viewer 没有矩阵列 ⇒ 403，端口一次都没被调用', async () => {
     const r = await get(VIEWER)
+    assert.equal(r.status, 403)
+    assert.equal(port.calls.length, 0)
+  })
+})
+
+
+// ── 组 I：审批详情（GET /approvals/:id，P1-3）─────────────────────────────────
+// ★ 这一组钉住三件事：
+//   ① 家长（有批准资格）能看本孩子的任意一条；孩子只能看**自己**提的；
+//   ② 跨孩子 / 不存在的 id 一律 404，且 `childId` 来自会话（不是 URL）；
+//   ③ `requesterRole` / `selfApproved` 是服务端算好的事实，客户端不用猜。
+describe('组 I：审批详情（GET /approvals/:id，P1-3）', () => {
+  let app!: INestApplication
+  let url = ''
+  let port!: ReturnType<typeof makeFakePort>
+
+  const get = async (id: string, headers: Record<string, string>): Promise<HttpResult> =>
+    send(url, `/approvals/${encodeURIComponent(id)}`, { method: 'GET', headers })
+
+  const create = async (
+    headers: Record<string, string>,
+    body: Record<string, unknown>
+  ): Promise<HttpResult> => send(url, '/approvals', { body, headers })
+
+  before(async () => {
+    port = makeFakePort()
+    ;({ app, url } = await startApp(port))
+  })
+  after(async () => {
+    await app.close()
+  })
+  beforeEach(() => {
+    port.calls.length = 0
+    port.rows.clear()
+  })
+
+  it('家长能读本孩子任意一条：内容摘要 / 时间 / 申请人角色都在同一个响应里', async () => {
+    const created = await create(CHILD, { action: 'redeem', targetId: 'w-lego' })
+    assert.equal(created.status, 202)
+    const id = String(created.body.id)
+
+    const r = await get(id, GUARDIAN)
+    assert.equal(r.status, 200)
+    assert.equal(r.body.id, id)
+    assert.equal(r.body.status, 'pending')
+    assert.equal(r.body.requesterRole, 'child', '申请人角色来自建请求时的快照')
+    assert.equal(r.body.selfApproved, false)
+    assert.deepEqual(r.body.summary, {
+      kind: 'redeem',
+      wishId: 'w-lego',
+      title: '乐高',
+      cost: 100
+    })
+    assert.equal(typeof r.body.createdAt, 'string')
+    assert.equal(typeof r.body.expiresAt, 'string')
+    assert.equal(r.body.decidedAt, null)
+    assert.equal(r.body.executedRecordId, null)
+
+    const call = port.calls.find((c) => c.method === 'findById')
+    assert.deepEqual(call?.input, { id, childId: CHILD_ID }, 'childId 必须来自会话，不是 URL')
+  })
+
+  it('申请人（孩子）能读自己的那一条', async () => {
+    const created = await create(CHILD, {
+      action: 'request_points_bonus',
+      amount: 7,
+      reason: '倒垃圾'
+    })
+    const r = await get(String(created.body.id), CHILD)
+    assert.equal(r.status, 200)
+    assert.equal(r.body.requesterRole, 'child')
+    assert.equal((r.body.summary as Record<string, unknown>).amount, 7)
+    assert.equal(r.body.selfApproved, false)
+  })
+
+  it('孩子读**别人**提的 ⇒ 403 NOT_REQUESTER（不把「这条存在」当可泄露信息）', async () => {
+    const dad = await create(GUARDIAN, { action: 'redeem', targetId: 'w-dad' })
+    assert.equal(dad.status, 202)
+
+    const r = await get(String(dad.body.id), CHILD)
+    assert.equal(r.status, 403)
+    assert.equal(r.body.code, 'NOT_REQUESTER')
+  })
+
+  it('自批的那一条：selfApproved=true（批准人与申请人同一人）', async () => {
+    const self = await create(GUARDIAN, {
+      action: 'redeem',
+      targetId: 'w-dad',
+      autoApprove: true
+    })
+    assert.equal(self.status, 201)
+    assert.equal(self.body.status, 'approved')
+
+    const r = await get(String(self.body.id), GUARDIAN)
+    assert.equal(r.status, 200)
+    assert.equal(r.body.selfApproved, true)
+    assert.equal(r.body.requesterRole, 'guardian')
+    assert.equal(typeof r.body.executedRecordId, 'string')
+    assert.equal(typeof r.body.decidedAt, 'string')
+  })
+
+  it('不存在 / 跨孩子的 id ⇒ 404 APPROVAL_NOT_FOUND', async () => {
+    const missing = await get('ap-does-not-exist', GUARDIAN)
+    assert.equal(missing.status, 404)
+    assert.equal(missing.body.code, 'APPROVAL_NOT_FOUND')
+
+    port.rows.set('ap-other', {
+      id: 'ap-other',
+      childId: 'child-2',
+      action: 'redeem',
+      requesterUserId: 'u-kid',
+      requesterRole: 'child',
+      status: 'pending',
+      decidedByUserId: null,
+      executedRecordId: null,
+      payload: { wishId: 'w-x', titleSnapshot: 'x', costSnapshot: 1 },
+      createdAt: new Date(Date.UTC(2026, 9, 20, 0, 0, 1)),
+      decidedAt: null,
+      expiresAt: new Date(Date.UTC(2026, 9, 23, 0, 0, 1))
+    })
+    const crossChild = await get('ap-other', GUARDIAN)
+    assert.equal(crossChild.status, 404, 'childId 收口失效 —— 看到了别家的审批')
+  })
+
+  it('viewer 没有矩阵列 ⇒ 403，端口一次都没被调用', async () => {
+    const r = await get('ap-1', VIEWER)
     assert.equal(r.status, 403)
     assert.equal(port.calls.length, 0)
   })

@@ -31,7 +31,7 @@ block = (
     f'APP_LATEST_BUILD="{build}"\n'
     'APP_MINIMUM_VERSION="1.0.0"\n'
     'APP_MINIMUM_BUILD="1"\n'
-    'APP_DOWNLOAD_URL="https://hub.littlewish.top:8443/app/kids-points-app.apk"\n'
+    'APP_DOWNLOAD_URL="https://kids.littlewish.top/app/kids-points-app.apk"\n'
     f'APP_PUBLISHED_AT="{published}"\n'
     f'APP_RELEASE_NOTES="{notes}"\n'
 )

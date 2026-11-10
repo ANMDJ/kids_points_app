@@ -196,3 +196,38 @@ export function canWithdraw(
 ): boolean {
   return withdrawDenial(request, actor) === null
 }
+
+/**
+ * 读**单条**审批（`GET /approvals/:id`，P1-3）被拒的两种原因。
+ *
+ * 为什么需要一条独立的判定（而不是在 controller 里写 if）：
+ *   详情页同时服务两种人 —— **有权批的家长**（收件箱 / 通知深链）与
+ *   **申请人自己**（「我的申请」/ 审批结果通知）。两个条件都不能写进
+ *   `approvals.service.ts`（该文件的硬约束是「不出现任何角色判断」），
+ *   所以和 `withdrawDenial()` 一样，判定只放在这里。
+ */
+export type DetailDenial =
+  | 'DETAIL_FORBIDDEN_ROLE' // 矩阵 view_own_approvals 不是 ALLOW（viewer / 未知角色）
+  | 'NOT_REQUESTER' // 没有批准资格，且不是申请人本人
+
+/**
+ * 详情页的放行判据（P1-3）：
+ *   ① 有批准资格（矩阵 `review_approvals` ALLOW）⇒ 本孩子范围内的任何一条都能看，
+ *      与收件箱完全一致（家长看得到「待我批的那条」，才谈得上点进去）；
+ *   ② 否则必须自己是申请人（矩阵 `view_own_approvals` ALLOW 且 id 相同）。
+ *
+ * ★ 跨孩子的隔离**不在这里**：`findById(id, childId)` 已把 `childId` 当查询条件，
+ *   另一家的 id 与「不存在」都返回 `null`（W3-B），上层统一 404。
+ * ★ fail-closed：`viewer` / 未知角色在 ① 为 false、② 的矩阵判定为 DENY ⇒ 403。
+ */
+export function detailDenial(
+  request: { requesterUserId: string },
+  actor: { userId: string; role: Role | 'viewer' }
+): DetailDenial | null {
+  if (canReview(actor.role)) return null
+  if (resolveVerdict('view_own_approvals', actor.role) !== 'ALLOW') {
+    return 'DETAIL_FORBIDDEN_ROLE'
+  }
+  if (request.requesterUserId !== actor.userId) return 'NOT_REQUESTER'
+  return null
+}

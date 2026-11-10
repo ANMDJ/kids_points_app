@@ -58,6 +58,10 @@ export default function Home() {
   // 结构字段 ＋ 当天流水现算），习惯上那些状态字段已不复存在。
   const habits = store.habitViews()
   const doneCount = habits.filter((habit) => habit.checked).length
+  // 2026-11-10（用户第 10 条）：未完成 / 已完成分开显示。
+  // 判据是「达今日上限」（`checked`）—— 1/2 的任务仍算未完成。
+  const pendingHabits = habits.filter((habit) => !habit.checked)
+  const doneHabits = habits.filter((habit) => habit.checked)
 
   // W14：孩子模式期间首页顶部常驻一条状态条。**不渲染倒计时**：
   // 首页没有秒级刷新，写死的数字在切后台后会变成谎言（精确剩余在面板里）。
@@ -78,7 +82,16 @@ export default function Home() {
     // 修 B7：撤销改为写入一条冲正流水（原记录保留），失败时给出可读原因。
     // 这里不再预读 `habit.checked` —— 能不能撤销由 store 按当天流水判定（修 A3）。
     const message = await store.submitUndoCheckIn(habit)
-    toast(message ?? `已撤销“${habit.title}”的打卡`)
+    if (message) {
+      toast(message)
+      return
+    }
+    // 2026-11-10（用户第 12 条）：把撤销后的进度一起说出来 ——
+    // 1/2 的任务撤销后卡片看起来没变，旧提示「已撤销」会被读成没生效。
+    const after = store.habitViews().find((view) => view.id === habit.id)
+    toast(
+      `已撤销“${habit.title}”的打卡${after ? `（${after.progressText}）` : ''}`
+    )
   }
 
   return (
@@ -124,7 +137,10 @@ export default function Home() {
               </Text>
             }
           />
-          {habits.map((habit) => (
+          {habits.length > 0 && pendingHabits.length === 0 ? (
+            <Text className='kp-home__progress'>今天的习惯都完成了 🎉</Text>
+          ) : null}
+          {pendingHabits.map((habit) => (
             <HabitTile
               key={habit.id}
               habit={habit}
@@ -132,6 +148,26 @@ export default function Home() {
               onLongPress={() => handleUndo(habit)}
             />
           ))}
+          {doneHabits.length > 0 ? (
+            <>
+              <SectionTitle
+                title='已完成'
+                trailing={
+                  <Text className='kp-home__progress'>
+                    {`${doneHabits.length} 项`}
+                  </Text>
+                }
+              />
+              {doneHabits.map((habit) => (
+                <HabitTile
+                  key={habit.id}
+                  habit={habit}
+                  onClick={() => handleCheckIn(habit)}
+                  onLongPress={() => handleUndo(habit)}
+                />
+              ))}
+            </>
+          ) : null}
           <View className='kp-home__button'>
             <SoftButton
               label='记一笔'

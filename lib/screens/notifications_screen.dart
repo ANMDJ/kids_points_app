@@ -9,7 +9,7 @@ import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/page_header.dart';
 import '../widgets/pills.dart';
-import 'my_applications_screen.dart';
+import 'approval_detail_screen.dart';
 
 /// 站内通知中心（W5-L）：审批结果等消息的**收件箱**。
 ///
@@ -30,17 +30,12 @@ import 'my_applications_screen.dart';
 /// ── 点开 = 标记已读，但不强制跳转 ─────────────────────────────────────────
 ///   点一条就打一次 `PATCH /notifications/:id/read`（失败经 SnackBar 原样上报，
 ///   界面不回滚成未读 —— 服务端回包才是权威值）。
-///   审批类消息多一个胶囊，但去向按 `type` 分（W5-M）：
-///     · `approval.approved` / `approval.rejected` ⇒「查看申请」→「我的申请」看结果；
-///     · `approval.submitted`（家长收到「有人提交了申请」）⇒「去审批」→
-///       关掉本页并切到「审批」页。把后者也送进「我的申请」等于让家长去翻
-///       自己**没提交过**的列表。
+///   审批类消息多一个胶囊，点它打开**这一条**的详情（P1-3）：
+///     · `approval.submitted`（家长收到「有人提交了申请」）⇒ 详情页显示批准 / 拒绝；
+///     · `approval.approved` / `rejected`（申请人收到结果）⇒ 详情页只显示结果。
 ///   普通消息（没有 `approvalId`）只是读掉，不做无意义的跳转。
 class NotificationsScreen extends StatefulWidget {
-  const NotificationsScreen({super.key, this.onOpenApprovals});
-
-  /// 切到「审批」页（由 `HomeShell` 提供）；为空时「去审批」只关本页。
-  final VoidCallback? onOpenApprovals;
+  const NotificationsScreen({super.key});
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
@@ -213,20 +208,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  /// 审批类消息的去向（W5-M）：结果 ⇒ 我的申请；「有人提交」⇒ 审批页。
+  /// 审批类消息的去向（P1-3，2026-11-10）：**直接打开这一条**的详情。
+  ///
+  /// ── 为什么不再只是「切 tab / 打开我的申请」────────────────────────────────
+  ///   旧实现只知道「有一条审批」，于是把用户丢进一个列表让他自己找；
+  ///   目标那条可能在后面的页、或已不在 `pending` 筛选里。现在消息里有
+  ///   `approvalId`，`GET /approvals/:id` 按 id 取一条，打开的就是**这一条**。
+  ///
+  /// ── 谁能打开 ────────────────────────────────────────────────────────────────
+  ///   · `approval.submitted`（家长收到的）⇒ 家长有批准资格，可批 / 拒；
+  ///   · `approval.approved` / `rejected`（申请人收到的）⇒ 只看结果，不显示动作。
+  ///   读失败（404 / 403）由详情页照实说明，不画成「加载中」。
   Future<void> _open(NotificationDto item) async {
     await _markRead(item);
     if (!mounted) return;
-    if (!item.isApprovalSubmitted) {
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const MyApplicationsScreen()),
-      );
-      return;
-    }
-    // 先拿到回调与 Navigator，再 pop：pop 之后本页已不在树上。
-    final VoidCallback? openApprovals = widget.onOpenApprovals;
-    Navigator.of(context).pop();
-    openApprovals?.call();
+    final String? approvalId = item.approvalId;
+    if (approvalId == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ApprovalDetailScreen(
+          approvalId: approvalId,
+          canDecide: item.isApprovalSubmitted,
+        ),
+      ),
+    );
   }
 
   /// 空态必须区分**没拉到**与**真的没有** —— 403 / 断网时显示「没有消息」

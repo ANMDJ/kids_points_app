@@ -3,6 +3,8 @@ export default defineAppConfig({
     'pages/home/index',
     'pages/wishlist/index',
     'pages/approvals/index',
+    // P1-3：审批详情（从收件箱 / 我的申请 / 通知深链进入）。
+    'pages/approval-detail/index',
     'pages/profile/index',
     'pages/record/index',
     'pages/rule/index',

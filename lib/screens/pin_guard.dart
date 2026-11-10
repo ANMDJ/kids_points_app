@@ -8,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/pin_pad.dart';
 import '../widgets/soft_button.dart';
+import 'parent_pin_reset_screen.dart';
 import 'parent_pin_setup_screen.dart';
 import 'session_actions.dart';
 
@@ -22,6 +23,14 @@ import 'session_actions.dart';
 ///   ① 冷启动：`isAppUnlocked` 初始为 false；
 ///   ② 退到后台（`paused` / `hidden`）⇒ `lockAppForBackground()`；
 ///   ③ 孩子模式窗口结束后回到前台 ⇒ `settleAppLockAfterResume()` 补锁。
+///
+/// ── 2026-11-10 语义修订（用户第 1 / 13 条）──────────────────────────────────
+///   用户要的模型是「**输入 PIN = 进入家长模式，开始 5 分钟倒计时**」。
+///   于是解锁走 `POST /auth/parent-mode`（不是只校验的 `verify`）：
+///     · 不在家长模式 ⇒ 开一个 5 分钟窗口；
+///     · 已经在窗口内 ⇒ 再输一次 = **重置**这 5 分钟；
+///     · 孩子模式中 / 已到期 ⇒ 先 `DELETE /auth/kid-mode` 收回，再解锁。
+///   5 分钟倒计时显示在四个 tab 的抬头栏（`widgets/parent_mode_banner.dart`）。
 ///
 /// ── 两道**放行**（宁可少锁一次，也不能把人锁在门外）───────────────────────
 ///   · 一次都拉不到 `/auth/parent-mode`（断网 / 服务端旧）⇒ 不知道有没有 PIN，
@@ -245,48 +254,71 @@ class _PinLockScreenState extends State<_PinLockScreen> {
   @override
   Widget build(BuildContext context) {
     final DateTime now = DateTime.now();
+    final bool kidActive = widget.store.isKidModeActiveAt(now);
     final bool kidExpired = widget.store.isKidModeExpiredAt(now);
     final int lockSeconds = widget.store.parentPinLockSecondsAt(now);
     final bool locked = widget.store.isParentPinLockedAt(now) || lockSeconds > 0;
+    final bool parentMode = widget.store.isParentMode;
+    final bool pinBacked = widget.store.isParentModePinBacked;
+    final int parentSeconds = widget.store.parentModeRemainingSeconds(now);
+
+    // 副标题必须说清「这次输 PIN 会发生什么」（用户第 13 条）：
+    //   · 孩子模式中 / 已到期 ⇒ 收回孩子模式（不是「解锁」了事）；
+    //   · 已在 5 分钟窗口内     ⇒ 再输一次会**重置**成 5 分钟；
+    //   · 其余                 ⇒ 开一个新的 5 分钟窗口。
+    final String subtitle;
+    if (kidActive || kidExpired) {
+      subtitle = kidExpired
+          ? '孩子模式的时间到了。输入家长 PIN 会结束孩子模式，并回到家长权限。'
+          : '孩子模式进行中。输入家长 PIN 可以提前收回这台手机。';
+    } else if (parentMode && pinBacked && parentSeconds > 0) {
+      subtitle = '家长模式还剩 ${_mmss(parentSeconds)}。'
+          '再输一次 PIN 会重新计时 5 分钟。';
+    } else {
+      subtitle = '输入家长 PIN 进入家长模式（5 分钟，可随时再输一次续期）。';
+    }
 
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: GradientPage(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 34, 24, 28),
+        child: SafeArea(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              // 上半部分（说明 / 错误）可滚动：小屏 + 长错误文案不会把键盘顶出屏幕。
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 28, 24, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
               Center(
                 child: Container(
-                  width: 62,
-                  height: 62,
+                  width: 68,
+                  height: 68,
                   decoration: const BoxDecoration(
                     color: AppColors.primarySoft,
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
                     Icons.lock_rounded,
-                    size: 28,
+                    size: 30,
                     color: AppColors.primaryDeep,
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               const Text(
                 '已锁定',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 20,
+                  fontSize: 21,
                   fontWeight: FontWeight.w800,
                   color: AppColors.textPrimary,
                 ),
               ),
               const SizedBox(height: 8),
               Text(
-                kidExpired
-                    ? '孩子模式的时间到了。请输入家长 PIN 继续使用这台手机。'
-                    : '请输入家长 PIN。离开 App 或重新打开后都要再输一次。',
+                subtitle,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 12.5,
@@ -294,8 +326,21 @@ class _PinLockScreenState extends State<_PinLockScreen> {
                   color: AppColors.textSecondary,
                 ),
               ),
-              const SizedBox(height: 26),
-              if (_busy) const LinearProgressIndicator(minHeight: 2),
+              if (_busy) ...<Widget>[
+                const SizedBox(height: 14),
+                const LinearProgressIndicator(minHeight: 2),
+              ],
+                    ],
+                  ),
+                ),
+              ),
+              // 下半部分：数字键盘靠近屏幕底部（用户第 5 条「符合人体工程学」）。
+              // 键盘自己会变大（用户第 4 条），所以这里不再给它额外的大边距。
+              SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
               PinPad(
                 controller: _pin,
                 enabled: !_busy,
@@ -306,7 +351,7 @@ class _PinLockScreenState extends State<_PinLockScreen> {
                         : null),
                 hintText: '4–6 位数字',
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 18),
               // ★ 必须包一层 `ValueListenableBuilder`：按钮的可用状态取决于
               //   「敲了几位」，而输入状态在 `PinPad` 内部变化 —— 不监听的话，
               //   家长敲满 4 位后「解锁」仍然是灰的（实测踩到）。
@@ -315,26 +360,34 @@ class _PinLockScreenState extends State<_PinLockScreen> {
                 builder: (BuildContext context, String value, _) {
                   final bool ready = !_busy && _pin.isReady;
                   return SoftButton(
-                    label: '解锁',
+                    label: _busy ? '正在校验…' : '解锁',
                     icon: Icons.lock_open_rounded,
                     enabled: ready,
                     onTap: ready ? _unlock : null,
                   );
                 },
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 6),
+              // 用户第 7 条：忘记 PIN 时有一条**联网**重置的路。
+              // 它走账号密码（`POST /auth/parent-pin/reset`），
+              // 成功后用刚设的新 PIN 直接解锁本机。
+              Center(
+                child: TextButton(
+                  onPressed: _busy ? null : _openReset,
+                  child: const Text('忘记 PIN？用账号密码重置'),
+                ),
+              ),
               const Text(
-                '这是本机的入口锁：它不改变账号权限，也不能代替服务端的身份判定。'
+                '这是本机的入口锁：解锁会同时打开 5 分钟家长权限。'
                 '（断网时无法校验，锁门会放行。）',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 11.5,
-                  height: 1.6,
+                  fontSize: 11,
+                  height: 1.55,
                   color: AppColors.textHint,
                 ),
               ),
-              if (widget.onSignOut != null && (_error != null || locked)) ...<Widget>[
-                const SizedBox(height: 6),
+              if (widget.onSignOut != null && (_error != null || locked))
                 Center(
                   child: TextButton.icon(
                     onPressed: _busy ? null : widget.onSignOut,
@@ -342,12 +395,33 @@ class _PinLockScreenState extends State<_PinLockScreen> {
                     label: const Text('用手机号/密码重新登录'),
                   ),
                 ),
-              ],
+                  ],
+                ),
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 忘记 PIN ⇒ 重置页；成功后用**新 PIN** 解锁（家长刚刚亲手设过它）。
+  Future<void> _openReset() async {
+    final String? newPin = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => const ParentPinResetScreen(),
+      ),
+    );
+    if (!mounted || newPin == null) return;
+    _pin.value = newPin;
+    await _unlock();
+  }
+
+  /// 秒 → `4:57`（与家长模式面板 / 顶部状态条同一口径）。
+  static String _mmss(int seconds) {
+    final int safe = seconds < 0 ? 0 : seconds;
+    final String rest = (safe % 60).toString().padLeft(2, '0');
+    return '${safe ~/ 60}:$rest';
   }
 
   static String _humanize(int seconds) {

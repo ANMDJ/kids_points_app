@@ -64,13 +64,8 @@ function BannerView({ store }: { store: AppStore }) {
     )
   }
 
-  return (
-    <View className='kp-read-banner kp-read-banner--info'>
-      <Text className='kp-read-banner__text'>
-        {store.usesServerWrites
-          ? '数据来自服务器 · 打卡 / 记一笔 / 兑换 / 昵称均会实时保存'
-          : '只读模式 · 数据来自服务器（写入口尚未接入）'}
-      </Text>
-    </View>
-  )
+  // 2026-11-10（用户第 8 条）：「数据来自服务器 · 打卡 / 记一笔 / 兑换 / 昵称
+  // 均会实时保存」这条**常驻**提示删掉。它不是状态，只是「一切正常」的另一种
+  // 说法，却每天占着抬头栏一行。只有读取失败 / 首次读取中才需要横条。
+  return null
 }

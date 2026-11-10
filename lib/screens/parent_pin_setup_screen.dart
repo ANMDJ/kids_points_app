@@ -8,6 +8,7 @@ import '../widgets/gradient_page.dart';
 import '../widgets/page_header.dart';
 import '../widgets/pin_pad.dart';
 import '../widgets/soft_button.dart';
+import 'parent_pin_reset_screen.dart';
 
 /// 设置 / 修改家长 PIN（2026-11-04）。
 ///
@@ -162,7 +163,7 @@ class _ParentPinSetupScreenState extends State<ParentPinSetupScreen> {
               Text(
                 _needsCurrent
                     ? '改掉之后，其它设备上的旧 PIN 立刻失效。'
-                    : '忘记 PIN 目前没有找回通道：只能由另一位家长重新设置。',
+                    : '忘记 PIN 时可以用账号密码联网重置（入口在下面）。',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 11.5,
@@ -170,6 +171,15 @@ class _ParentPinSetupScreenState extends State<ParentPinSetupScreen> {
                   color: AppColors.textHint,
                 ),
               ),
+              // 用户第 7 条：忘记 PIN 的**联网**重置入口。
+              // 只在「需要先验证旧 PIN」这一步显示 —— 新 PIN 阶段点它没有意义。
+              if (_step == _Step.current)
+                Center(
+                  child: TextButton(
+                    onPressed: _busy ? null : _openReset,
+                    child: const Text('忘记当前 PIN？用账号密码重置'),
+                  ),
+                ),
               if (widget.gate && widget.onSignOut != null) ...<Widget>[
                 const SizedBox(height: 6),
                 Center(
@@ -242,6 +252,26 @@ class _ParentPinSetupScreenState extends State<ParentPinSetupScreen> {
       _error = null;
       _pin.clear();
     });
+  }
+
+  /// 忘记当前 PIN ⇒ 联网重置（账号密码）。成功后回到「设置新 PIN」这一步 ——
+  /// 重置页已经让家长设过并确认了新 PIN，这里不让同一个人再输第三遍。
+  Future<void> _openReset() async {
+    final String? newPin = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => const ParentPinResetScreen(),
+      ),
+    );
+    if (!mounted || newPin == null) return;
+    setState(() {
+      _error = null;
+      _step = _Step.creating;
+      _newPin = null;
+      _pin.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('家长 PIN 已重置，可以继续修改或直接返回。')),
+    );
   }
 
   /// ③ 两次一致 ⇒ 提交。`currentPin` 只在「已设过 PIN」时传。

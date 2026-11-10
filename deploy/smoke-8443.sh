@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # deploy/smoke-8443.sh —— 8443 入口验收（2026-11-01）
 #
+# ⚠️ 历史脚本：只用于旧入口（www.littlewish.top:8443 / IP /k）。
+#    2026-11-10 起新域名的验收见 deploy/DOMAIN-PLAN-A.md §6。
+#
 # 在**服务器上**或任意能出网的机器上跑：
 #   bash deploy/smoke-8443.sh
 #   HOST=www.littlewish.top PORT=8443 bash deploy/smoke-8443.sh   # 换域名/端口

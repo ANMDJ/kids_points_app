@@ -184,6 +184,9 @@ class PointsApp extends StatelessWidget {
             config: config,
             // 换账号 / 建孩子后清空首页缓存，避免上一个孩子的数据残留。
             onIdentityChanged: store.resetForIdentity,
+            // 2026-11-10（用户第 3 条）：切换孩子后清缓存但**保持解锁**。
+            onChildSwitched: () =>
+                store.resetForIdentity(keepAppUnlocked: true),
             // 2026-11-04：本机 PIN 锁（替代原来的 6 位日期码闸门）。
             // ★ 它在 `OnboardingGate` **里面**：引导第 6 步就是「设家长 PIN」，
             //   先让家长把 PIN 设好，锁才有东西可验（否则会先弹一次「先设 PIN」

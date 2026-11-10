@@ -66,6 +66,16 @@ describe('resolveAppVersion：默认值与回退', () => {
     assert.equal(view.publishedAt, null)
   })
 
+  it('★ 默认下载地址固定在 Kids 自己的子域（方案 A，2026-11-10）', () => {
+    assert.equal(
+      DEFAULT_DOWNLOAD_URL,
+      'https://kids.littlewish.top/app/kids-points-app.apk'
+    )
+    // 防止有人把 Kids 的安装包又挂回 Hub 的域名 / 8443。
+    assert.equal(DEFAULT_DOWNLOAD_URL.includes('hub.littlewish.top'), false)
+    assert.equal(DEFAULT_DOWNLOAD_URL.includes(':8443'), false)
+  })
+
   it('合法环境变量逐项生效', () => {
     const view = resolveAppVersion({
       APP_LATEST_VERSION: '1.2.3',

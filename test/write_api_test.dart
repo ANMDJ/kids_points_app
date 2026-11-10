@@ -1915,7 +1915,8 @@ void main() {
 
     await tester.pumpWidget(PointsApp(store: store));
     await tester.pumpAndSettle();
-    expect(find.text('数据来自服务器 · 打卡 / 记一笔 / 兑换 / 昵称均会实时保存'), findsOneWidget);
+    // 2026-11-10（用户第 8 条）：成功态不再有「数据来自服务器…」常驻横条。
+    expect(find.textContaining('数据来自服务器'), findsNothing);
 
     await tester.tap(find.text('认真刷牙'));
     await tester.pump();

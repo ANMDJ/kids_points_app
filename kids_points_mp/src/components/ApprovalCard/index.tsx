@@ -29,6 +29,8 @@ export interface ApprovalCardProps {
   canWrite: boolean
   onApprove: () => void
   onReject: () => void
+  /** 点整张卡 → 详情（P1-3）；按钮各自 `stopPropagation`，不会误触。 */
+  onOpen?: () => void
 }
 
 /** 摘要图标 + 底色：让家长一眼分清「兑换 / 加分 / 新增心愿」。 */
@@ -61,7 +63,8 @@ export default function ApprovalCard({
   deciding,
   canWrite,
   onApprove,
-  onReject
+  onReject,
+  onOpen
 }: ApprovalCardProps) {
   const pending = isApprovalPending(item)
   const expired = isApprovalExpired(item, now)
@@ -71,7 +74,7 @@ export default function ApprovalCard({
   const autoReason = approvalAutoReasonLabel(item)
 
   return (
-    <AppCard paddingLtrb={[14, 13, 14, 12]} marginBottom={10}>
+    <AppCard paddingLtrb={[14, 13, 14, 12]} marginBottom={10} onClick={onOpen}>
       <View className='kp-approval__head'>
         <View
           className='kp-approval__badge'
@@ -119,7 +122,9 @@ export default function ApprovalCard({
                 className={`kp-approval__button is-reject ${
                   !canWrite || expired ? 'is-disabled' : ''
                 }`}
-                onClick={() => {
+                onClick={(event) => {
+                  // 卡片的 onClick 是「打开详情」：按钮必须拦住冒泡。
+                  event.stopPropagation()
                   if (!canWrite || expired) return
                   onReject()
                 }}
@@ -132,7 +137,8 @@ export default function ApprovalCard({
                     ? 'is-disabled'
                     : ''
                 }`}
-                onClick={() => {
+                onClick={(event) => {
+                  event.stopPropagation()
                   if (!canWrite || expired || blocked !== null || busy) return
                   onApprove()
                 }}

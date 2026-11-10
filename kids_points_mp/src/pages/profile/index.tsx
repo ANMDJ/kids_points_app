@@ -1,5 +1,6 @@
 import { Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
+import { useState } from 'react'
 
 import AppBottomNav from '../../components/AppBottomNav'
 import AppCard from '../../components/AppCard'
@@ -101,10 +102,17 @@ export default function Profile() {
   const unreadNotifications = store.unreadNotificationCount
   const badgeText = notificationBadgeText(unreadNotifications)
 
+  /**
+   * 从二级页（审批详情）返回时递增：`MyApplicationsSheet` 的 items 是打开时
+   * 那一份，详情里撤回过就必须重拉，否则会留一行已经不能撤回的「撤回」。
+   */
+  const [returnTick, setReturnTick] = useState(0)
+
   useDidShow(() => {
     // 与 Flutter `home_shell` 切到「我的」tab 时同义：只换红点，不动列表。
     // 预览模式 / 未配置后端时 store 内部直接返回（不发一次注定 401 的请求）。
     void store.refreshUnreadNotificationCount()
+    setReturnTick((tick) => tick + 1)
   })
 
   const handleRename = async () => {
@@ -508,10 +516,6 @@ export default function Profile() {
           <NotificationsSheet
             visible={notificationSheet.visible}
             onClose={notificationSheet.hide}
-            onOpenApplications={() => myApplicationsSheet.show()}
-            /* W5-M：新申请待确认 ⇒「去审批」。审批收件箱是 tab 页而不是弹窗，
-               只能整页切过去（与底部导航同一套 `switchTab`）。 */
-            onOpenApprovals={() => switchTab(2, 3)}
           />
         ) : null}
         {/* W5-J：我的申请弹窗（打开时才拉 `GET /approvals/mine`） */}
@@ -519,6 +523,7 @@ export default function Profile() {
           <MyApplicationsSheet
             visible={myApplicationsSheet.visible}
             onClose={myApplicationsSheet.hide}
+            refreshToken={returnTick}
           />
         ) : null}
         {/* W5-H：成员弹窗（打开时才拉 `GET /members`） */}

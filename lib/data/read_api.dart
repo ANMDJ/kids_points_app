@@ -274,6 +274,30 @@ class ReadApiClient {
     );
   }
 
+  /// `GET /approvals/:id`：单条审批详情（P1-3，2026-11-10）。
+  ///
+  /// ── 为什么不能只靠列表 ──────────────────────────────────────────────────────
+  ///   通知里的深链只有 `approvalId`。目标那条可能在**后面的页**、或已经不在
+  ///   当前筛选（`pending`）里；让客户端翻页去找既慢又可能找不到。
+  ///   服务端按 `(id, childId)` 取一条，跨孩子 / 不存在统一 404。
+  ///
+  /// ── 谁能读 ──────────────────────────────────────────────────────────────────
+  ///   有批准资格的家长可读本孩子任意一条；其他人只能读**自己**提的
+  ///   （`detailDenial()`，`docs/design/43` P1-3）。403 / 404 都是可区分的事实，
+  ///   页面据实显示，不把它们画成「加载中」。
+  Future<ApprovalInboxItemDto> fetchApproval(String id) async {
+    final String trimmed = id.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError.value(id, 'id', '审批 id 不能为空');
+    }
+    final Object? raw = await _get(
+      '/approvals/${Uri.encodeComponent(trimmed)}',
+      const <String, String>{},
+    );
+    return ApprovalInboxItemDto.fromJson(raw, 'approval');
+  }
+
+
   Future<ApprovalsPageDto> _fetchApprovalPage(
     String path, {
     required String status,

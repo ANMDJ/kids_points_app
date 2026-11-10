@@ -10,6 +10,8 @@ import '../data/app_version_api.dart';
 import '../theme/app_colors.dart';
 import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
+import 'child_switch_actions.dart';
+import 'child_switch_screen.dart';
 import 'points_record_screen.dart';
 import 'points_rule_screen.dart';
 import 'family_join_actions.dart';
@@ -30,11 +32,7 @@ import 'sheets/trash_sheet.dart';
 
 /// 我的：孩子档案 + 好习惯/奖励次数战绩 + 积分记录 / 积分规则入口。
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key, this.onOpenApprovals});
-
-  /// 切到「审批」tab：`HomeShell` 持有下标，只有在「我的」页能打开通知面板，
-  /// 「去审批」才需要一个把 tab 切过去的动作（W5-M）。
-  final VoidCallback? onOpenApprovals;
+  const ProfileScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +48,8 @@ class ProfileScreen extends StatelessWidget {
     final SessionActions? sessionActions = SessionActions.maybeOf(context);
     // P0-3：登录态下的「加入家庭」。`null` ⇒ 预览模式 / 未登录，不画这一行。
     final FamilyJoinActions? joinActions = FamilyJoinActions.maybeOf(context);
+    // 2026-11-10（用户第 3 条）：多孩子切换。`null` ⇒ 预览模式 / 未登录。
+    final ChildSwitchActions? childSwitch = ChildSwitchActions.maybeOf(context);
 
     // live 模式下昵称已经接了写端点（`PATCH /child`，W5-E）、回收站也接了
     // 后端（W5-F）；只剩「恢复演示数据」是纯本地操作 —— 它若在 live 模式下
@@ -67,7 +67,8 @@ class ProfileScreen extends StatelessWidget {
       backgroundColor: Colors.transparent,
       body: GradientPage(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+          // 2026-11-10（用户第 9 条）：22 → 8，头像不再被推到大片空白下方。
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
           children: <Widget>[
             Row(
               children: <Widget>[
@@ -229,9 +230,7 @@ class ProfileScreen extends StatelessWidget {
                     badgeCount: unreadNotifications,
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => NotificationsScreen(
-                          onOpenApprovals: onOpenApprovals,
-                        ),
+                        builder: (_) => const NotificationsScreen(),
                       ),
                     ),
                   ),
@@ -293,6 +292,22 @@ class ProfileScreen extends StatelessWidget {
                     ),
                   ],
                   if (store.hasParentMode) ...<Widget>[
+                    // 2026-11-10（用户第 3 条）：切换孩子。只有接上后端 / 登录态
+                    // 才有成员位列表可切；列表在点开那一页时才拉。
+                    if (childSwitch != null && store.isLiveMode) ...<Widget>[
+                      _MenuRow(
+                        icon: Icons.swap_horiz_rounded,
+                        color: AppColors.orange,
+                        label: '切换孩子',
+                        onTap: () => _openChildSwitch(context, childSwitch),
+                      ),
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: AppColors.divider,
+                        indent: 66,
+                      ),
+                    ],
                     _MenuRow(
                       icon: Icons.admin_panel_settings_outlined,
                       // W8-C：切家长模式（PIN 换 5 分钟）。矩阵里
@@ -625,9 +640,25 @@ class ProfileScreen extends StatelessWidget {
       ),
     );
   }
+  /// 打开「切换孩子」（2026-11-10，用户第 3 条）。
+  ///
+  /// 动作在**这里**取好再传进路由：`AccountGate` 在 `MaterialApp.home` 之下，
+  /// 而路由挂在 Navigator 上 —— 路由里的 context 查不到那个 InheritedWidget。
+  Future<void> _openChildSwitch(
+    BuildContext context,
+    ChildSwitchActions actions,
+  ) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChildSwitchScreen(
+          loadChildren: actions.loadChildren,
+          switchChild: actions.switchChild,
+          currentChildId: actions.currentChildId,
+        ),
+      ),
+    );
+  }
 }
-
-/// 战绩卡：好习惯累计 / 奖励次数。
 /// 「我的」页顶部的新版本横幅（W11-B，2026-11-02）。
 ///
 /// ── 为什么还要一个横幅 ──────────────────────────────────────────────────────

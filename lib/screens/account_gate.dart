@@ -10,6 +10,7 @@ import '../data/read_api_errors.dart' show ReadApiException;
 import '../data/session_scope.dart';
 import '../data/token_store.dart' show AuthTokenHolder;
 import '../data/write_api_errors.dart' show WriteApiException, WriteFailureKind;
+import 'child_switch_actions.dart';
 import 'create_child_screen.dart';
 import 'family_join_actions.dart';
 import 'login_screen.dart';
@@ -56,6 +57,7 @@ class AccountGate extends StatefulWidget {
     this.session,
     this.config,
     this.onIdentityChanged,
+    this.onChildSwitched,
   });
 
   final Widget child;
@@ -77,6 +79,14 @@ class AccountGate extends StatefulWidget {
 
   /// 身份切换（登录 / 换账号 / 建孩子）后清空页面级缓存。
   final VoidCallback? onIdentityChanged;
+
+  /// **切换孩子**后清空页面级缓存，但保留「本机已解锁」。
+  ///
+  /// ★ 为什么不复用 [onIdentityChanged]：`AppStore.resetForIdentity()` 默认把
+  ///   `isAppUnlocked` 清成 false（冷启动 / 换账号必须重新上锁）。切换孩子是
+  ///   家长刚刚做过的动作，切完立刻再问一次 PIN 只会被读成「应用又抽风了」。
+  ///   省略时退回 [onIdentityChanged]（旧用例 / 预览模式行为不变）。
+  final VoidCallback? onChildSwitched;
 
   @override
   State<AccountGate> createState() => _AccountGateState();
@@ -154,6 +164,11 @@ class _AccountGateState extends State<AccountGate> {
   }
 
   /// 有 token 之后：确保 `SessionScope` 里有一个**服务端认可**的 childId。
+  ///
+  /// ★ 2026-11-10（用户第 3 条）：多孩子不再只取第一个就结束 ——
+  ///   「我的 → 切换孩子」可以在已有成员位之间换（[ChildSwitchActions]）。
+  ///   首启仍然自动选第一个：用户还没表达选择时，随便挑一个能进首页比
+  ///   逼他先做一次选择更友好（且与旧行为一致）。
   Future<void> _ensureChild() async {
     final SessionScope? scope = widget.session;
     final IdentityApi? identity = widget.identityApi;
@@ -181,8 +196,8 @@ class _AccountGateState extends State<AccountGate> {
         setState(() => _phase = _Phase.needChild);
         return;
       }
-      // D1（`43` §8）：首版只支持一个孩子；多孩子时仍取第一个，
-      // 但这是**明确的产品选择**，不是静默丢数据。
+      // D1（`43` §8）：首版自动选第一个。多孩子时用户在「我的 → 切换孩子」
+      // 里换（2026-11-10 补上，见 `_switchChild`）—— 不再只是"取第一个"。
       final ChildSessionResult result =
           await identity.establishChildSession(children.first.childId);
       await scope.adoptChild(childId: result.childId, role: result.role);
@@ -197,6 +212,57 @@ class _AccountGateState extends State<AccountGate> {
         _phase = _Phase.blocked;
         _blockedMessage = error.userMessage;
       });
+    }
+  }
+
+  /// 「我的 → 切换孩子」用：现取成员列表（`GET /auth/session`）。
+  ///
+  /// 不在启动时拉：绝大多数账号只有一个孩子，那一次请求毫无收益。
+  /// 失败时**原样抛出** `ReadApiException`，由切换页显示服务端 / DTO 原文。
+  Future<List<ChildMembership>> _loadChildren() async {
+    final IdentityApi? identity = widget.identityApi;
+    if (identity == null) return const <ChildMembership>[];
+    return await identity.fetchMemberships();
+  }
+
+  /// 切到另一个孩子：重建本机会话 + 落到 `SessionScope` + 清空页面缓存。
+  ///
+  /// ── 为什么成功后才 `adoptChild` ────────────────────────────────────────────
+  ///   先转存再请求失败，会让这台设备停在「孩子 id 是新的、会话是旧的」——
+  ///   之后每个业务请求都 401。顺序必须是：服务端签发成功 → 本地采纳。
+  ///
+  /// ── 失败为什么回到 `signedIn` 而不是 `blocked` ─────────────────────────────
+  ///   `SessionScope` 没有被改动，旧会话仍然有效；把用户丢到「建立会话失败」
+  ///   全屏页只会让他以为整个账号坏了。
+  Future<String?> _switchChild(String childId) async {
+    final SessionScope? scope = widget.session;
+    final IdentityApi? identity = widget.identityApi;
+    if (scope == null || identity == null) {
+      return '当前没有接入后端，无法切换孩子。';
+    }
+    if (scope.childId == childId) return null;
+
+    setState(() {
+      _phase = _Phase.preparing;
+      _banner = null;
+    });
+    try {
+      final ChildSessionResult result =
+          await identity.establishChildSession(childId);
+      await scope.adoptChild(childId: result.childId, role: result.role);
+      // 保持解锁：家长刚刚做过切换这个动作（见 `onChildSwitched`）。
+      (widget.onChildSwitched ?? widget.onIdentityChanged)?.call();
+      if (!mounted) return null;
+      setState(() => _phase = _Phase.signedIn);
+      return null;
+    } on WriteApiException catch (error) {
+      if (!mounted) return error.userMessage;
+      setState(() => _phase = _Phase.signedIn);
+      return error.userMessage;
+    } on ReadApiException catch (error) {
+      if (!mounted) return error.userMessage;
+      setState(() => _phase = _Phase.signedIn);
+      return error.userMessage;
     }
   }
 
@@ -465,15 +531,22 @@ class _AccountGateState extends State<AccountGate> {
           // 实现（见 `family_join_actions.dart` 文件头）。
           child: FamilyJoinActions(
             joinFamily: _joinFamily,
-            // P0-2：把「退出登录」交给下层页面（「我的」页），动作仍只有这一份
-            // 实现（见 `session_actions.dart` 文件头）。
-            child: SessionActions(
-              signOut: _signOut,
-              // P0-2b：账号绑定 / 改密走的必须是**同一个** holder（见
-              // `session_actions.dart` 里 `authApi` 的说明）；`null` ⇒ 预览模式，
-              // 「我的」页不会画「登录账号」。
-              authApi: widget.authApi,
-              child: widget.child,
+            // 2026-11-10（用户第 3 条）：多孩子切换。列表**点开才拉**，
+            // 启动时不额外请求（见 `child_switch_actions.dart`）。
+            child: ChildSwitchActions(
+              loadChildren: _loadChildren,
+              switchChild: _switchChild,
+              currentChildId: widget.session?.childId,
+              // P0-2：把「退出登录」交给下层页面（「我的」页），动作仍只有这一份
+              // 实现（见 `session_actions.dart` 文件头）。
+              child: SessionActions(
+                signOut: _signOut,
+                // P0-2b：账号绑定 / 改密走的必须是**同一个** holder（见
+                // `session_actions.dart` 里 `authApi` 的说明）；`null` ⇒ 预览模式，
+                // 「我的」页不会画「登录账号」。
+                authApi: widget.authApi,
+                child: widget.child,
+              ),
             ),
           ),
         );

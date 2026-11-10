@@ -10,7 +10,7 @@ import { useStore } from '../../data/store'
 import { approvalConfirmText, approvalFilterLabel } from '../../data/approval'
 import type { ApprovalInboxItem } from '../../data/approval'
 import { useViewport } from '../../utils/layout'
-import { switchTab } from '../../utils/nav'
+import { pushPage, switchTab } from '../../utils/nav'
 import { confirm, toast } from '../../utils/toast'
 import { useAuthGate } from '../../utils/useAuthGate'
 import { designToPx } from '../../utils/unit'
@@ -187,6 +187,14 @@ export default function Approvals() {
                       }}
                       onReject={() => {
                         void handleDecide(item, false)
+                      }}
+                      /* P1-3：点整张卡打开这一条的详情（列表只装得下一行摘要）。 */
+                      onOpen={() => {
+                        pushPage(
+                          `/pages/approval-detail/index?id=${encodeURIComponent(
+                            item.id
+                          )}&mode=decide`
+                        )
                       }}
                     />
                   ))}

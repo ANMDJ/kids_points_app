@@ -1,4 +1,5 @@
 import type { ActionType } from '../contracts/permission-matrix'
+import { isSelfApproved } from '../contracts/approval-policy'
 import { summarizeApprovalPayload, type ApprovalSummary } from './approval-payload'
 import { encodeApprovalCursor } from './approval.cursor'
 import type { ApprovalListRow } from './approvals.repository'
@@ -56,6 +57,38 @@ export function toInboxItem(row: ApprovalListRow): ApprovalInboxItemDto {
     decidedAt: row.decidedAt === null ? null : row.decidedAt.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
     summary: summarizeApprovalPayload(row.action, row.payload)
+  }
+}
+
+/**
+ * 单条审批详情（P1-3，`GET /approvals/:id`）。
+ *
+ * ★ 为什么不发明第二套字段：详情页要显示的正是**列表那一行**的全部内容
+ *   （内容摘要 / 金额 / 规则快照 / 时间 / 执行结果 / autoReason），再补两件
+ *   列表层拿不到的事：
+ *     · `requesterRole` —— 谁提的（建请求时的成员位快照）；
+ *     · `selfApproved`  —— 是不是申请人自己批的（`decidedByUserId === requesterUserId`）。
+ *   列表接口保持不变（多加字段会迫使所有历史客户端重新验证，收益为零）。
+ */
+export interface ApprovalDetailDto extends ApprovalInboxItemDto {
+  /** 提交人当时的成员位（`guardian` / `child`）；老数据 / 无库装配为 `null`。 */
+  requesterRole: string | null
+  /** 自批 = 批准人与申请人同一人（`isSelfApproved()` 的唯一判据）。 */
+  selfApproved: boolean
+}
+
+/**
+ * 详情映射。
+ *
+ * `requesterRole` 原样透出（不认识的旧值也照实显示，客户端兜底成「家庭成员」）；
+ * `selfApproved` 走 `isSelfApproved()`，**不**在这里再写一遍比较逻辑 —— 自批的
+ * 口径只有一处（`02` §5 的 D4：冗余的两份真相必然漂移）。
+ */
+export function toApprovalDetail(row: ApprovalListRow): ApprovalDetailDto {
+  return {
+    ...toInboxItem(row),
+    requesterRole: row.requesterRole ?? null,
+    selfApproved: isSelfApproved(row)
   }
 }
 

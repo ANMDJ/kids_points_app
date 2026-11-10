@@ -116,6 +116,7 @@ class ApprovalInboxItem {
     required this.decidedAt,
     required this.expiresAt,
     required this.summary,
+    this.requesterRole,
   });
 
   final String id;
@@ -143,7 +144,33 @@ class ApprovalInboxItem {
   /// 禁用批准 —— 不是因为不能批，而是因为家长看不到自己在批什么。
   final ApprovalSummary? summary;
 
+  /// 申请人**建请求当时**的成员位（`guardian` / `child`）。
+  ///
+  /// 只有详情接口（`GET /approvals/:id`）会下发；收件箱 / 我的申请列表不带它
+  /// （老服务端也永远不带），因此是可空的 —— 界面兜底成「家庭成员提交」，
+  /// **不猜**是哪一个。
+  final String? requesterRole;
+
   bool get isPending => status == 'pending';
+
+  /// 谁提的（可展示中文）。未知 / 缺字段时说「家庭成员」，不编成「孩子」。
+  String get requesterLabel {
+    switch (requesterRole) {
+      case 'guardian':
+        return '家长提交';
+      case 'child':
+        return '孩子提交';
+      default:
+        return '家庭成员提交';
+    }
+  }
+
+  /// 是不是**申请人自己**批的（自批）。
+  ///
+  /// 判据与服务端 `isSelfApproved()` 逐字一致：批准人存在且等于申请人。
+  /// 未决（`decidedByUserId == null`）永远不算自批。
+  bool get isSelfApproved =>
+      decidedByUserId != null && decidedByUserId == requesterUserId;
 
   /// 本地时间判断是否已过期（服务端会在下次读写时惰性落成 `expired`）。
   bool isExpiredAt(DateTime now) => isPending && !expiresAt.isAfter(now);
@@ -279,3 +306,17 @@ String approvalConfirmText({
   // 只可能是 summary == null（调用方已拦），但兜底也必须说实话。
   return '这条申请的内容无法识别，不能批准。';
 }
+
+/// `10 月 21 日 14:05`（本地时区）。
+///
+/// 服务端下发 UTC；直接显示会让家长看到差 8 小时的「提交时间」。
+///
+/// ★ P1-3（2026-11-10）起放在模型层：收件箱卡片 / 「我的申请」/ 详情页三处
+///   共用同一份格式化 —— 各写一份的下场是同一时刻出现两种写法。
+String formatApprovalTime(DateTime time) {
+  final DateTime local = time.toLocal();
+  final String hh = local.hour.toString().padLeft(2, '0');
+  final String mm = local.minute.toString().padLeft(2, '0');
+  return '${local.month} 月 ${local.day} 日 $hh:$mm';
+}
+

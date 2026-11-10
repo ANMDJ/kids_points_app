@@ -114,8 +114,10 @@ model DeviceSession {
 - 面板文案（常驻，不藏进帮助页）：
   「建议先让孩子把想做的写在纸上、想清楚，再来手机上填 —— 减少盯着屏幕的时间。」
   「到点后需要你输入家长 PIN 收回；不会自动回到家长模式。」
-- App 首页顶部常驻一条状态条（`lib/widgets/kid_mode_banner.dart`）：进行中 / 已到期两种文案，
-  点它进面板。**不渲染倒计时**（首页没有秒级刷新，写死的数字会在切后台后说谎）。
+- App **四个 tab 的抬头栏**常驻一条状态条（2026-11-10 起是
+  `lib/widgets/parent_mode_banner.dart`，它同时显示孩子模式进行中 / 已到期两种文案），
+  点它进面板。**不渲染静态倒计时**——它每秒从服务端给的绝对时刻 `kidModeUntil` 现算；
+  原来的首页专用 `kid_mode_banner.dart` 已删除（两行同样的字会让人以为出了两次状态）。
 - 孩子模式期间能做什么：打卡、提交心愿（403 `APPROVAL_REQUIRED` → 落 `POST /approvals`，
   这条在 W13 已实现）；家长专属动作 403 / 转审批。
 - 唯一出口：「结束孩子模式」+ 家长 PIN（面板里，到期与未到期同一个按钮）。
@@ -131,7 +133,7 @@ model DeviceSession {
 | 身份内核 | `backend/src/device-session/session.gate.ts` | `kidModeUntil` 参与 `effectiveRole()`；新形状错误 `INVALID_KID_MODE_EXPIRY` |
 | 端口 / 适配器 | `backend/src/auth/auth.repository.ts`、`auth.prisma.repository.ts` | `enterKidMode` / `exitKidMode` 两个事务 + 审计 |
 | 业务 / HTTP | `backend/src/auth/auth.service.ts`、`auth.controller.ts`、`dto/*kid-mode*` | 五条顺序 + 两类 409 + 与家长模式一致的 PIN 语义 |
-| App | `lib/models/kid_mode.dart`、`lib/models/parent_mode.dart`、`lib/data/parent_mode_{api,dto,mapper}.dart`、`lib/data/app_store.dart`、`lib/screens/sheets/parent_mode_sheet.dart`、`lib/widgets/kid_mode_banner.dart`、`lib/screens/home_screen.dart`、`lib/screens/home_shell.dart` | 模型 / DTO / 客户端 / store / 面板 / 首页状态条 |
+| App | `lib/models/kid_mode.dart`、`lib/models/parent_mode.dart`、`lib/data/parent_mode_{api,dto,mapper}.dart`、`lib/data/app_store.dart`、`lib/screens/sheets/parent_mode_sheet.dart`、`lib/widgets/parent_mode_banner.dart`（2026-11-10 取代 `kid_mode_banner.dart`）、`lib/screens/home_shell.dart` | 模型 / DTO / 客户端 / store / 面板 / 抬头栏状态条 |
 | 小程序 | `kids_points_mp/src/data/parent_mode.ts`、`store.ts`、`src/sheets/ParentModeSheet.tsx`、`sheets.scss`、`package.json` | 同构；新增 `npm test`（统一入口 `run-all.mjs`） |
 | 守门 | `tools/kid-mode-check.mjs` | 三端常量 + 快捷时长逐字比对；篡改副本必须 exit 1 |
 

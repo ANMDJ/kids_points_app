@@ -86,10 +86,47 @@ export interface ApprovalInboxItem {
    * 禁用批准 —— 不是因为不能批，而是因为家长看不到自己在批什么。
    */
   summary: ApprovalSummary | null
+  /**
+   * 申请人**建请求当时**的成员位（`guardian` / `child`）。
+   *
+   * 只有详情接口（`GET /approvals/:id`）会下发；列表 / 老服务端为 `null` ——
+   * 界面兜底成「家庭成员提交」，**不猜**是哪一个。
+   */
+  requesterRole: string | null
 }
 
 export function isApprovalPending(item: ApprovalInboxItem): boolean {
   return item.status === 'pending'
+}
+
+/**
+ * 谁提的（可展示中文）。
+ *
+ * 未知 / 缺字段时说「家庭成员」，不编成「孩子」—— 老服务端 / 收件箱列表
+ * 都不带 `requesterRole`，把它猜成孩子会让家长以为是自己家孩子提的。
+ */
+export function approvalRequesterLabel(item: ApprovalInboxItem): string {
+  switch (item.requesterRole) {
+    case 'guardian':
+      return '家长提交'
+    case 'child':
+      return '孩子提交'
+    default:
+      return '家庭成员提交'
+  }
+}
+
+/**
+ * 是不是**申请人自己**批的（自批）。
+ *
+ * 判据与服务端 `isSelfApproved()` 逐字一致：批准人存在且等于申请人。
+ * 未决（`decidedByUserId === null`）永远不算自批。
+ */
+export function isApprovalSelfApproved(item: ApprovalInboxItem): boolean {
+  return (
+    item.decidedByUserId !== null &&
+    item.decidedByUserId === item.requesterUserId
+  )
 }
 
 /** 本地时间判断是否已过期（服务端会在下次读写时惰性落成 `expired`）。 */

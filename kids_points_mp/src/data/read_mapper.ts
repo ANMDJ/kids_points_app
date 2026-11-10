@@ -305,7 +305,8 @@ export function mapApprovalInboxItem(
     createdAt: dto.createdAt,
     decidedAt: dto.decidedAt,
     expiresAt: dto.expiresAt,
-    summary: dto.summary
+    summary: dto.summary,
+    requesterRole: dto.requesterRole
   }
 }
 

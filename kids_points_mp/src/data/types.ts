@@ -1093,8 +1093,27 @@ export interface HabitView extends Habit {
   limitText: string
   /** 由 `checkedCountToday` 派生的完成串 */
   doneText: string
+  /**
+   * 今日进度（可完成多次时是 `N/M`）—— 2026-11-10 用户第 10 / 12 条。
+   *
+   * 与 Flutter `lib/models/habit.dart#progressTextOf` 逐字一致。
+   */
+  progressText: string
   /** 是否已达今日上限（`checkedCountToday >= dailyLimit`）—— 修 A3 */
   checked: boolean
+}
+
+/** 今日进度串：`0/2 → 1/2 → 2/2` 每一步都看得见（每天 1 次的保持原样）。 */
+export function progressTextOf(
+  checkedCountToday: number,
+  dailyLimit: number
+): string {
+  const done = checkedCountToday < 0 ? 0 : checkedCountToday
+  const limit = dailyLimit < 1 ? 1 : dailyLimit
+  if (limit <= 1) {
+    return done === 0 ? limitTextOf(1) : doneTextOf(done)
+  }
+  return `今日已完成 ${done}/${limit} 次`
 }
 
 /** 由结构字段 ＋ 当天流水派生习惯视图 —— 修 A2 / A3 / E17。 */
@@ -1109,6 +1128,7 @@ export function habitView(
     checkedCountToday: count,
     limitText: limitTextOf(habit.dailyLimit),
     doneText: doneTextOf(count),
+    progressText: progressTextOf(count, habit.dailyLimit),
     checked: count >= habit.dailyLimit
   }
 }

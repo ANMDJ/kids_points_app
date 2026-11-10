@@ -11,13 +11,14 @@ import 'package:kids_points_app/screens/pin_guard.dart';
 /// 本机 PIN 闸门（2026-11-04，替代日期码闸门）。
 ///
 /// 钉住的是**四个时刻 / 两道放行**（`docs/design/52-app-pin-lock.md` §3）：
-///   ① 冷启动锁着；输对 PIN 才进首页，且**只校验**（`verifyPin` 1 次、
-///      `enterParentMode` 0 次 —— 否则 30 天家长会话会被压成 5 分钟）；
+///   ① 冷启动锁着；输对 PIN 才进首页，并且**同时开 5 分钟家长窗口**
+///      （2026-11-10 修订：走 `enterParentMode`；旧实现只 `verifyPin`，
+///      于是用户问「为什么没有 5 分钟倒计时」）；
 ///   ② 退到后台再回来 ⇒ 重新上锁（需求 4(b)）；
 ///   ③ 没设过 PIN 的**家长**设备 ⇒ 先设置（需求 4(a)）；
 ///   ④ 孩子模式的窗口内不锁，窗口结束后锁（否则孩子切一次应用就回不来）；
 ///   ⑤ 断网 / 拉不到状态 ⇒ 放行（软锁不该把 App 变成砖）；
-///   ⑥ 旧服务端 404 ⇒ 退回「进入家长模式」（功能可用，代价写在文档里）。
+///   ⑥ 服务端没有 `parent-mode` 路由（404）⇒ 退回「只校验」。
 void main() {
   group('PinGuard', () {
     Widget harness(AppStore store) => AppScope(
@@ -101,7 +102,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('冷启动：有 PIN ⇒ 锁着；输对 ⇒ 进首页（只校验，不提权）',
+    testWidgets('冷启动：有 PIN ⇒ 锁着；输对 ⇒ 进首页并开 5 分钟家长窗口',
         (WidgetTester tester) async {
       final _FakeApi api = _FakeApi(fetchValue: sessionBacked());
       final AppStore store = await pump(tester, api);
@@ -112,13 +113,14 @@ void main() {
       await typePin(tester, '1234');
 
       expect(find.text('首页'), findsOneWidget);
-      expect(api.verifyCalls, 1);
-      expect(
-        api.enterCalls,
-        0,
-        reason: '解锁不能走「进入家长模式」：那会把 30 天会话压成 5 分钟',
-      );
+      // 2026-11-10（用户第 1 / 13 条）：解锁 = 进入家长模式（写 5 分钟窗口）。
+      // 旧行为「只校验、不开窗口」正是「为什么没有 5 分钟倒计时」的答案。
+      expect(api.enterCalls, 1);
+      expect(api.verifyCalls, 0);
       expect(store.isAppUnlocked, isTrue);
+      // 回包是 PIN 换来的窗口 ⇒ 界面有倒计时可显示。
+      expect(store.isParentModePinBacked, isTrue,
+          reason: '解锁后必须能算出 5 分钟倒计时');
     });
 
     testWidgets('退到后台再回来 ⇒ 重新上锁（需求 4(b)）', (WidgetTester tester) async {
@@ -175,6 +177,26 @@ void main() {
       expect(find.textContaining('孩子模式的时间到了'), findsOneWidget);
     });
 
+    testWidgets('孩子模式已到点 ⇒ 输 PIN 走「结束孩子模式」，不是只解锁',
+        (WidgetTester tester) async {
+      // 2026-11-10（用户第 13 条）：锁屏上的 PIN 必须真的**收回**孩子模式。
+      // 旧实现只解锁（`verifyPin`），设备仍是 child —— 输对了也还是 403。
+      final _FakeApi api = _FakeApi(
+        fetchValue: kidMode(
+          until: DateTime.now().subtract(const Duration(minutes: 1)),
+          expired: true,
+        ),
+      );
+      final AppStore store = await pump(tester, api);
+
+      await typePin(tester, '1234');
+
+      expect(api.exitKidModeCalls, 1);
+      expect(api.enterCalls, 0, reason: '孩子模式期间 enter 会 409，必须走 DELETE');
+      expect(store.isAppUnlocked, isTrue);
+      expect(find.text('首页'), findsOneWidget);
+    });
+
     testWidgets('孩子自己的设备（不在家长模式、没有 PIN）⇒ 不拦',
         (WidgetTester tester) async {
       final _FakeApi api = _FakeApi(fetchValue: childDevice());
@@ -198,7 +220,7 @@ void main() {
         (WidgetTester tester) async {
       final _FakeApi api = _FakeApi(
         fetchValue: sessionBacked(),
-        verifyError: WriteApiException(
+        enterError: WriteApiException(
           WriteFailureKind.forbidden,
           '家长 PIN 不对（还剩 4 次尝试机会）。',
           statusCode: 403,
@@ -214,23 +236,22 @@ void main() {
       expect(store.isAppUnlocked, isFalse);
     });
 
-    testWidgets('旧服务端（404）⇒ 退回「进入家长模式」，不让用户卡在锁屏',
+    testWidgets('旧服务端（404）⇒ 退回「只校验」，不让用户卡在锁屏',
         (WidgetTester tester) async {
       final _FakeApi api = _FakeApi(
         fetchValue: sessionBacked(),
-        verifyError: WriteApiException(
+        enterError: WriteApiException(
           WriteFailureKind.notFound,
           '服务端返回 HTTP 404。',
           statusCode: 404,
         ),
-        enterValue: sessionBacked(),
       );
       final AppStore store = await pump(tester, api);
 
       await typePin(tester, '1234');
 
-      expect(api.verifyCalls, 1);
-      expect(api.enterCalls, 1, reason: '降级路径：用进入家长模式代替校验');
+      expect(api.enterCalls, 1);
+      expect(api.verifyCalls, 1, reason: '降级路径：只校验 PIN（没有 5 分钟窗口）');
       expect(find.text('首页'), findsOneWidget);
       expect(store.isAppUnlocked, isTrue);
     });
@@ -252,25 +273,44 @@ void main() {
   });
 }
 
-/// `ParentModeApi` 的假实现：只实现本文件用到的六条。
+/// `ParentModeApi` 的假实现：只实现本文件用到的几条。
 class _FakeApi implements ParentModeApi {
   _FakeApi({
     this.fetchValue,
     this.fetchError,
-    this.verifyError,
-    this.enterValue,
+    this.enterError,
   });
 
   ParentModeDto? fetchValue;
   Object? fetchError;
+  Object? enterError;
+
+  /// 由用例直接赋值（默认 null ⇒ 校验通过 / 回 [pinBacked]）。
   Object? verifyError;
   ParentModeDto? enterValue;
 
   int fetchCalls = 0;
   int verifyCalls = 0;
   int enterCalls = 0;
+  int exitKidModeCalls = 0;
   String? lastPin;
   bool closed = false;
+
+  /// 解锁成功后服务端回的「PIN 换来的 5 分钟」—— 倒计时就是从这里算的。
+  ParentModeDto pinBacked() => ParentModeDto(
+        activeRole: 'guardian',
+        parentMode: true,
+        modeSource: 'pin',
+        parentModeExpiresAt: DateTime.now().add(const Duration(minutes: 5)),
+        remainingSeconds: 300,
+        pinConfigured: true,
+        remainingAttempts: 5,
+        lockedUntil: null,
+        kidMode: false,
+        kidModeExpired: false,
+        kidModeUntil: null,
+        kidModeRemainingSeconds: 0,
+      );
 
   @override
   Future<ParentModeDto> fetch() async {
@@ -291,7 +331,8 @@ class _FakeApi implements ParentModeApi {
   Future<ParentModeDto> enter(String pin) async {
     enterCalls++;
     lastPin = pin;
-    return enterValue!;
+    if (enterError != null) throw enterError!;
+    return enterValue ?? pinBacked();
   }
 
   @override
@@ -301,11 +342,23 @@ class _FakeApi implements ParentModeApi {
   Future<ParentModeDto> enterKidMode(int durationMinutes) async => fetchValue!;
 
   @override
-  Future<ParentModeDto> exitKidMode(String pin) async => fetchValue!;
+  Future<ParentModeDto> exitKidMode(String pin) async {
+    exitKidModeCalls++;
+    lastPin = pin;
+    return fetchValue!;
+  }
 
   @override
   Future<ParentPinDto> setPin({required String pin, String? currentPin}) {
     throw UnimplementedError('本文件不测设 PIN');
+  }
+
+  @override
+  Future<ParentPinResetDto> resetPin({
+    required String password,
+    required String pin,
+  }) {
+    throw UnimplementedError('本文件不测重置 PIN');
   }
 
   @override

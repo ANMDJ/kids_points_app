@@ -16,12 +16,18 @@ import {
 } from '../data/approval'
 import type { ApprovalInboxItem } from '../data/approval'
 import { ReadApiException } from '../data/read_api_errors'
+import { pushPage } from '../utils/nav'
 import { confirm, toast } from '../utils/toast'
 import './sheets.scss'
 
 export interface MyApplicationsSheetProps {
   visible: boolean
   onClose: () => void
+  /**
+   * 从二级页（详情）返回时由页面递增：详情里撤回 / 读到新状态后，本面板要重拉。
+   * 面板自己的 `items` 是打开时那一份，不重拉会留一行过时的「撤回」。
+   */
+  refreshToken?: number
 }
 
 /**
@@ -44,7 +50,8 @@ export interface MyApplicationsSheetProps {
  */
 export default function MyApplicationsSheet({
   visible,
-  onClose
+  onClose,
+  refreshToken = 0
 }: MyApplicationsSheetProps) {
   const store = useStore()
   const [items, setItems] = useState<ApprovalInboxItem[]>([])
@@ -107,8 +114,9 @@ export default function MyApplicationsSheet({
     if (!visible) return
     void load(true)
     // 只在面板打开时拉一次；翻页 / 重试是用户的动作。
+    // `refreshToken`：从详情页返回时页面会递增它，让这里重拉（否则撤回后的行还在）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, store])
+  }, [visible, store, refreshToken])
 
   const handleWithdraw = async (item: ApprovalInboxItem) => {
     if (withdrawingId !== null) return
@@ -190,6 +198,13 @@ export default function MyApplicationsSheet({
             onWithdraw={() => {
               void handleWithdraw(item)
             }}
+            onOpen={() => {
+              pushPage(
+                `/pages/approval-detail/index?id=${encodeURIComponent(
+                  item.id
+                )}&mode=withdraw`
+              )
+            }}
           />
         ))}
       </View>
@@ -229,12 +244,15 @@ function MyApplicationRow({
   item,
   readOnly,
   busy,
-  onWithdraw
+  onWithdraw,
+  onOpen
 }: {
   item: ApprovalInboxItem
   readOnly: boolean
   busy: boolean
   onWithdraw: () => void
+  /** 点整行 → 详情（P1-3）；撤回胶囊自己 `stopPropagation`。 */
+  onOpen: () => void
 }) {
   const now = Date.now()
   const pending = isApprovalPending(item)
@@ -249,7 +267,7 @@ function MyApplicationRow({
   const autoReason = approvalAutoReasonLabel(item)
 
   return (
-    <View className='kp-myapp__row'>
+    <View className='kp-myapp__row' onClick={onOpen}>
       <View className='kp-myapp__head'>
         <Text className='kp-myapp__headline'>{headline}</Text>
         <View
@@ -273,7 +291,9 @@ function MyApplicationRow({
         {canWithdraw ? (
           <View
             className={`kp-myapp__chip ${busy ? 'is-disabled' : ''}`}
-            onClick={() => {
+            onClick={(event) => {
+              // 整行 onClick 是「打开详情」：撤回胶囊必须拦住冒泡。
+              event.stopPropagation()
               if (busy) return
               onWithdraw()
             }}

@@ -8,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../widgets/app_card.dart';
 import '../widgets/gradient_page.dart';
 import '../widgets/pills.dart';
+import 'approval_detail_screen.dart';
 
 /// 家长审批收件箱（W5-D）：待处理 / 已通过 / 已拒绝 / 全部。
 ///
@@ -89,7 +90,8 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             SizedBox(
-              height: 56,
+              // 2026-11-10（用户第 9 条）：56 → 46，去掉标题上方的多余留白。
+              height: 46,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Row(
@@ -192,10 +194,28 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
             canWrite: store.canDecideApprovals,
             onApprove: () => _decide(store, item, true),
             onReject: () => _decide(store, item, false),
+            onOpen: () => _openDetail(store, item),
           );
         },
       ),
     );
+  }
+
+  /// 打开详情（P1-3）。返回时若页面改过状态，重新拉一页 —— 批准 / 撤回都会
+  /// 让当前筛选下的列表变化（`AppStore` 里已经刷过一次，这里兜住「详情页
+  /// 读到的是服务端最新、而列表是本页最早那一份」的窗口）。
+  Future<void> _openDetail(AppStore store, ApprovalInboxItem item) async {
+    final Object? changed = await Navigator.of(context).push<Object?>(
+      MaterialPageRoute<Object?>(
+        builder: (_) => ApprovalDetailScreen(
+          approvalId: item.id,
+          initial: item,
+          canDecide: true,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (changed == true && store.isLiveMode) await store.refreshApprovals();
   }
 
   Widget _buildFooter(AppStore store) {
@@ -336,6 +356,7 @@ class _ApprovalCard extends StatelessWidget {
     required this.canWrite,
     required this.onApprove,
     required this.onReject,
+    required this.onOpen,
   });
 
   final ApprovalInboxItem item;
@@ -350,6 +371,9 @@ class _ApprovalCard extends StatelessWidget {
   final VoidCallback onApprove;
   final VoidCallback onReject;
 
+  /// 点整张卡 → 详情（P1-3）。按钮仍各自处理自己的点击。
+  final VoidCallback onOpen;
+
   @override
   Widget build(BuildContext context) {
     final bool pending = item.isPending;
@@ -359,6 +383,7 @@ class _ApprovalCard extends StatelessWidget {
 
     return AppCard(
       padding: const EdgeInsets.fromLTRB(14, 13, 14, 12),
+      onTap: onOpen,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -575,13 +600,5 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-/// `10 月 21 日 14:05`（本地时区）。
-///
-/// 服务端下发 UTC；直接显示会让家长看到差 8 小时的「提交时间」。
-String formatApprovalTime(DateTime time) {
-  final DateTime local = time.toLocal();
-  final String hh = local.hour.toString().padLeft(2, '0');
-  final String mm = local.minute.toString().padLeft(2, '0');
-  return '${local.month} 月 ${local.day} 日 $hh:$mm';
-}
+/// 时间格式化统一走 `models/approval.dart#formatApprovalTime`（P1-3 起）。
 

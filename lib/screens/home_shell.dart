@@ -6,10 +6,12 @@ import '../data/app_scope.dart';
 import '../data/app_store.dart';
 import '../theme/app_colors.dart';
 import '../widgets/app_bottom_nav.dart';
+import '../widgets/parent_mode_banner.dart';
 import '../widgets/read_status_banner.dart';
 import 'approvals_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
+import 'sheets/parent_mode_sheet.dart';
 import 'wishlist_screen.dart';
 
 /// 四段式外壳：首页 / 心愿单 / 审批 / 我的。
@@ -51,6 +53,12 @@ class _HomeShellState extends State<HomeShell> {
       backgroundColor: AppColors.pageTop,
       body: Column(
         children: <Widget>[
+          // 2026-11-10（用户第 2 条）：家长 / 孩子模式的倒计时放在**抬头栏**，
+          // 四个 tab 都能看到。它是可点的 —— 点开就是锁屏式 PIN 入口
+          // （`showParentModeSheet` 里的键盘与锁屏是同一个组件）。
+          ParentModeBanner(
+            onTap: () => showParentModeSheet(context),
+          ),
           // 只读模式的**全局**提示：不是错误，也不是空数据。
           const ReadStatusBanner(),
           Expanded(
@@ -60,8 +68,9 @@ class _HomeShellState extends State<HomeShell> {
                 const HomeScreen(),
                 const WishlistScreen(),
                 const ApprovalsScreen(),
-                // W5-M：通知里的「去审批」要把 tab 切到审批页 —— 下标只有这里知道。
-                ProfileScreen(onOpenApprovals: () => _select(2)),
+                // P1-3：通知里的「去审批」不再需要切 tab（点开的是那一条详情），
+                // 「我的」页因此不再持有 tab 下标。
+                const ProfileScreen(),
               ],
             ),
           ),

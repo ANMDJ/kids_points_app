@@ -116,7 +116,12 @@ sudo docker logs --tail 30 deploy-kids-api-1
 
 ---
 
-## 4. Caddy：IP + `/k` 前缀（备案未过期间的唯一入口）
+## 4. Caddy：IP + `/k` 前缀（历史：备案未过期间的入口）
+
+> ★ **2026-11-10 起目标状态见 [`DOMAIN-PLAN-A.md`](./DOMAIN-PLAN-A.md)**：
+> `kids.littlewish.top`（443，自动证书）是正式入口；
+> 本节与 8443 都是**过渡期/历史**方案，只在旧客户端退场前保留。
+> 新配置在 `deploy/conf.d/20-kids.caddyfile`，由 `deploy/install-kids-caddy.sh` 安装。
 
 `/etc/caddy/Caddyfile` 的 `http://82.157.153.22 { ... }` 块内，**紧挨 `@site` 之前**：
 
@@ -240,15 +245,21 @@ curl -s http://82.157.153.22/k/health/ready
 
 ---
 
-## 6. 切域名（两条路，互不依赖）
+## 6. 切域名（历史：备案前的两条绕行路）
 
-### 6.1 Flutter App：走 `www.littlewish.top:8443`（腾讯云手动证书），**不需要 ICP 备案**
+> ★ **2026-11-10 起按 [`DOMAIN-PLAN-A.md`](./DOMAIN-PLAN-A.md) 执行**：
+> `kids.littlewish.top` 由 Caddy 自动签发/续期证书，**不再需要**
+> `www:8443`、腾讯云手动 DV 证书或 `/k` 前缀。
+> 下面 6.1 / 6.2 保留的是备案前的绕行记录与排错依据；新部署不要照抄，
+> 过渡期旧客户端仍可按原方式工作。
+
+### 6.1 Flutter App：历史入口 `www.littlewish.top:8443`（腾讯云手动证书）
 
 自建 App 对域名只要求「证书能被系统信任」，**没有备案前置条件**。备案是**小程序侧**
 的要求（微信后台「服务器域名」会校验备案号），App 不走那一套。
 8443 的真正价值是**绕开未备案域名在 80/443 上可能被运营商/云厂商拦截**的问题。
 
-**为什么是 `www` 而不是 `kids` —— 2026-11-01 实测结论（★ 别再试 ACME 了）**
+**为什么是 `www` 而不是 `kids` —— 2026-11-01 实测结论（历史；2026-11-10 备案后已推翻）**
 
 `kids.littlewish.top` 的自动签发**三条路都失败了**：
 
@@ -262,9 +273,9 @@ curl -s http://82.157.153.22/k/health/ready
 **不含 `*.littlewish.top`**；`www` 已解析到 `82.157.153.22`（主域 `littlewish.top` 还没有 A 记录）。
 所以**唯一能通过系统证书校验的入口是 `https://www.littlewish.top:8443`**。
 
-> 📌 证书在 `/etc/caddy/certs/littlewish.top.{crt,key}`，属主 `root:caddy`、权限 `640`。
-> **2027-01-29 到期，不会自动续期**。到期前去腾讯云重新签发 → 覆盖这两个文件 → `systemctl reload caddy`。
-> 想彻底自动化只有两条路：① 拿到 `kids.littlewish.top` 的证书；② 给 Caddy 重编译加 DNSPod 插件走 DNS-01。
+> 📌 **历史**：证书在 `/etc/caddy/certs/littlewish.top.{crt,key}`，属主 `root:caddy`、权限 `640`，
+> 2027-01-29 到期且不自动续期。2026-11-10 起已改用 Caddy 自动证书
+> （`deploy/conf.d/20-kids.caddyfile`），本段只用于理解旧入口。
 
 **配置以 `deploy/caddy-kids.caddyfile` 为准**（两段完整参考，自带位置说明 + 排错速查）：
 
@@ -322,35 +333,30 @@ curl -s -X POST https://www.littlewish.top:8443/auth/login \
 > `.env.example:50` 的 `PUBLIC_BASE_URL` 是 `L4 阻塞项`预留的**死配置**
 > （`src/` 零引用），切域名时**不用填**，填了也不生效 —— 别被它骗。
 
-> ⚠️ **不要再去给 `kids.littlewish.top` 配 ACME**：已经在真机上试遍了（LE HTTP-01 多视角 /
-> LE TLS-ALPN-01 / ZeroSSL HTTP-01，见本节上表），全部失败，原因是**验证节点被备案拦截页劫持**
-> 与**443 对国内方向 reset**，不是配置写错。继续重试只会白耗 CA 的 rate limit。
-> 想用 `kids` 子域，只能另想办法拿证书（腾讯云给 `kids` 单独签一张，或加 DNSPod 插件走 DNS-01）。
+> ⚠️ **以上是备案前的结论（2026-11-01）；2026-11-10 备案通过后已推翻**：
+> `kids.littlewish.top` 现在由 Caddy 自动签发/续期
+> （`deploy/conf.d/20-kids.caddyfile`）。若再次签不出，先查备案接入商 / DNS /
+> 80-443 放行，不要照抄“只能手动证书”的旧结论。
 
 
-### 6.2 小程序：必须等备案
+### 6.2 小程序：历史入口必须等备案
 
 1. DNS 加 `kids.littlewish.top A 82.157.153.22`
-2. **先给 `kids.littlewish.top` 弄到证书**（★ 不是放开注释那么简单）
-   —— 备案下来后 `kids` 的 ACME 才有机会过（备案拦截页消失、443 可能也放行），
-   在**真机验证 ACME 能签成之前**，请按 6.1 的方式固定一张手动证书：
-   ```caddyfile
-   kids.littlewish.top {
-       tls /etc/caddy/certs/kids.littlewish.top.crt /etc/caddy/certs/kids.littlewish.top.key
-       reverse_proxy 127.0.0.1:3000
-   }
+2. 安装 `deploy/conf.d/20-kids.caddyfile`（Caddy 自动签发/续期证书）：
+   ```bash
+   cd /srv/kids-points
+   sudo bash deploy/install-kids-caddy.sh
    ```
-3. `caddy validate` → `systemctl reload caddy`
-4. **同时删掉第 4 节的 `@kids` 路由**（有了域名就不需要 `/k` 前缀了），
-   并把 `www.littlewish.top:8443` 站点一并删掉（App 直接改用 `https://kids.littlewish.top`）
+3. 按 `DOMAIN-PLAN-A.md` §6 验证证书、`/app/version` 与 APK 下载
+4. 过渡期**先保留**第 4 节的 `/k` 与 `90-legacy.caddyfile` 的 `hub:8443/kids`；
+   新版小程序 / App 覆盖后再按 `DOMAIN-PLAN-A.md` §9 删除
 5. 小程序 `kids_points_mp/.env.local`：
    `TARO_APP_KP_API_BASE_URL=https://kids.littlewish.top`（去掉 `/k`）
 6. 重新构建小程序并上传体验版
 
-> ⚠️ 提醒：备案通过**只解决微信的域名校验**，不等于 ACME 就能签成 ——
-> 2026-11-01 实测中 LE 的亚太验证节点拿到的是**备案拦截页**，
-> 备案完成后这一条才可能消失。届时先跑
-> `bash deploy/smoke-8443.sh HOST=kids.littlewish.top PORT=443` 验证再切。
+> ⚠️ 备案通过后按 [`DOMAIN-PLAN-A.md`](./DOMAIN-PLAN-A.md) 执行：
+> 先装 `20-kids` 分片并验证 ACME，再切客户端。
+> `smoke-8443.sh` 是旧入口脚本；新域名验收用 runbook §6 的 curl / openssl。
 
 ### 6.3 线上必须先 seed 演示家庭 + 账号（★ 否则 App 登录后一路 401）
 
@@ -378,44 +384,48 @@ sudo docker compose run --rm kids-api npm run seed:account   # 13800138000 / dem
 
 ---
 
-### 6.2 App 自更新：`/kids` 反代与 APK 静态目录（2026-11-02，W10-B）
+### 6.2 App 自更新：Kids 子域的 API + APK 静态目录（2026-11-10，方案 A）
 
-**两件事，一个站点（`hub.littlewish.top:8443`）：**
+**目标状态：一个产品一个站点（`kids.littlewish.top`，443 自动证书）：**
 
 | 路径 | 去向 | 用途 |
 |---|---|---|
-| `/kids/*` | `handle_path` 剥前缀 → `127.0.0.1:3000` | Flutter App 的 API（baseUrl = `https://hub.littlewish.top:8443/kids`） |
-| `/app/*` | `handle_path` 剥前缀 → `file_server`，root `/var/www/cline-hub/app` | APK 静态下载（App 自更新） |
+| `/app/version` | 先于静态匹配 → `127.0.0.1:3000` | App 自更新版本端点（是 API，不是文件） |
+| `/app/*` | `handle_path` 剥前缀 → `file_server`，root `/srv/kids-points/app` | APK 静态下载 |
+| 其余路径 | `reverse_proxy 127.0.0.1:3000` | Flutter App API（baseUrl = `https://kids.littlewish.top`） |
 
-> ⚠️ **为什么两条都要**：App 走 8443 的 `/kids`（证书系统可信，不需要明文例外）；
-> 小程序 `.env.local` 走 `http://82.157.153.22/k`（微信要求域名备案，IP 入口是老的
-> 可用通道）。**两条都得在**，少一条就是一侧全 404。
->
-> ⚠️ **cline-hub 的部署会整份覆盖 `/etc/caddy/Caddyfile`**（2026-11-02 与 2026-11-05
-> 各踩一次）：8443 站点被写回「只有 `/app/*` ＋ catch-all → `127.0.0.1:3100`」，
-> 两条 `handle_path` 一起消失，用户侧看到的是 App「报错说没有数据」（404 被客户端
-> 翻成「要操作的数据不存在」），而容器一直是 `(healthy)`。
-> **cline-hub 每次发版后都要重跑一次下面的脚本**（watchdog 现在也会自动补，见 §8）。
+> 过渡期旧入口仍由 cline-hub 的 `deploy/conf.d/90-legacy.caddyfile` 提供：
+> `https://hub.littlewish.top:8443/kids` 与 `http://82.157.153.22/k`。
+> 旧客户端退场后删除该分片（见 `DOMAIN-PLAN-A.md` §9）。
 
-**插入/修复路由（幂等，自动备份 + `caddy validate`）：**
+> ★ **Hub 发版覆盖 Kids 路由的问题已根治**（2026-11-10）：Caddy 改为
+> 「主文件 + `conf.d/*.caddyfile`」，`20-kids.caddyfile` 属于本仓库，
+> Hub 的安装脚本只覆盖 `00/10/90`，不会再删掉 Kids 的站点。
+> 历史事故（2026-11-02 / 11-05）见 §7「已知坑」。
+
+**安装 / 修复 Kids 站点（幂等，自动备份 + `caddy validate`）：**
 
 ```bash
-scp deploy/ensure-kids-route.sh deploy/caddy-kids-8443.snippet deploy/caddy-kids-k.snippet \
-  ubuntu@82.157.153.22:/tmp/
+scp -r deploy/conf.d deploy/install-kids-caddy.sh \
+  ubuntu@82.157.153.22:/tmp/kids-deploy/
+
 ssh ubuntu@82.157.153.22 \
-  'sudo cp /tmp/ensure-kids-route.sh /tmp/caddy-kids-8443.snippet /tmp/caddy-kids-k.snippet /srv/kids-points/deploy/ && \
-   sudo sed -i "s/\r$//" /srv/kids-points/deploy/ensure-kids-route.sh \
-     /srv/kids-points/deploy/caddy-kids-8443.snippet /srv/kids-points/deploy/caddy-kids-k.snippet && \
-   sudo bash /srv/kids-points/deploy/ensure-kids-route.sh'
+  'sudo cp -r /tmp/kids-deploy/* /srv/kids-points/deploy/ && \
+   sudo sed -i "s/\r$//" /srv/kids-points/deploy/install-kids-caddy.sh && \
+   sudo bash /srv/kids-points/deploy/install-kids-caddy.sh'
 ```
 
-修完的判据（四条都必须是 200）：
+> 旧的 `ensure-kids-route.sh` 只在还没迁移到 conf.d 时用于应急；
+> 迁移后不再需要，保留文件仅为回滚。
+
+修完的判据（都必须是 200 / 正确 JSON）：
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://hub.littlewish.top:8443/kids/health
-curl -s -o /dev/null -w '%{http_code}\n' http://82.157.153.22/k/health
-curl -s https://hub.littlewish.top:8443/kids/app/version   # latestVersion/latestBuild
-curl -s http://82.157.153.22/k/app/version                 # 同一个后端，应当一致
+curl -s -o /dev/null -w 'kids=%{http_code}\n' https://kids.littlewish.top/health
+curl -s https://kids.littlewish.top/app/version        # latestVersion/latestBuild
+curl -s -o /dev/null -w 'apk=%{http_code}\n' https://kids.littlewish.top/app/kids-points-app.apk
+# 过渡期旧入口（90-legacy 仍在时）
+curl -s -o /dev/null -w 'legacy=%{http_code}\n' https://hub.littlewish.top:8443/kids/health
 ```
 
 > `sed -i 's/\r$//'` 不是可选项：仓库 `.gitattributes` 把脚本标成 `eol=lf`，
@@ -427,14 +437,13 @@ curl -s http://82.157.153.22/k/app/version                 # 同一个后端，�
 # ① 版本号三处一起改：pubspec.yaml、lib/app_version.dart、部署机 kids.env。
 #    改完先跑 analyze + test —— test/app_version_test.dart 会把前两处双向钉住。
 flutter build apk --release \
-  --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
+  --dart-define=KP_API_BASE_URL=https://kids.littlewish.top
 
 # ② 上传（50MB 左右，scp 要一两分钟；落盘后核对字节数一致）
 scp build/app/outputs/flutter-apk/app-release.apk \
   ubuntu@82.157.153.22:/tmp/kids-points-1.0.6.apk
 ssh ubuntu@82.157.153.22 \
-  'sudo install -o caddy -g caddy -m 644 /tmp/kids-points-1.0.6.apk /var/www/cline-hub/app/ && \
-   sudo cp /var/www/cline-hub/app/kids-points-1.0.6.apk /var/www/cline-hub/app/kids-points-app.apk'
+  'sudo bash /srv/kids-points/deploy/publish-kids-apk.sh /tmp/kids-points-1.0.6.apk 1.0.6'
 
 # ③ 版本信息：用脚本改（自动备份 kids.env；中文说明从文件读，避免 shell 改写引号）
 scp deploy/update-app-env.py ubuntu@82.157.153.22:/tmp/
@@ -445,7 +454,7 @@ ssh ubuntu@82.157.153.22 \
 
 - `kids-points-app.apk` 是**稳定地址**（`GET /app/version` 默认返回它）；
 - 版本化的 `kids-points-X.Y.Z.apk` 保留，便于回滚 / 对比；
-- 上传后核对：`curl -sI https://hub.littlewish.top:8443/app/kids-points-1.0.6.apk` 应为 `200` + `content-length` ≈ 包大小；
+- 上传后核对：`curl -sI https://kids.littlewish.top/app/kids-points-1.0.6.apk` 应为 `200` + `content-length` ≈ 包大小；
 - ★ **用 `--force-recreate`，不要只 `up -d`**：`kids.env` 是 `env_file`，只改文件内容时
   compose 不保证重建容器 —— 2026-11-05 就是靠它才让 `/app/version` 立刻变成 `1.0.6 / 7`；
 - ★ **`pubspec.yaml` 改了但没发包 = 用户手里仍是旧界面**。`52` §6 记着这条真实教训：
@@ -458,19 +467,19 @@ APP_LATEST_VERSION="1.0.6"
 APP_LATEST_BUILD="7"
 APP_MINIMUM_VERSION="1.0.0"
 APP_MINIMUM_BUILD="1"
-APP_DOWNLOAD_URL="https://hub.littlewish.top:8443/app/kids-points-app.apk"
+APP_DOWNLOAD_URL="https://kids.littlewish.top/app/kids-points-app.apk"
 APP_PUBLISHED_AT="2026-11-05T04:21:14Z"
 APP_RELEASE_NOTES="取消「日期＋星期」验证码锁屏，改为家长 PIN 锁；「我的申请 / 消息」改为整页列表；家长首次进入先设置 PIN。"
 ```
 
-**五条探针（两个入口都要查 —— 2026-11-05 那次只修一侧就够不着小程序）：**
+**五条探针（新域名 + 过渡期旧入口一起查）：**
 
 ```bash
-curl -s -o /dev/null -w 'kids=%{http_code}\n' https://hub.littlewish.top:8443/kids/app/version   # 200
-curl -s https://hub.littlewish.top:8443/kids/app/version | head -c 200                            # latestVersion/latestBuild
-curl -s -o /dev/null -w 'k=%{http_code}\n'    http://82.157.153.22/k/app/version                  # 200，且版本一致
-curl -s -o /dev/null -w 'apk=%{http_code}\n'  https://hub.littlewish.top:8443/app/kids-points-app.apk  # 200
-curl -s -o /dev/null -w 'hub=%{http_code}\n'  https://hub.littlewish.top:8443/api/v1/health      # 200（别挤掉 hub）
+curl -s -o /dev/null -w 'kids=%{http_code}\n' https://kids.littlewish.top/app/version   # 200
+curl -s https://kids.littlewish.top/app/version | head -c 200                           # latestVersion/latestBuild
+curl -s -o /dev/null -w 'apk=%{http_code}\n'  https://kids.littlewish.top/app/kids-points-app.apk  # 200
+curl -s -o /dev/null -w 'legacy=%{http_code}\n' https://hub.littlewish.top:8443/kids/app/version     # 200（90-legacy 仍在时）
+curl -s -o /dev/null -w 'hub=%{http_code}\n'  https://hub.littlewish.top/api/v1/health               # 200（别挤掉 hub）
 ```
 
 

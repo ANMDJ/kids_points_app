@@ -599,7 +599,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(store.readStatus, ReadStatus.ready);
-    expect(find.text('只读模式 · 数据来自服务器（写入口尚未接入）'), findsOneWidget);
+    // 2026-11-10（用户第 8 条）：成功态不再画「数据来自服务器…」横条 ——
+    // 抬头栏只留给真正需要看的状态（读取失败 / 首次加载中）。
+    expect(find.textContaining('数据来自服务器'), findsNothing);
     expect(find.text('当前可用积分'), findsOneWidget);
 
     // live 但**没注入写客户端**：「记一笔」必须明确拒绝，而不是打开一个只改内存的表单。

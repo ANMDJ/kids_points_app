@@ -9,6 +9,7 @@ import {
 } from './read_api'
 import { ReadApiException } from './read_api_errors'
 import {
+  mapApprovalInboxItem,
   mapApprovalsPage,
   mapConsent,
   mapFamilyDeletion,
@@ -2183,6 +2184,26 @@ export class AppStore {
     })
     return mapApprovalsPage(dto)
   }
+  /**
+   * 取**单条**审批详情（P1-3）。成功返回映射后的行；失败抛 [ReadApiException]。
+   *
+   * 为什么不写进全局状态：详情页是打开即取、离开即弃的二级页；写进来会让
+   * 「收件箱的游标 / 错误」与「详情的最新一条」互相污染。
+   * 预览 / 只读模式**不编造**详情 —— 直接给一句可展示的原因。
+   */
+  async fetchApproval(approvalId: string): Promise<ApprovalInboxItem> {
+    const api = this.readApi
+    if (api === null) {
+      throw new ReadApiException(
+        'unavailable',
+        '当前没有连接服务器，看不到这条申请的最新状态。',
+        { code: 'APPROVAL_DETAIL_UNAVAILABLE' }
+      )
+    }
+    return mapApprovalInboxItem(await api.fetchApproval(approvalId), 'approval')
+  }
+
+
 
   // ------------------------------------------------ 站内通知（W5-L）
 

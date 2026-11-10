@@ -18,6 +18,25 @@ String limitTextOf(int dailyLimit) =>
 /// 今日完成次数的展示串 —— 修 E17。
 String doneTextOf(int checkedCountToday) => '今日已完成 $checkedCountToday 次';
 
+/// 今日**进度**展示串（2026-11-10，用户第 10 / 12 条）。
+///
+/// ── 它修的是什么 ────────────────────────────────────────────────────────────
+///   「每天最多 2 次」的任务打完 1 次时，`checked`（= 达上限）仍是 false，
+///   卡片看起来和一次都没打**完全一样** —— 用户报「完成一个也看不出来」。
+///   这里把 `N/M` 写进副标题，`0/2 → 1/2 → 2/2` 每一步都看得见。
+///   「每天 1 次」的任务保持原样：没完成时说频次、完成了说次数，不制造 `1/1` 噪音。
+///
+/// ★ 与小程序 `kids_points_mp/src/data/types.ts#progressTextOf` 逐字一致
+///   （两端各一份派生函数，改一处必须改另一处）。
+String progressTextOf(int checkedCountToday, int dailyLimit) {
+  final int done = checkedCountToday < 0 ? 0 : checkedCountToday;
+  final int limit = dailyLimit < 1 ? 1 : dailyLimit;
+  if (limit <= 1) {
+    return done == 0 ? limitTextOf(1) : doneTextOf(done);
+  }
+  return '今日已完成 $done/$limit 次';
+}
+
 /// 两个时间是否同一天（本地时区）—— 与 Taro 侧 `isSameDay()` 同源。
 bool isSameDay(DateTime time, [DateTime? other]) {
   final DateTime day = other ?? DateTime.now();
@@ -165,11 +184,13 @@ class HabitView {
   /// 由 `checkedCountToday` 派生的完成串
   String get doneText => doneTextOf(checkedCountToday);
 
+  /// 今日进度（可完成多次时是 `N/M`）—— 用户第 10 条
+  String get progressText => progressTextOf(checkedCountToday, habit.dailyLimit);
+
   /// 是否已达今日上限 —— 修 A3
   bool get checked => checkedCountToday >= habit.dailyLimit;
 
-  String get subtitle =>
-      checked ? '$condition · $doneText' : '$condition · $limitText';
+  String get subtitle => '$condition · $progressText';
 
   String get amountText => '+$points';
 }

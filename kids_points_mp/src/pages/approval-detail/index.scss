@@ -1,0 +1,244 @@
+@use '../../styles/vars.scss' as *;
+
+// 审批详情（P1-3）：与 Flutter `ApprovalDetailScreen` 同一套骨架 ——
+// 固定一屏（标题栏 + 滚动内容），底部动作在内容流里（不悬浮，避免遮住执行结果）。
+.kp-adetail {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.kp-adetail__progress {
+  height: f2r(2);
+  background: linear-gradient(90deg, $primary-deep, rgba(127, 191, 85, 0.2));
+}
+
+.kp-adetail__scroll {
+  flex: 1;
+  height: 0;
+  overflow: hidden;
+}
+
+.kp-adetail__content {
+  padding: f2r(6) f2r(20) f2r(28);
+}
+
+.kp-adetail__error {
+  display: block;
+  font-size: f2r(12.5);
+  line-height: 1.5;
+  color: #d9704a;
+}
+
+.kp-adetail__retry {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: f2r(8);
+}
+
+.kp-adetail__retry-text {
+  font-size: f2r(12.5);
+  font-weight: 700;
+  color: $primary-text;
+}
+
+.kp-adetail__loading {
+  display: block;
+  margin-top: f2r(48);
+  text-align: center;
+  font-size: f2r(13);
+  color: $text-secondary;
+}
+
+.kp-adetail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kp-adetail__headline {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(17);
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-adetail__pill {
+  margin-left: f2r(8);
+  padding: f2r(5) f2r(10);
+  border-radius: f2r(999);
+  background-color: $chip-bg;
+}
+
+.kp-adetail__pill.is-pending {
+  background-color: $primary-soft;
+}
+
+.kp-adetail__pill.is-expired,
+.kp-adetail__pill.is-rejected {
+  background-color: #fff0e6;
+}
+
+.kp-adetail__pill-text {
+  font-size: f2r(12);
+  font-weight: 700;
+  color: $text-secondary;
+}
+
+.kp-adetail__pill.is-pending .kp-adetail__pill-text {
+  color: $primary-text;
+}
+
+.kp-adetail__pill.is-rejected .kp-adetail__pill-text {
+  color: #e9834b;
+}
+
+.kp-adetail__detail {
+  display: block;
+  margin-top: f2r(6);
+  font-size: f2r(13);
+  line-height: 1.5;
+  color: $text-secondary;
+}
+
+.kp-adetail__metaline {
+  display: flex;
+  align-items: center;
+  margin-top: f2r(10);
+}
+
+.kp-adetail__tag {
+  padding: f2r(4) f2r(9);
+  border-radius: f2r(999);
+  background-color: $chip-bg;
+}
+
+.kp-adetail__tag-text {
+  font-size: f2r(11);
+  font-weight: 600;
+  color: $text-secondary;
+}
+
+.kp-adetail__metatext {
+  margin-left: f2r(8);
+  font-size: f2r(11.5);
+  color: $text-hint;
+}
+
+.kp-adetail__section {
+  display: block;
+  margin-bottom: f2r(8);
+  font-size: f2r(13.5);
+  font-weight: 800;
+  color: $text-primary;
+}
+
+.kp-adetail__fact {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: f2r(6);
+}
+
+.kp-adetail__fact-label {
+  width: f2r(88);
+  font-size: f2r(12);
+  color: $text-hint;
+}
+
+.kp-adetail__fact-value {
+  flex: 1;
+  min-width: 0;
+  font-size: f2r(12.5);
+  line-height: 1.45;
+  font-weight: 600;
+  color: $text-primary;
+  word-break: break-all;
+}
+
+.kp-adetail__warn {
+  display: block;
+  font-size: f2r(12.5);
+  line-height: 1.55;
+  color: #d9704a;
+}
+
+.kp-adetail__muted {
+  display: block;
+  margin-bottom: f2r(6);
+  font-size: f2r(12.5);
+  line-height: 1.55;
+  color: $text-secondary;
+}
+
+.kp-adetail__note {
+  display: block;
+  margin-bottom: f2r(6);
+  font-size: f2r(12);
+  line-height: 1.5;
+  color: $text-hint;
+}
+
+.kp-adetail__actions {
+  margin-top: f2r(6);
+}
+
+.kp-adetail__row {
+  display: flex;
+  align-items: center;
+}
+
+.kp-adetail__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: f2r(12) f2r(18);
+  border-radius: f2r(999);
+}
+
+.kp-adetail__row .kp-adetail__button {
+  flex: 1;
+}
+
+.kp-adetail__row .kp-adetail__button + .kp-adetail__button {
+  margin-left: f2r(10);
+}
+
+.kp-adetail__button.is-reject {
+  background-color: #fff0e6;
+}
+
+.kp-adetail__button.is-approve {
+  background-color: $primary-deep;
+}
+
+.kp-adetail__button.is-disabled {
+  opacity: 0.45;
+}
+
+.kp-adetail__button-text {
+  font-size: f2r(14);
+  font-weight: 700;
+}
+
+.kp-adetail__button-text.is-reject {
+  color: #e9834b;
+}
+
+.kp-adetail__button-text.is-approve {
+  color: #ffffff;
+}
+
+.kp-adetail__full {
+  margin-top: f2r(10);
+}
+
+.kp-adetail__hint {
+  display: block;
+  margin-top: f2r(10);
+  text-align: center;
+  font-size: f2r(11.5);
+  line-height: 1.5;
+  color: $text-hint;
+}

@@ -48,6 +48,15 @@ export interface ApprovalRow {
    * 可选出现在的端口里：W2 的读模型没有它，W3 的真实现有。
    */
   autoReason?: string | null
+
+  /**
+   * 申请人**建请求当时**的成员位角色（`guardian` / `child`）。
+   *
+   * ★ P1-3（2026-11-10）：审批详情页要回答「谁提的」。它是建请求时的**快照**，
+   *   不是现在去 `ChildMember` 现查 —— 成员位后来被改过，详情页也不该篡改历史。
+   *   可选：无库装配与历史测试夹具不编造它（客户端显示「家庭成员提交」）。
+   */
+  requesterRole?: string | null
 }
 
 /** 建请求的入参（**只含**落库需要的字段）。 */
@@ -182,8 +191,13 @@ export interface ApprovalsPort {
   /**
    * 取一条（未找到返回 `null`，**不抛异常** —— 「没有这条」是正常分支，404 由上层决定）。
    * ★ `childId` 是**查询条件**（W3-B）：另一家的审批与「不存在」必须长得一模一样。
+   *
+   * ★ P1-3（2026-11-10）：返回类型从 `ApprovalRow` 拓宽到 `ApprovalListRow`。
+   *   理由：详情页（`GET /approvals/:id`）与列表显示**同一份**字段（payload 摘要 +
+   *   三个时间戳），若另开一个 `findDetailById`，两份读模型迟早漂移。
+   *   decide / withdraw 只用到父类型的字段，不受影响（子类型可直接赋值给父类型）。
    */
-  findById(id: string, childId: string): Promise<ApprovalRow | null>
+  findById(id: string, childId: string): Promise<ApprovalListRow | null>
 
   /**
    * 收件箱列表（W5-D）：按 `(createdAt desc, id desc)` 键集翻页。
@@ -254,7 +268,7 @@ export class NotImplementedApprovalsRepository implements ApprovalsPort {
     return Promise.resolve(this.fail('createSelfApproved'))
   }
 
-  findById(id: string, childId: string): Promise<ApprovalRow | null> {
+  findById(id: string, childId: string): Promise<ApprovalListRow | null> {
     void id
     void childId
     return Promise.resolve(this.fail('findById'))

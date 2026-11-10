@@ -450,6 +450,14 @@ class AppStore extends ChangeNotifier {
   /// 当前的家长权限是**PIN 换来的 5 分钟**（只有这种才有倒计时）。
   bool get isParentModePinBacked => _parentMode?.isPinBacked ?? false;
 
+  /// PIN 换来的家长窗口**已经走完**（快照仍说「在家长模式」，但剩余秒数 = 0）。
+  ///
+  /// 服务端此刻的 `effectiveRole` 已经是 `child`，只是本地快照还没刷新 ——
+  /// 顶部状态条据此显示「已结束，输入 PIN 继续」，而不是一个停在 `00:00`
+  /// 的假倒计时。
+  bool isParentWindowExpiredAt(DateTime now) =>
+      isParentModePinBacked && parentModeRemainingSeconds(now) == 0;
+
   ReadStatus get parentModeReadStatus => _parentModeReadStatus;
   String? get parentModeError => _parentModeError;
 
@@ -1031,8 +1039,13 @@ class AppStore extends ChangeNotifier {
   /// ── 为什么不动 API 客户端 ──────────────────────────────────────────────────
   ///   它们本身无状态（设备 / 孩子 id 都在 `ReadApiConfig` 里动态取），
   ///   重建客户端只会丢掉测试注入的替身。
-  void resetForIdentity() {
+  void resetForIdentity({bool keepAppUnlocked = false}) {
+    final bool wasUnlocked = _appUnlocked;
     _resetToEmpty();
+    // 2026-11-10（用户第 3 条）：切换孩子时**保持解锁** —— 这是家长刚刚
+    // 证明过自己的动作，切完立刻再要一次 PIN 只会被读成「应用又抽风了」。
+    // 换账号 / 登录复用（默认 false）仍然会重新上锁。
+    if (keepAppUnlocked) _appUnlocked = wasUnlocked;
     _usingPreview = false;
     _readStatus = ReadStatus.idle;
     _readError = null;
@@ -1207,6 +1220,24 @@ class AppStore extends ChangeNotifier {
     );
     return mapApprovalsPage(dto);
   }
+  /// 取**单条**审批详情（P1-3）。成功返回映射后的行；失败抛 [ReadApiException]。
+  ///
+  /// 为什么不缓存进 store：详情页是打开即取、离开即弃的二级页；把它写进全局
+  /// 状态会让「收件箱的游标 / 错误」与「详情的最新一条」互相污染。
+  /// 预览 / 只读模式**不编造**详情 —— 直接给一句可展示的原因，页面显示失败态。
+  Future<ApprovalInboxItem> fetchApproval(String approvalId) async {
+    final ReadApiClient? api = _readApi;
+    if (api == null) {
+      throw ReadApiException(
+        ReadFailureKind.unavailable,
+        '当前没有连接服务器，看不到这条申请的最新状态。',
+        code: 'APPROVAL_DETAIL_UNAVAILABLE',
+      );
+    }
+    return mapApprovalInboxItem(await api.fetchApproval(approvalId));
+  }
+
+
 
   /// 追加下一页；没有更多 / 正在加载时直接返回。
   Future<void> loadMoreApprovals() async {
@@ -4504,6 +4535,16 @@ class AppStore extends ChangeNotifier {
       // 刚设完 PIN（输了两遍）⇒ 不必立刻再让家长解一次锁。
       _appUnlocked = true;
       _relockPending = false;
+      // 2026-11-10（用户第 1 条）：设完 PIN 立刻开一个 5 分钟家长窗口，
+      // 否则用户会看到「已解锁，但没有倒计时」—— 那正是本轮被问的问题。
+      // 失败**不影响**保存结果（PIN 已经落库），只是没有窗口。
+      try {
+        _applyParentModeDto(await api.enter(trimmed));
+      } on WriteApiException catch (error) {
+        if (!_disposed) _parentModeError = error.userMessage;
+      } catch (_) {
+        // 旧服务端 / 断网：保存成功就够了。
+      }
       return null;
     } on ParentPinLockException catch (error) {
       if (_disposed) return error.userMessage;
@@ -4521,6 +4562,67 @@ class AppStore extends ChangeNotifier {
       return error.userMessage;
     } catch (error) {
       return '保存家长 PIN 的请求已发出，但结果无法确认。请刷新后查看。';
+    } finally {
+      _parentPinBusy = false;
+      _notify();
+    }
+  }
+
+  /// 忘记家长 PIN 时，用**账号密码**重置（`POST /auth/parent-pin/reset`）。成功返回 null。
+  ///
+  /// ── 为什么它与 [setParentPin] 是两条路（不要合并）────────────────────────────
+  ///   · `setParentPin` 证明的是「握着旧 PIN」（`manage_parent_pin`，孩子 DENY）；
+  ///   · 本方法证明的是「握着账号密码」（`switch_role_mode`）—— 用户 2026-11-10
+  ///     第 7 条要的就是这条：忘记 PIN 时不必先回到家长模式。
+  ///
+  /// ── 成功后刻意**不**打开本机锁 ───────────────────────────────────────────
+  ///   重置只换钥匙，不替用户提权（服务端注释同一条）。那台设备此刻可能正被
+  ///   孩子拿着；顺手 `_appUnlocked = true` 等于让「猜中一次密码」变成绕过锁屏。
+  ///   但**锁屏上**的重置成功后应当能直接解锁 —— 那由界面在成功回调里再走
+  ///   一次 `unlockAppWithPin(新 PIN)`（此时家长刚刚亲手设过它）。
+  Future<String?> resetParentPin({
+    required String password,
+    required String newPin,
+  }) async {
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法重置家长 PIN。';
+    if (_parentPinBusy) return '上一次保存正在提交，请稍候…';
+
+    final String trimmed = newPin.trim();
+    if (trimmed.isEmpty) return '请输入新的家长 PIN。';
+    final String? invalid = validateParentPin(trimmed);
+    if (invalid != null) return invalid;
+    if (password.trim().isEmpty) return '请输入登录密码（不是家长 PIN）。';
+
+    _parentPinBusy = true;
+    _parentModeError = null;
+    _notify();
+    try {
+      final ParentPinResetDto dto =
+          await api.resetPin(password: password, pin: trimmed);
+      if (_disposed) return null;
+      _parentMode = (_parentMode ?? ParentMode.unknown).copyWith(
+        pinConfigured: dto.pinConfigured,
+        remainingAttempts: dto.remainingAttempts,
+        clearLockedUntil: true,
+      );
+      _parentPinLockSeconds = 0;
+      _parentModeReadStatus = ReadStatus.ready;
+      return null;
+    } on ParentPinLockException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 429 的秒数在这里是「密码尝试冷却」，不是 PIN 锁定 —— 不写进
+      // `_parentPinLockSeconds`（那个值会被锁屏渲染成「PIN 已锁定」）。
+      return error.userMessage;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      return '重置家长 PIN 的请求已发出，但结果无法确认。请刷新后查看。';
     } finally {
       _parentPinBusy = false;
       _notify();
@@ -4628,9 +4730,94 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  /// 用家长 PIN 解锁本机（冷启动 / 从后台回来）。
+  /// 用家长 PIN 解锁本机（冷启动 / 从后台回来），**同时**打开 5 分钟家长窗口。
+  ///
+  /// ── 2026-11-10 的行为修订（用户第 1 / 13 条）──────────────────────────────
+  ///   用户要的模型：**输入 PIN = 进入家长模式，开始 5 分钟倒计时**；
+  ///   已经是家长模式时再输一次 PIN ⇒ **重置**这 5 分钟。
+  ///   所以这里不再走「只校验、不改角色」的 `POST /auth/parent-pin/verify`，
+  ///   而是走 `POST /auth/parent-mode`（它写 `expiresAt = now + 5 分钟`）。
+  ///
+  ///   三条分支（顺序不能换）：
+  ///     ① 孩子模式进行中 / 已到期 ⇒ `DELETE /auth/kid-mode`：家长在锁屏上
+  ///        输入 PIN 的语义就是「收回这台设备」。旧实现只解锁、不收孩子模式，
+  ///        于是「输对 PIN 了，但还是被 403 挡住」—— 那是一个假解锁。
+  ///     ② 其余 ⇒ `POST /auth/parent-mode`（校验 PIN ＋ 开 5 分钟窗口）。
+  ///     ③ 旧服务端没有 verify 路由时（`404`）退回 `verifyPin`：功能可用，
+  ///        代价只是没有 5 分钟窗口（不会把人锁在门外）。
+  ///
+  /// ★ `PARENT_MODE_REQUIRES_GUARDIAN`（成员位被降级成 child）**不算 PIN 错**：
+  ///   退回 `verifyPin` —— 锁屏只回答「谁拿着手机」，不该因为成员角色变更
+  ///   把设备变成永久打不开（`docs/design/52` §2 的同一理由）。
   Future<String?> unlockAppWithPin(String pin) async {
     if (_appUnlocked) return null;
+    final ParentModeApi? api = _parentModeApi;
+    if (api == null) return '当前没有接入后端，无法校验家长 PIN。';
+    if (_appLockBusy) return '正在校验，请稍候…';
+
+    final String trimmed = pin.trim();
+    if (trimmed.isEmpty) return '请输入家长 PIN。';
+    final String? invalid = validateParentPin(trimmed);
+    if (invalid != null) return invalid;
+
+    // ① 孩子模式（窗口内 / 已到期）⇒ 唯一出口是 DELETE /auth/kid-mode。
+    final DateTime now = DateTime.now();
+    if (isKidModeActiveAt(now) || isKidModeExpiredAt(now)) {
+      final String? failure = await exitKidMode(trimmed);
+      if (failure == null && !_disposed) {
+        _appUnlocked = true;
+        _relockPending = false;
+        _notify();
+      }
+      return failure;
+    }
+
+    _appLockBusy = true;
+    _appLockError = null;
+    _notify();
+    try {
+      final ParentModeDto dto = await api.enter(trimmed);
+      if (_disposed) return null;
+      _applyParentModeDto(dto);
+      _parentModeReadStatus = ReadStatus.ready;
+      _parentPinLockSeconds = 0;
+      _appUnlocked = true;
+      _relockPending = false;
+      _appLockError = null;
+      return null;
+    } on WriteApiException catch (error) {
+      if (_disposed) return error.userMessage;
+      // 成员位被降级 / 旧服务端：都退回「只校验」，不让锁屏变成砖。
+      if (error.code == 'PARENT_MODE_REQUIRES_GUARDIAN' ||
+          error.statusCode == 404) {
+        // ★ 必须先放开在途标记：`checkParentPin` 自己会判 `_appLockBusy`
+        //   （否则第二次点击会白烧一次失败次数）。不放就会变成「正在校验，请稍候…」
+        //   —— 用户被永久卡在锁屏（本轮实跑抓到）。
+        _appLockBusy = false;
+        return _unlockByVerifyingPin(trimmed);
+      }
+      _appLockError = error.userMessage;
+      if (error is ParentPinLockException) {
+        _parentPinLockSeconds = error.retryAfterSeconds;
+      }
+      if (error.kind == WriteFailureKind.forbidden ||
+          error.kind == WriteFailureKind.conflict) {
+        await refreshParentMode();
+      }
+      return error.userMessage;
+    } catch (error) {
+      const String message = '校验请求已发出，但结果无法确认。请重试。';
+      if (_disposed) return message;
+      _appLockError = message;
+      return message;
+    } finally {
+      _appLockBusy = false;
+      _notify();
+    }
+  }
+
+  /// 降级路径：只校验 PIN（旧服务端 / 成员位不再是 guardian）。
+  Future<String?> _unlockByVerifyingPin(String pin) async {
     final String? failure = await checkParentPin(pin);
     if (failure != null || _disposed) return failure;
     _appUnlocked = true;

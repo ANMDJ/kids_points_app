@@ -240,6 +240,8 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
       PinPad(
         controller: _pin,
         enabled: !locked && !_busy,
+        // 弹层里空间有限（整屏给锁屏 / 设置页用）—— 键盘取紧凑尺寸。
+        compact: true,
         hintText: '4–6 位数字',
       ),
       // 没有 PIN 且不在家长模式 ⇒ 上面那行提示说的最后一步必须真的能点。
@@ -349,6 +351,7 @@ class _ParentModeSheetState extends State<ParentModeSheet> {
       PinPad(
         controller: _kidPin,
         enabled: !_busy,
+        compact: true,
         hintText: '4–6 位数字',
       ),
       const SizedBox(height: 8),

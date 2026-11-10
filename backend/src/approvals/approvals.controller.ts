@@ -20,7 +20,7 @@ import type { RequestWithActor } from '../permissions/actor'
 import { PermissionsGuard } from '../permissions/permissions.guard'
 import { RequireAction } from '../permissions/require-action.decorator'
 import { ApprovalsService } from './approvals.service'
-import type { ApprovalInboxPageDto } from './approval-inbox.mapper'
+import type { ApprovalDetailDto, ApprovalInboxPageDto } from './approval-inbox.mapper'
 import { CreateApprovalRequestDto } from './dto/create-approval-request.dto'
 import { DecideApprovalRequestDto } from './dto/decide-approval-request.dto'
 import { ListApprovalsQueryDto } from './dto/list-approvals.query'
@@ -86,6 +86,24 @@ export class ApprovalsController {
     @Req() req: RequestWithActor
   ): Promise<ApprovalInboxPageDto> {
     return this.service.listMine(query, this.actorOf(req), this.childIdOf(req))
+  }
+
+  /**
+   * 单条详情（P1-3，2026-11-10）：`GET /approvals/:id`。
+   *
+   * ★ 为什么用 `view_own_approvals` 而不是 `review_approvals`：
+   *   详情页同时服务家长（收件箱 / 「有人提交了申请」通知）与申请人
+   *   （「我的申请」/ 审批结果通知）。矩阵里 `view_own_approvals` 两侧 ALLOW，
+   *   真正的收口在 service 的 `detailDenial()`（家长按批准资格、其余按本人）。
+   *   若挂 `review_approvals`，孩子会被拦在 403，通知深链就永远打不开自己的申请。
+   *
+   * ★ 路由顺序：`mine` 必须排在 `:id` 之前声明，否则 `/approvals/mine`
+   *   会被当成 id=`mine` 的行去查（Nest 按声明顺序匹配）。
+   */
+  @Get(':id')
+  @RequireAction('view_own_approvals')
+  async detail(@Param('id') id: string, @Req() req: RequestWithActor): Promise<ApprovalDetailDto> {
+    return this.service.detail(id, this.actorOf(req), this.childIdOf(req))
   }
 
   /**
