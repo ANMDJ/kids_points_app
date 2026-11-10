@@ -265,6 +265,12 @@ curl -sI "$KP_DOMAIN/app/kids-points-1.0.7.apk" | findstr /i content-length   # 
 curl -sI "$KP_DOMAIN/app/kids-points-1.0.7.apk" | grep -i content-length      # bash
 ```
 
+> ★ **两个文件都要核对，尤其是稳定地址 `kids-points-app.apk`**：
+> 2026-11-10 实测过一个「`/app/version` 报 1.0.7、下载下来却是 1.0.6」的坑 ——
+> `install-kids-caddy.sh` 里「从旧目录补 APK」那段用 `cp -a` 把稳定地址覆盖回了旧包
+> （已修为只补缺、不覆盖，见 §9 坑 11）。判据只有一个：
+> `curl -sI …/kids-points-app.apk` 的 `content-length` **逐字等于**本地 APK 字节数。
+
 ### 5.4 写入自更新元信息（★ 必须 `--force-recreate`）
 
 ```bash
@@ -396,6 +402,7 @@ S9  verify      : §6 的 1–8 条                    → 全 200 / 字段匹�
 | 8 | `/app/version` 404 但 APK 下载正常 | `handle_path /app/*` 排在了 `@app_version` 前面 | 顺序必须是 `@app_version` → `/app/*` → catch-all（见 `20-kids.caddyfile`） |
 | 9 | App 装上去一片空、零请求 | 构建漏了 `--dart-define=KP_API_BASE_URL` | 重打包（§5.2）；`test/app_version_test` 抓不到这个，只能在构建命令里保证 |
 | 10 | hub 发版后 kids 全 404 | cline-hub 整份覆盖 `/etc/caddy/Caddyfile` | watchdog（`ensure-kids-sites.sh`）自愈；手工同命令 |
+| 11 | `/app/version` 报 `1.0.7`，但下载下来的包还是旧版（`content-length` 是旧的） | `install-kids-caddy.sh` 早期版本用 `cp -a` 把 `/var/www/cline-hub/app/kids-points-app.apk`（旧包）**覆盖**了 `/srv/kids-points/app/kids-points-app.apk` | 已修（改「只补缺、不覆盖」，2026-11-10）；验收必须比 `content-length` 与本地 APK 字节数**逐字相等**（§6 第 4 条） |
 
 ---
 
@@ -409,4 +416,5 @@ S9  verify      : §6 的 1–8 条                    → 全 200 / 字段匹�
 | Caddy | 首次装 `conf.d/20-kids.caddyfile` + 主文件追加 `import /etc/caddy/conf.d/*.caddyfile`（备份 `Caddyfile.bak-20261110-161124`） |
 | 备份 | `kids-backup.sh --verify`：24 张表、`PointRecord=25`、临时库已删 |
 | 回滚点 | `kids-api:prev-20261110` |
+| 顺手修的第 3 个 bug | `install-kids-caddy.sh` 的 `cp -a` 会把旧目录的 `kids-points-app.apk` 覆盖到稳定地址（`/app/version` 报 1.0.7、下载却是 1.0.6）；改成「只补缺、不覆盖」后重跑自愈脚本，`content-length` 仍为 **53,153,622** |
 

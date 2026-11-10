@@ -53,3 +53,6 @@ bash.exe.stackdump
 #   backend/.gitignore          （node_modules、dist、.env ← 含真实口令，绝不入库）
 #   kids_points_mp/.gitignore   （node_modules、dist、.tmp_test 的产物部分）
 
+
+# 小程序构建遗留的错误日志（2026-11-10 清理）
+/.tmp_mp_build.err

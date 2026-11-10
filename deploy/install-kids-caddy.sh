@@ -101,14 +101,24 @@ fi
 # APK 目录：由 caddy 用户读取（file_server 以 caddy 身份运行）
 install -d -o caddy -g caddy -m 755 "$APP_DIR"
 
-# 过渡期：把旧目录里的 Kids APK 复制过来（复制而非移动，旧 8443 地址仍可用）
+# 过渡期：把旧目录里的 Kids APK 复制过来（只补缺，**绝不覆盖**）
+# ★ 2026-11-10 实测踩到：原来的 `cp -a` 会把 `/var/www/cline-hub/app/kids-points-app.apk`
+#   （旧版）覆盖掉 `/srv/kids-points/app/kids-points-app.apk`（刚发布的新版），
+#   于是 `/app/version` 报 1.0.7、下载地址给的却是 1.0.6 的包。
+#   `cp -n`（no-clobber）已存在就跳过 —— 幂等脚本不能有「跑第二次就回退」的副作用。
 shopt -s nullglob
 old_apks=(/var/www/cline-hub/app/kids-points-*.apk)
 if (( ${#old_apks[@]} > 0 )); then
-  cp -a "${old_apks[@]}" "$APP_DIR/"
+  copied=0
+  for f in "${old_apks[@]}"; do
+    if [[ ! -e "$APP_DIR/$(basename "$f")" ]]; then
+      cp -a "$f" "$APP_DIR/"
+      copied=$((copied + 1))
+    fi
+  done
   chown caddy:caddy "$APP_DIR"/kids-points-*.apk
   chmod 644 "$APP_DIR"/kids-points-*.apk
-  echo "[apk] 已从 /var/www/cline-hub/app 复制 ${#old_apks[@]} 个 Kids APK 到 $APP_DIR"
+  echo "[apk] 旧目录有 ${#old_apks[@]} 个 Kids APK，本次补入 $copied 个（已存在的不覆盖）"
 else
   echo "[apk] 旧目录没有 Kids APK；发布时用 deploy/publish-kids-apk.sh 上传"
 fi
