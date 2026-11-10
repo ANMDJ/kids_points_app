@@ -70,7 +70,45 @@
 - 清单只报**未开发/未验收**的事实，不加优先级建议以外的扩写；需要产品裁定的，
   指向 `43` §8 的 D1–D6，不要自己替产品拍板。
 
-## 3. 变更记录
+## 3. 部署边界：Caddy 分片归属（与 cline-hub 共用一台服务器，2026-11-10 起）
+
+同一台机器（`82.157.153.22`）上还跑着**另一个独立仓库**的产品 cline-hub，两个产品共用一个 Caddy。
+自 2026-11-10 起 Caddy 是「主文件 + `conf.d` 分片」，**谁的分片谁装**：
+
+| 分片（`/etc/caddy/conf.d/`） | 站点 | 去向 | 归属 |
+|---|---|---|---|
+| `00-site.caddyfile` | `littlewish.top` / `www` | `/var/www/cline-hub` 落地页 | cline-hub |
+| `10-hub.caddyfile` | `hub.littlewish.top` | `127.0.0.1:3100`；`/app/*` → `/var/www/cline-hub/app`（Hub 自己的 APK） | cline-hub |
+| `20-kids.caddyfile` | `kids.littlewish.top` | `127.0.0.1:3000`；`/app/version` 走 API、`/app/*` → `/srv/kids-points/app`（本产品 APK） | **本仓库** |
+| `30-ntfy.caddyfile`（可选） | `ntfy.littlewish.top` | `127.0.0.1:2586` | cline-hub，手工启用 |
+| `90-legacy.caddyfile` | `http://82.157.153.22/k/*`、`hub.littlewish.top:8443/{kids,app}/*` | `:3000` / `:3100` / `/var/www/cline-hub/app` | cline-hub，**仅** `--with-legacy` |
+
+资源归属：
+
+| 资源 | 归属 |
+|---|---|
+| `/srv/kids-points`（代码 / `kids.env` / `.secrets`）、`/srv/kids-points/app`（APK）、`127.0.0.1:3000`、`/var/lib/caddy/kids.log` | **本仓库** |
+| `/srv/cline-hub`、`/var/www/cline-hub`（落地页 + Hub APK）、`127.0.0.1:3100`、`/var/lib/caddy/{site,hub,hub-https,hub-http}.log` | cline-hub |
+| `127.0.0.1:5432`（`pg18` 容器） | 共用（两个库，网络附加见 `deploy/README.md` §0） |
+
+硬约束：
+
+1. 本仓库只装 `20-kids.caddyfile`（`deploy/install-kids-caddy.sh`）与 `/srv/kids-points/app`
+   （`deploy/publish-kids-apk.sh`），**不碰** `/etc/caddy/Caddyfile` 与 `00` / `10` / `90` 分片。
+   反过来 hub 发版也只覆盖它自己那三个分片，不会删 `20-kids`。
+2. 禁止 `rm /etc/caddy/conf.d/*`、禁止整份覆盖 `/etc/caddy/Caddyfile`、禁止把 kids 路由插进
+   `10-hub`：同一主机名两处定义会让 `caddy validate` 失败，reload 不生效还会被误判成「改了没生效」。
+3. 需要新路径前缀就加在自己的 `20-kids` 分片里，**不要**请 hub 那边改 `10-hub`。
+4. `deploy/ensure-kids-route.sh` 只是迁移到 `conf.d` 之前的应急脚本（它往 hub 的 Caddyfile 里插
+   `/k`、`/kids`）；迁移完成后不再使用，保留仅为回滚。
+5. kids 站点 404 的排查顺序：`ls /etc/caddy/conf.d/` → 没有 `20-kids` 就
+   `sudo bash deploy/install-kids-caddy.sh`；有就查容器 / `kids.env` / 后端日志。
+6. 任何 Caddy 改动后：`caddy validate` → `systemctl reload caddy`（**不是** `restart`，会断 Hub 的 SSE），
+   再按 `deploy/DOMAIN-PLAN-A.md` §6 验收（证书签发者/SAN + `/health` + `/app/version` + APK 四项）；
+   `20-kids` 装好后还要确认
+   `https://kids.littlewish.top/app/version` 返回 JSON 而不是 404（`/app/*` 静态规则不能排在它前面）。
+
+## 4. 变更记录
 
 | 日期 | 变更 | 起因 |
 |---|---|---|
@@ -105,5 +143,11 @@
 | 2026-11-10 | **13 条用户反馈落地**（`docs/design/54-pin-window-tabs-and-habits.md`）：① 解锁 PIN = 进入家长模式 + 5 分钟窗口（`POST /auth/parent-mode`；孩子模式中/到点走 `DELETE /auth/kid-mode`，不再出现「输对 PIN 仍是 child」）；② 倒计时进四个 tab 的**抬头栏**（`lib/widgets/parent_mode_banner.dart`，每秒从绝对时刻重算；删掉首页那条重复的 `kid_mode_banner.dart`）；③ **多孩子切换**（`child_switch_actions.dart` / `child_switch_screen.dart` / `account_gate.dart#_switchChild`，切完保持解锁）；④⑤ PIN 键盘**变大 + 贴底**（`pin_pad.dart` 按屏宽算 72–96×56–76，`compact` 给弹层；锁屏「上说明 / 下键盘」）；⑦ 忘记 PIN 的**联网重置入口**（`parent_pin_reset_screen.dart` + `resetPin`）；⑧ 删「数据来自服务器」常驻提示（App + 小程序）；⑨ 四个 tab 顶部留白收紧；⑩⑫ 习惯**常显 `N/M` 进度**并分「未完成 / 已完成」，撤销提示带进度；⑬ 锁屏与面板 PIN 语义统一。证据 = `flutter analyze` **No issues found**、`flutter test` **510 全通过**、小程序 `tsc` **EXIT=0** ＋ `npm test` **ALL PASS**；**后端零改动** | 用户 2026-11-10 十三条（倒计时为什么没有、倒计时放抬头栏、多孩子怎么切、PIN 页太小/太靠上、PIN 能否存本机、忘记 PIN 要能重置、删「数据来自服务器」、tab 顶部太空、多次任务要分已完成/未完成、前两天通过的愿望能撤回、撤销后状态没变、锁屏与设置 PIN 逻辑统一） |
 
 | 2026-11-10 | **P1-3 审批详情 ＋ 通知深链（双端 ＋ 后端）**（`docs/design/55-approval-detail-and-deeplink.md`）：后端新增 `GET /approvals/:id`（`view_own_approvals` ＋ `detailDenial()`：家长按批准资格、其余按本人；跨孩子 / 不存在 404，非本人 403 `NOT_REQUESTER`），响应补 `requesterRole`（建请求快照）/ `selfApproved`；App `lib/screens/approval_detail_screen.dart` ＋ 小程序 `pages/approval-detail/`；收件箱卡片 / 我的申请行 / **通知胶囊**都打开这一条（不再是「丢进列表自己找」）。证据 = 后端新增 `approvals-http.test.ts` 组 I **6 条**（文件 72 条全过）、`flutter analyze` **No issues found**、`flutter test` **518 全通过**（新增 8 条）、小程序 `tsc` **EXIT=0** ＋ `npm test` **21 个用例文件全通过**（新增 `run-w15.mjs` 9 条）。**未做**：镜像重建 / 发版（A）、审计行读接口（B）、真机与 `taro build`（D） | 用户「接上条会话 先开发未开发的」；`50` §4 把 P1-3 排第 1（C 类、双端、无外部依赖） |
+| 2026-11-10 | **部署边界落纸：Caddy 分片归属写进本仓库（与 cline-hub 对齐）**：`AGENTS.md` 新增 §3「部署边界」（分片 / 资源归属表 + 6 条硬约束：只装 `20-kids`、禁止 `rm conf.d/*` 与整份覆盖 Caddyfile、禁止把 kids 路由插进 `10-hub`、`ensure-kids-route.sh` 已停用、404 排查顺序、`validate`→`reload` 且双产品验收），原「变更记录」顺延为 §4；`deploy/README.md` 新增 §0.1「Caddy 分片归属」；`deploy/DOMAIN-PLAN-A.md` 新增 §2.1「归属一览（含对方项目）」+ 5 条发版互不影响契约；`.clinerules` 加第 5 条「Caddy 分片按仓库分工」。**只动文档**，未改代码、未重建镜像、未碰线上配置 | 用户「把这次的修改内容分别同步到两个项目中，让他们知道自己的配置情况以及其他项目的配置情况，免得以后发版的时候会影响各自项目」 |
 
+
+
+
+| 2026-11-10 | **正式切到 `https://kids.littlewish.top`（443 自动证书）＋ 发布 1.0.7+8 ＋ 后端 P1-3 上线**：① 实测这台机器 `/etc/caddy/conf.d` **根本不存在**（方案 A 只在文档里），首次装 `20-kids.caddyfile` 并给主文件追加一行 `import /etc/caddy/conf.d/*.caddyfile`（备份 `Caddyfile.bak-20261110-161124`、`caddy validate` **Valid**、`reload`），证书由 Caddy 自动签发（ISRG Root X1），`kids.littlewish.top/health` **200**；② 后端 `33727e7` 覆盖 `/srv/kids-points/backend` → 旧镜像 `kids-api:prev-20261110` → 重建 → `(healthy)` → 重跑 `900` → `verify-db` **ALL PASS** → `GET /approvals/abc` **401**；③ APK **1.0.7+8**（**53,153,622 字节**，`--dart-define=KP_API_BASE_URL=https://kids.littlewish.top`）→ `/srv/kids-points/app/`，`kids.env` 的 `APP_DOWNLOAD_URL` 换成新域名 → `/app/version` = `1.0.7 / 8`；④ **修两个真 bug**：`deploy/backup-kids-db.sh` 的 `grep -q` + `pipefail`（gunzip SIGPIPE ⇒ 备份永远判 FAIL、轮转/恢复演练跑不到；改 `grep -c` 后 `24 张表 / PointRecord=25`）、`backend/docker-entrypoint.sh` 工作区 CRLF（容器 `exec …: no such file or directory` 无限重启，已归一化 LF） | 用户「上线更新 APP，更新服务端提交代码；域名一定要用新设置的，不要 8443，要用 HTTPS」 |
+| 2026-11-10 | **新增 [`deploy/RELEASE.md`](./deploy/RELEASE.md)（发版手册）＋ 自愈链路补强**：`install-kids-caddy.sh` 增 `--bootstrap-import`（主文件缺 import 时**只追加一行**，备份 + validate + 失败整份还原）；新增 `ensure-kids-sites.sh`（= 装分片 + 补 `/k` + 三条探针，幂等）；`watchdog-kids-api.sh` 默认探针从 `hub:8443/kids/health` 改为 `https://kids.littlewish.top/health`、恢复脚本改为 `ensure-kids-sites.sh`（已装 `/usr/local/bin/kids-watchdog.sh` 并实跑 exit 0）；`README.md` 的构建命令与入口表改为 kids 子域 | 用户要求「把服务端发版流程写成文档，我后续参照文档自动发版」；且 hub 发版仍会整份覆盖 Caddyfile，自愈必须覆盖新域名而不只是旧 `/kids` |
 

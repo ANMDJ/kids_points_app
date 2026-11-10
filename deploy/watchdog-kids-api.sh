@@ -29,8 +29,10 @@
 #   KP_WATCHDOG_STATE  状态文件（默认 /var/lib/kids-watchdog.streak）
 #   KP_WATCHDOG_LOG    日志（默认 /var/log/kids-watchdog.log）
 #   KP_API_INTERNAL    容器内探针地址（默认 http://127.0.0.1:3000，用于抄 body）
-#   KP_PUBLIC_HEALTH   公网入口探针（默认 https://hub.littlewish.top:8443/kids/health）
-#   KP_ROUTE_SCRIPT    路由修复脚本（默认 /srv/kids-points/deploy/ensure-kids-route.sh）
+#   KP_PUBLIC_HEALTH   公网入口探针（默认 https://kids.littlewish.top/health）
+#   KP_ROUTE_SCRIPT    路由修复脚本（默认 /srv/kids-points/deploy/ensure-kids-sites.sh）
+#                      —— 2026-11-10 起走「新域名分片 + 旧入口」合一的恢复脚本；
+#                      以前是 ensure-kids-route.sh（只补 /kids 与 /k，管不了 conf.d）
 #   KP_ROUTE_STAMP     上次尝试修复的时间戳文件（默认 /var/lib/kids-watchdog.route）
 #   KP_ROUTE_MIN_INTERVAL 两次自动修复之间的最小间隔秒数（默认 600）
 #
@@ -53,8 +55,8 @@ STREAK_LIMIT="${KP_WATCHDOG_STREAK:-3}"
 STATE="${KP_WATCHDOG_STATE:-/var/lib/kids-watchdog.streak}"
 LOG="${KP_WATCHDOG_LOG:-/var/log/kids-watchdog.log}"
 INTERNAL="${KP_API_INTERNAL:-http://127.0.0.1:3000}"
-PUBLIC_HEALTH="${KP_PUBLIC_HEALTH:-https://hub.littlewish.top:8443/kids/health}"
-ROUTE_SCRIPT="${KP_ROUTE_SCRIPT:-/srv/kids-points/deploy/ensure-kids-route.sh}"
+PUBLIC_HEALTH="${KP_PUBLIC_HEALTH:-https://kids.littlewish.top/health}"
+ROUTE_SCRIPT="${KP_ROUTE_SCRIPT:-/srv/kids-points/deploy/ensure-kids-sites.sh}"
 ROUTE_STAMP="${KP_ROUTE_STAMP:-/var/lib/kids-watchdog.route}"
 ROUTE_MIN_INTERVAL="${KP_ROUTE_MIN_INTERVAL:-600}"
 

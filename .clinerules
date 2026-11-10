@@ -1,6 +1,6 @@
 # 项目规则（精简版入口）
 
-完整约束见仓库根 [`AGENTS.md`](./AGENTS.md)，本节只钉住最容易反复犯的四条：
+完整约束见仓库根 [`AGENTS.md`](./AGENTS.md)，本节只钉住最容易反复犯的五条：
 
 1. **不搜编译产物**：`build/`、`.dart_tool/`、`.widget_preview/`、`*/dist/`、`node_modules/`、
    `ios/Pods/`、`ios/Flutter/ephemeral/`、`*.log` —— 它们不入库（`git ls-files build .dart_tool` = 0 行），
@@ -13,3 +13,7 @@
 4. **每次回答结尾必须给「当前还未开发的任务」**（哪怕这次没改代码）：口径 =
    `docs/design/43-open-work-backlog.md` §0 快照（线上补充 `deploy/README.md` §8），
    每条带证据，本轮没验证的标「未复核」，已完成的不列；完成一条就在 `43` §0 划掉。
+5. **Caddy 分片按仓库分工**（与 cline-hub 共用一台机器）：本仓库只装
+   `conf.d/20-kids.caddyfile`（`deploy/install-kids-caddy.sh`），主文件与 `00` / `10` / `90`
+   属 cline-hub。禁止 `rm /etc/caddy/conf.d/*`、整份覆盖 `/etc/caddy/Caddyfile`、把 kids 路由插进
+   `10-hub`。详见 `AGENTS.md` §3 与 `deploy/DOMAIN-PLAN-A.md` §2.1。

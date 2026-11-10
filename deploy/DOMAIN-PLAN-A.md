@@ -70,6 +70,33 @@ deploy/publish-kids-apk.sh               发布 APK 到 /srv/kids-points/app
 ★ **关键**：Hub 发版只覆盖 `00/10/90`，**不会删除 `20-kids.caddyfile`**。
 这正是对 2026-11-02 / 11-05「Hub 发版抹掉 Kids 路由」的根治。
 
+### 2.1 归属一览（含对方项目，2026-11-10）
+
+同一台机器、同一个 Caddy，**谁的分片谁装**：
+
+| 资源 | 归属 | 说明 |
+|---|---|---|
+| `conf.d/00-site.caddyfile` | cline-hub | `littlewish.top` / `www` → `/var/www/cline-hub` 落地页 |
+| `conf.d/10-hub.caddyfile` | cline-hub | `hub.littlewish.top` → `127.0.0.1:3100`；`/app/*` → `/var/www/cline-hub/app`（Hub APK） |
+| `conf.d/20-kids.caddyfile` | **kids_points_app** | `kids.littlewish.top` → `127.0.0.1:3000`；`/app/*` → `/srv/kids-points/app`（Kids APK） |
+| `conf.d/30-ntfy.caddyfile` | cline-hub（手工） | 可选；仓库里只有 `.example` |
+| `conf.d/90-legacy.caddyfile` | cline-hub（`--with-legacy`） | 过渡期 `IP/k/*`、`hub:8443/kids/*`、旧 APK |
+| `/etc/caddy/Caddyfile` | cline-hub | 只有 global + `import conf.d/*.caddyfile` |
+| `/srv/kids-points`、`/srv/kids-points/app`、`:3000`、`/var/lib/caddy/kids.log` | **kids_points_app** | 代码 / `kids.env` / APK / API / 日志 |
+| `/srv/cline-hub`、`/var/www/cline-hub`、`:3100` | cline-hub | Hub 代码 / 落地页 / Hub APK / API |
+| `127.0.0.1:5432`（`pg18`） | 共用 | 两个库；网络附加见 `deploy/README.md` §0 |
+
+发版互不影响契约：
+
+1. Kids 发版只跑 `deploy/install-kids-caddy.sh`（写 `20-kids`）与 `deploy/publish-kids-apk.sh`
+   （写 `/srv/kids-points/app`），**不碰**主文件与 `00/10/90`。
+2. hub 发版只跑 `deploy/install-caddy-conf.sh`（写主文件 + `00/10`，`--with-legacy` 时写 `90`），
+   **不删** `20-kids`；但它也**不会恢复**被手工删掉的 `20-kids` —— 那要我们自己重跑脚本。
+3. 需要新路径前缀：加在自己的 `20-kids` 里，不要动 `10-hub`（同主机名两处定义 ⇒ `caddy validate` 失败，
+   reload 不生效还会被误判成「改了没生效」）。
+4. 任何一边动过 Caddy 后，两边一起验（§6 的四项验收 ＋ `hub/api/v1/health` 200）。
+5. 过渡期结束删 `90-legacy` 的前提见 §9；删之前先确认旧版 App / 小程序都已退场。
+
 ---
 
 ## 3. 迁移前检查（只读）

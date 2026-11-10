@@ -3,6 +3,10 @@
 本次首次上线：**2026-11-01**。下面每一条都是当天在真机上跑过、失败过、修好后的复述，
 不是设想。改这里之前先读「已知坑」那一节。
 
+> ★ **只想发版 / 想自动化发版？直接看 [`RELEASE.md`](./RELEASE.md)** ——
+> 后端镜像 ＋ APK 的逐步命令、验收判据、回滚与自动化配方都在那里。
+> 本文是拓扑、一次性前置与历史坑的完整版。
+
 ```
 /srv/kids-points/
 ├── backend/            # 代码（backend/ 整个目录，含 .dockerignore）
@@ -40,6 +44,29 @@ sudo docker network connect deploy_default pg18
 
 症状：容器 `Up`，日志刷 `P1001`。修法就是**再跑一次上面那条命令**。
 （把 pg18 的定义搬进本 compose 是最彻底的解法，但那要动 hub 那边的编排，暂不做。）
+
+### 0.1 Caddy 分片归属（★ 与 cline-hub 的边界，2026-11-10 起）
+
+这台机器上还有**另一个独立仓库**的产品 cline-hub，两个产品共用一个 Caddy。
+`/etc/caddy/Caddyfile` 只有 global + `import /etc/caddy/conf.d/*.caddyfile`，**谁的分片谁装**：
+
+| 分片 | 站点 | 去向 | 归谁装 |
+|---|---|---|---|
+| `00-site.caddyfile` | `littlewish.top` / `www` | `/var/www/cline-hub` 落地页 | cline-hub |
+| `10-hub.caddyfile` | `hub.littlewish.top` | `127.0.0.1:3100`；`/app/*` → `/var/www/cline-hub/app` | cline-hub |
+| `20-kids.caddyfile` | `kids.littlewish.top` | `127.0.0.1:3000`；`/app/version` 走 API、`/app/*` → `/srv/kids-points/app` | **本仓库** `install-kids-caddy.sh` |
+| `30-ntfy.caddyfile`（可选） | `ntfy.littlewish.top` | `127.0.0.1:2586` | cline-hub（手工） |
+| `90-legacy.caddyfile` | `http://82.157.153.22/k/*`、`hub:8443/{kids,app}/*` | `:3000` / `:3100` / `/var/www/cline-hub/app` | cline-hub（仅 `--with-legacy`） |
+
+- 本仓库只写 `20-kids.caddyfile` 与 `/srv/kids-points/app`；Caddy 主文件与 `00` / `10` / `90`
+  属 cline-hub，发版时不碰（`ensure-kids-route.sh` 是迁移前的应急脚本，已停用；
+  现在的自愈入口是 `ensure-kids-sites.sh`：装分片 ＋ 补 `/k` ＋ 三条探针，watchdog 每 5 分钟调它）。
+- hub 发版（`install-caddy-conf.sh`）只覆盖 `Caddyfile` + `00` + `10`（+ `--with-legacy` 的 `90`），
+  **不会删除 `20-kids`** —— 这是 2026-11-02 / 11-05 两次「Kids 全 404」的根治。
+- 但**它不会替我们恢复**：`20-kids` 被手工删掉或改名后，hub 发版不会重建，
+  恢复方式就是 `sudo bash deploy/install-kids-caddy.sh`（幂等，带备份 + `caddy validate`）。
+- 任何一边动过 Caddy 之后，两边一起验：§6.2 的 4 条 `curl` ＋
+  `curl -s -o /dev/null -w '%{http_code}' https://hub.littlewish.top/api/v1/health`。
 
 ---
 
@@ -387,6 +414,12 @@ sudo docker compose run --rm kids-api npm run seed:account   # 13800138000 / dem
 ### 6.2 App 自更新：Kids 子域的 API + APK 静态目录（2026-11-10，方案 A）
 
 **目标状态：一个产品一个站点（`kids.littlewish.top`，443 自动证书）：**
+
+> ✅ **2026-11-10 已在这台机器上装好并发布**：`/etc/caddy/conf.d/20-kids.caddyfile` 已安装、
+> 主文件已追加 `import /etc/caddy/conf.d/*.caddyfile`（备份 `Caddyfile.bak-20261110-161124`），
+> 证书由 Caddy 自动签发（ISRG Root X1），`/health` 与 `/app/version` 均 **200**，
+> APK 稳定地址 `https://kids.littlewish.top/app/kids-points-app.apk` 生效。
+> 步骤与验收见 [`RELEASE.md`](./RELEASE.md)。
 
 | 路径 | 去向 | 用途 |
 |---|---|---|
@@ -758,13 +791,18 @@ approvals / profile / record / rule / onboarding / login；`grep -rn 隐私政�
 
 ---
 
-## 9. 下次动生产前的三条规矩
+## 9. 下次动生产前的四条规矩
 
 1. **迁移链是五步，不是一步**（§2）。`migrate deploy` 之后漏了 `900` 或 `901`，
    应用会以"能连上、但写不了账本"的方式活着 —— 比连不上更难查（`db:verify` 就是为这个存在的）。
-2. **改 `Caddyfile` 一律 `caddy validate` → `systemctl reload caddy`**，不要 `restart`
+2. **改 Caddy 一律 `caddy validate` → `systemctl reload caddy`**，不要 `restart`
    （hub 的 SSE 会断）。`/k/*` 与 `@site` 的先后顺序见 §4，改完必须重跑 §5 的四条探针。
 3. **改完 `backend/` 就重建**：`docker compose build && docker compose up -d`，
    然后看日志尾部是不是 `数据库已连接` + `Nest application successfully started`
    + **五个** worker；（改动了 `prisma/` 还要回到 §2 整条链）。
+4. **动 Caddy 先认清分片**（§0.1）：`20-kids.caddyfile` 属本仓库，主文件与 `00` / `10` / `90`
+   属 cline-hub。只装自己的分片（`install-kids-caddy.sh`），禁止 `rm /etc/caddy/conf.d/*`
+   或整份覆盖 `/etc/caddy/Caddyfile`；改完两个产品一起验（kids `/health` + hub `/api/v1/health`），
+   只验 kids 等于只验了一半。
+
 

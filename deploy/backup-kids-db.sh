@@ -60,7 +60,12 @@ if [ "$size" -lt 1024 ]; then
 fi
 
 # ② 内容自检：账本表真的在里面
-if ! gunzip -c "$OUT" | grep -q 'CREATE TABLE public."PointRecord"'; then
+# ★ 这里**不能**用 `grep -q`：它一旦匹配就退出，gunzip 继续写管道会拿到 SIGPIPE，
+#   在 `set -o pipefail` 下整条管道返回 141，于是「表明明在」也被判成失败
+#   （2026-11-10 实测：dump 里 65 处 PointRecord，脚本却报 FAIL，且因此
+#   轮转与 `--verify` 永远跑不到）。改用 `grep -c`（读完整输入，不会提前退出）。
+ledger=$(gunzip -c "$OUT" | grep -c 'CREATE TABLE public."PointRecord"' || true)
+if [ "${ledger:-0}" -lt 1 ]; then
   echo "FAIL dump 里没有 point 账本表（$OUT）—— 连错库了？" >&2
   exit 1
 fi

@@ -100,17 +100,21 @@ flutter test test/platform_portability_test.dart --platform chrome  # 浏览器�
 
 | 入口 | baseUrl | 说明 |
 | --- | --- | --- |
-| 域名 + 8443 + `/kids`（**当前主路径**） | `https://hub.littlewish.top:8443/kids` | Caddy `handle_path /kids/*` → `127.0.0.1:3000`；证书系统可信，不需要明文例外 |
-| IP + `/k`（小程序用） | `http://82.157.153.22/k` | 2026-11-02 起当前 Caddyfile 里这段随 cline-console 部署被移除；恢复前 App 用上面那条 |
+| `kids` 子域（**当前主路径**） | `https://kids.littlewish.top` | 443 + Caddy 自动证书，由本仓库 `deploy/conf.d/20-kids.caddyfile` 提供；**1.0.7+8 起正式包就用它** |
+| 域名 + 8443 + `/kids`（**过渡期遗留**） | `https://hub.littlewish.top:8443/kids` | 只为 1.0.6 及更早的旧包装备保留；旧包退场后下线（`deploy/DOMAIN-PLAN-A.md` §9） |
+| IP + `/k`（小程序用） | `http://82.157.153.22/k` | 2026-11-05 起由 `ensure-kids-sites.sh` 维持；小程序切到 `kids` 子域后下线 |
 
 `backend` 容器只发布到 `127.0.0.1:3000`（`deploy/compose.yaml`），公网**不能**
 直连 `:3000`，必须经 Caddy。
 
 ```bash
 # 构建正式包（不需要任何设备 / 孩子 id）
+# ★ 2026-11-10 起正式入口是 kids 子域（HTTPS 443），不要再打 8443。
 flutter build apk --release \
-  --dart-define=KP_API_BASE_URL=https://hub.littlewish.top:8443/kids
+  --dart-define=KP_API_BASE_URL=https://kids.littlewish.top
 ```
+
+发版全流程（后端镜像 ＋ APK ＋ 验收 ＋ 回滚）见 [`deploy/RELEASE.md`](./deploy/RELEASE.md)。
 
 首次启动的顺序（全部在 App 里自动完成）：
 
